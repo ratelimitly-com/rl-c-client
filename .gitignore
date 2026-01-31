@@ -1,0 +1,4 @@
+*.o
+*.a
+*.so
+/tests/test_protocol
