@@ -28,7 +28,7 @@ The client uses a small set of host-provided ops. These calls must be non-blocki
 - `log(ctx, level, msg)` (optional)
   - Logging hook for debug builds; may be NULL.
 - `on_steering_feedback(ctx, keep_port)` (optional)
-  - Called when a response includes steering feedback.
+  - Called on each valid response where steering feedback is present.
   - `keep_port == false` means the server recommends changing the source port.
 
 ## Timer Integration
@@ -60,7 +60,7 @@ Key points:
 - Results are copied by the client during callback; resolver-owned buffers
   only need to live for the callback duration.
 - Cancellation is best-effort; it is acceptable to ignore late results.
- - Optional TTL fields can be provided by the resolver for cache timing; if absent, the client uses its configured refresh interval.
+- Optional TTL fields can be provided by the resolver; when present, the client caps its refresh interval to the minimum TTL seen. If absent, the client uses its configured refresh interval.
 
 ## Memory Ownership
 - The client never takes ownership of caller buffers unless documented.

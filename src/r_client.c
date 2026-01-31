@@ -55,6 +55,9 @@ struct r_client_req {
     size_t guard_count;
     char *metrics_label;
     size_t metrics_label_len;
+    bool owns_resources;
+    bool owns_guards;
+    bool owns_metrics_label;
 
     r_addr_t *targets;
     size_t target_count;
@@ -101,6 +104,7 @@ struct r_client {
     size_t server_count;
     size_t server_cap;
     uint64_t last_dns_refresh_ms;
+    uint64_t dns_refresh_ttl_ms;
     bool dns_refresh_inflight;
 
     r_server_stats_t stats;
@@ -115,6 +119,7 @@ typedef struct r_dns_refresh {
     r_server_endpoint_t *endpoints;
     size_t endpoint_count;
     size_t endpoint_cap;
+    uint64_t min_ttl_ms;
 } r_dns_refresh_t;
 
 typedef struct r_dns_target_ctx {
@@ -429,9 +434,15 @@ static void r_request_free(r_client_req_t *req) {
     if (!req) {
         return;
     }
-    free(req->resources);
-    free(req->guards);
-    free(req->metrics_label);
+    if (req->owns_resources) {
+        free(req->resources);
+    }
+    if (req->owns_guards) {
+        free(req->guards);
+    }
+    if (req->owns_metrics_label) {
+        free(req->metrics_label);
+    }
     free(req->targets);
     free(req->allowed_ids);
     free(req->seen_addrs);
@@ -538,6 +549,7 @@ static void r_dns_refresh_finish(r_dns_refresh_t *refresh) {
         client->server_count = refresh->endpoint_count;
         client->server_cap = refresh->endpoint_cap;
         client->last_dns_refresh_ms = r_now_ms(client);
+        client->dns_refresh_ttl_ms = refresh->min_ttl_ms;
         refresh->endpoints = NULL;
         refresh->endpoint_count = 0;
         refresh->endpoint_cap = 0;
@@ -611,6 +623,9 @@ static int r_dns_maybe_refresh(r_client_t *client, bool force) {
     if (refresh_interval == 0) {
         refresh_interval = 300000;
     }
+    if (client->dns_refresh_ttl_ms > 0 && client->dns_refresh_ttl_ms < refresh_interval) {
+        refresh_interval = client->dns_refresh_ttl_ms;
+    }
 
     if (!force) {
         if (client->last_dns_refresh_ms == 0
@@ -644,11 +659,17 @@ static void r_dns_srv_cb_fn(void *user, int status, const r_srv_record_t *record
     }
 
     size_t pending = 0;
+    uint64_t min_ttl_ms = 0;
     for (size_t i = 0; i < record_count; i++) {
         bool ok = false;
         uint64_t server_id = r_parse_server_id_from_target(records[i].target, &ok);
         if (!ok) {
             continue;
+        }
+        if (records[i].ttl_ms > 0) {
+            if (min_ttl_ms == 0 || records[i].ttl_ms < min_ttl_ms) {
+                min_ttl_ms = records[i].ttl_ms;
+            }
         }
         r_dns_target_ctx_t *ctx = (r_dns_target_ctx_t *)calloc(1, sizeof(*ctx));
         if (!ctx) {
@@ -674,6 +695,7 @@ static void r_dns_srv_cb_fn(void *user, int status, const r_srv_record_t *record
         return;
     }
     refresh->pending = pending;
+    refresh->min_ttl_ms = min_ttl_ms;
 }
 
 static void r_dns_addr_cb_fn(void *user, int status, const r_addr_t *addrs, size_t addr_count) {
@@ -1132,11 +1154,6 @@ static void r_request_complete(r_client_t *client, r_client_req_t *req, int stat
         const r_rate_limit_result_t *result = selected ? &selected->result : NULL;
         req->cb(req->user, req, status, result);
     }
-    if (selected && selected->has && !selected->result.steering_feedback) {
-        if (client->io.on_steering_feedback) {
-            client->io.on_steering_feedback(client->io.ctx, false);
-        }
-    }
     r_request_free(req);
 }
 
@@ -1240,7 +1257,7 @@ void r_client_destroy(r_client_t *client) {
     free(client);
 }
 
-int r_client_check_rate_limit_async(
+static int r_client_check_rate_limit_async_impl(
     r_client_t *client,
     const r_resource_request_t *resources,
     size_t resource_count,
@@ -1250,7 +1267,8 @@ int r_client_check_rate_limit_async(
     size_t metrics_label_len,
     r_rate_limit_cb cb,
     void *user,
-    r_client_req_t **out_req
+    r_client_req_t **out_req,
+    bool borrowed
 ) {
     if (!client || !resources || resource_count == 0 || !cb) {
         return RCLIENT_ERR_CONFIG;
@@ -1272,32 +1290,53 @@ int r_client_check_rate_limit_async(
     req->cb = cb;
     req->user = user;
 
-    req->resources = (r_resource_request_t *)calloc(resource_count, sizeof(r_resource_request_t));
-    if (!req->resources) {
-        r_request_free(req);
-        return RCLIENT_ERR_NOMEM;
-    }
-    memcpy(req->resources, resources, resource_count * sizeof(r_resource_request_t));
-    req->resource_count = resource_count;
-
-    if (guard_count > 0) {
-        req->guards = (r_latency_guard_t *)calloc(guard_count, sizeof(r_latency_guard_t));
-        if (!req->guards) {
+    if (borrowed) {
+        req->resources = (r_resource_request_t *)resources;
+        req->resource_count = resource_count;
+        req->owns_resources = false;
+    } else {
+        req->resources = (r_resource_request_t *)calloc(resource_count, sizeof(r_resource_request_t));
+        if (!req->resources) {
             r_request_free(req);
             return RCLIENT_ERR_NOMEM;
         }
-        memcpy(req->guards, guards, guard_count * sizeof(r_latency_guard_t));
-        req->guard_count = guard_count;
+        memcpy(req->resources, resources, resource_count * sizeof(r_resource_request_t));
+        req->resource_count = resource_count;
+        req->owns_resources = true;
+    }
+
+    if (guard_count > 0) {
+        if (borrowed) {
+            req->guards = (r_latency_guard_t *)guards;
+            req->guard_count = guard_count;
+            req->owns_guards = false;
+        } else {
+            req->guards = (r_latency_guard_t *)calloc(guard_count, sizeof(r_latency_guard_t));
+            if (!req->guards) {
+                r_request_free(req);
+                return RCLIENT_ERR_NOMEM;
+            }
+            memcpy(req->guards, guards, guard_count * sizeof(r_latency_guard_t));
+            req->guard_count = guard_count;
+            req->owns_guards = true;
+        }
     }
 
     if (metrics_label && metrics_label[0] != '\0') {
         size_t label_len = metrics_label_len == 0 ? strlen(metrics_label) : metrics_label_len;
-        req->metrics_label = r_strdup_n(metrics_label, label_len);
-        if (!req->metrics_label) {
-            r_request_free(req);
-            return RCLIENT_ERR_NOMEM;
+        if (borrowed) {
+            req->metrics_label = (char *)metrics_label;
+            req->metrics_label_len = label_len;
+            req->owns_metrics_label = false;
+        } else {
+            req->metrics_label = r_strdup_n(metrics_label, label_len);
+            if (!req->metrics_label) {
+                r_request_free(req);
+                return RCLIENT_ERR_NOMEM;
+            }
+            req->metrics_label_len = label_len;
+            req->owns_metrics_label = true;
         }
-        req->metrics_label_len = label_len;
     }
 
     r_generate_request_id(req->request_id);
@@ -1328,6 +1367,60 @@ int r_client_check_rate_limit_async(
         *out_req = req;
     }
     return RCLIENT_OK;
+}
+
+int r_client_check_rate_limit_async(
+    r_client_t *client,
+    const r_resource_request_t *resources,
+    size_t resource_count,
+    const r_latency_guard_t *guards,
+    size_t guard_count,
+    const char *metrics_label,
+    size_t metrics_label_len,
+    r_rate_limit_cb cb,
+    void *user,
+    r_client_req_t **out_req
+) {
+    return r_client_check_rate_limit_async_impl(
+        client,
+        resources,
+        resource_count,
+        guards,
+        guard_count,
+        metrics_label,
+        metrics_label_len,
+        cb,
+        user,
+        out_req,
+        false
+    );
+}
+
+int r_client_check_rate_limit_async_borrowed(
+    r_client_t *client,
+    const r_resource_request_t *resources,
+    size_t resource_count,
+    const r_latency_guard_t *guards,
+    size_t guard_count,
+    const char *metrics_label,
+    size_t metrics_label_len,
+    r_rate_limit_cb cb,
+    void *user,
+    r_client_req_t **out_req
+) {
+    return r_client_check_rate_limit_async_impl(
+        client,
+        resources,
+        resource_count,
+        guards,
+        guard_count,
+        metrics_label,
+        metrics_label_len,
+        cb,
+        user,
+        out_req,
+        true
+    );
 }
 
 int r_client_report_latency(
@@ -1502,6 +1595,10 @@ int r_client_on_datagram(
     );
     if (rc != RCLIENT_OK) {
         return rc;
+    }
+
+    if (!tenant.steering_feedback && client->io.on_steering_feedback) {
+        client->io.on_steering_feedback(client->io.ctx, false);
     }
 
     uint64_t now_ms = r_now_ms(client);

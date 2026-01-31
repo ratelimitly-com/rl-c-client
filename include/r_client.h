@@ -226,6 +226,21 @@ int r_client_check_rate_limit_async(
     r_client_req_t **out_req
 );
 
+// Async rate limit request using caller-owned buffers (no internal copies).
+// Caller must keep buffers alive until the callback is invoked.
+int r_client_check_rate_limit_async_borrowed(
+    r_client_t *client,
+    const r_resource_request_t *resources,
+    size_t resource_count,
+    const r_latency_guard_t *guards,
+    size_t guard_count,
+    const char *metrics_label,
+    size_t metrics_label_len, // 0 means null-terminated
+    r_rate_limit_cb cb,
+    void *user,
+    r_client_req_t **out_req
+);
+
 // Fire-and-forget latency reporting.
 int r_client_report_latency(
     r_client_t *client,
