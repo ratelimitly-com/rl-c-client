@@ -20,6 +20,15 @@ Outputs:
 - `librclient.a`
 - `librclient.so`
 
+Build perf client binary:
+
+```sh
+make perf_client
+```
+
+Output:
+- `bin/perf_client`
+
 ## Test
 
 Run the unit tests:
@@ -32,6 +41,22 @@ Clean build artifacts:
 
 ```sh
 make clean
+```
+
+## Perf client
+
+Run the performance client (mirrors `clients/rust/bin/perf_client.rs`):
+
+```sh
+bin/perf_client --clients=50 --requests=10000
+```
+
+Examples:
+
+```sh
+bin/perf_client --duration=60 --auth=aes
+bin/perf_client --srv=rl1.glar.com --duration=30 --clients=50
+RCLIENT_DNS_SERVER=127.0.0.1:5353 bin/perf_client
 ```
 
 ## Notes

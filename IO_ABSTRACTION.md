@@ -28,7 +28,7 @@ The client uses a small set of host-provided ops. These calls must be non-blocki
 - `log(ctx, level, msg)` (optional)
   - Logging hook for debug builds; may be NULL.
 - `on_steering_feedback(ctx, keep_port)` (optional)
-  - Called on each valid response where steering feedback is present.
+  - Called after a request completes if any response requested a port change.
   - `keep_port == false` means the server recommends changing the source port.
 
 ## Timer Integration

@@ -82,6 +82,7 @@ struct r_client_req {
 
     bool any_success;
     bool any_failure;
+    bool steering_rebind;
 
     r_candidate_t best;
     r_candidate_t best_allow;
@@ -1154,6 +1155,9 @@ static void r_request_complete(r_client_t *client, r_client_req_t *req, int stat
         const r_rate_limit_result_t *result = selected ? &selected->result : NULL;
         req->cb(req->user, req, status, result);
     }
+    if (req->steering_rebind && client->io.on_steering_feedback) {
+        client->io.on_steering_feedback(client->io.ctx, false);
+    }
     r_request_free(req);
 }
 
@@ -1597,8 +1601,8 @@ int r_client_on_datagram(
         return rc;
     }
 
-    if (!tenant.steering_feedback && client->io.on_steering_feedback) {
-        client->io.on_steering_feedback(client->io.ctx, false);
+    if (!tenant.steering_feedback) {
+        req->steering_rebind = true;
     }
 
     uint64_t now_ms = r_now_ms(client);
