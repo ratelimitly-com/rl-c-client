@@ -1665,6 +1665,7 @@ int r_client_on_datagram(
 
     size_t quorum_required = r_quorum_required(client->policy.quorum, req->replica_count);
     bool quorum_met = req->seen_server_id_count >= quorum_required;
+    bool all_targets_responded = req->target_count > 0 && req->seen_addr_count >= req->target_count;
 
     if (client->policy.wait == R_WAIT_RETURN_ON_FIRST_VALID) {
         if (req->best.has) {
@@ -1672,6 +1673,20 @@ int r_client_on_datagram(
         }
     } else if (client->policy.wait == R_WAIT_RETURN_ON_FIRST_STABLE) {
         if (r_server_stable(client, server_id, now_ms)) {
+            r_candidate_t *selected = NULL;
+            if (client->policy.select == R_SELECT_CONSERVATIVE_DENY) {
+                selected = req->best_deny.has ? &req->best_deny : &req->best_allow;
+            } else {
+                selected = &req->best;
+            }
+            if (selected && selected->has) {
+                r_request_complete(client, req, RCLIENT_OK, selected);
+            }
+        }
+    } else if (client->policy.wait == R_WAIT_FOR_DEADLINE) {
+        // Match Rust client behavior: if every target already responded, return
+        // immediately instead of idling until attempt_deadline_ms.
+        if (all_targets_responded) {
             r_candidate_t *selected = NULL;
             if (client->policy.select == R_SELECT_CONSERVATIVE_DENY) {
                 selected = req->best_deny.has ? &req->best_deny : &req->best_allow;

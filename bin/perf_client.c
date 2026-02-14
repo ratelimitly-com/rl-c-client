@@ -838,7 +838,20 @@ static void *perf_progress_thread(void *arg) {
     perf_stats_t *stats = (perf_stats_t *)arg;
     uint64_t last_sent = 0;
     while (!atomic_load_explicit(&g_stop_progress, memory_order_relaxed)) {
-        sleep(1);
+        // Check stop flag at a finer granularity so short benchmarks don't
+        // inherit a fixed 1s tail while waiting for this thread to exit.
+        for (int i = 0; i < 10; i++) {
+            if (atomic_load_explicit(&g_stop_progress, memory_order_relaxed)) {
+                break;
+            }
+            struct timespec ts;
+            ts.tv_sec = 0;
+            ts.tv_nsec = 100000000L;
+            nanosleep(&ts, NULL);
+        }
+        if (atomic_load_explicit(&g_stop_progress, memory_order_relaxed)) {
+            break;
+        }
         uint64_t sent = atomic_load_explicit(&stats->requests_sent, memory_order_relaxed);
         uint64_t rps = sent - last_sent;
         printf("Requests: %llu (+%llu/s)\n", (unsigned long long)sent, (unsigned long long)rps);
