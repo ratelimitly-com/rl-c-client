@@ -1190,11 +1190,12 @@ int r_client_create(
     }
     client->config.tenant.dns_name = client->dns_name;
 
-    if (config->tenant.auth.type != R_AUTH_NONE) {
-        if (!config->tenant.auth.secret) {
-            r_client_destroy(client);
-            return RCLIENT_ERR_CONFIG;
-        }
+    if (config->tenant.auth.type != R_AUTH_NONE && !config->tenant.auth.secret) {
+        r_client_destroy(client);
+        return RCLIENT_ERR_CONFIG;
+    }
+
+    if (config->tenant.auth.secret) {
         client->auth_secret = r_strdup_n(config->tenant.auth.secret, config->tenant.auth.secret_len);
         if (!client->auth_secret) {
             r_client_destroy(client);
@@ -1210,18 +1211,47 @@ int r_client_create(
         r_client_default_request_policy(&client->policy);
     }
 
-    if (config->tenant.auth.type == R_AUTH_COOKIE) {
-        if (r_sha256_cookie(client->auth_secret, 0, client->cookie) != 0) {
+    if (client->auth_secret) {
+        uint8_t decoded_secret[64];
+        size_t decoded_secret_len = 0;
+        r_auth_type_t decoded_type = R_AUTH_NONE;
+        uint64_t decoded_key_id = 0;
+        if (r_decode_api_key_bech32(
+                client->auth_secret,
+                &decoded_type,
+                &decoded_key_id,
+                decoded_secret,
+                sizeof(decoded_secret),
+                &decoded_secret_len) != 0) {
             r_client_destroy(client);
             return RCLIENT_ERR_CONFIG;
         }
-        client->has_cookie = true;
-    } else if (config->tenant.auth.type == R_AUTH_AES_GCM) {
-        if (r_derive_aes_key(client->auth_secret, 0, client->aes_key) != 0) {
+        if (decoded_type != config->tenant.auth.type) {
             r_client_destroy(client);
             return RCLIENT_ERR_CONFIG;
         }
-        client->has_aes_key = true;
+        if (decoded_key_id != config->tenant.key_id) {
+            r_client_destroy(client);
+            return RCLIENT_ERR_CONFIG;
+        }
+        if (decoded_type == R_AUTH_COOKIE) {
+            if (decoded_secret_len != 32u) {
+                r_client_destroy(client);
+                return RCLIENT_ERR_CONFIG;
+            }
+            memcpy(client->cookie, decoded_secret, 32u);
+            client->has_cookie = true;
+        } else if (decoded_type == R_AUTH_AES_GCM) {
+            if (decoded_secret_len != 32u) {
+                r_client_destroy(client);
+                return RCLIENT_ERR_CONFIG;
+            }
+            memcpy(client->aes_key, decoded_secret, 32u);
+            client->has_aes_key = true;
+        } else if (decoded_type == R_AUTH_NONE && decoded_secret_len != 0u) {
+            r_client_destroy(client);
+            return RCLIENT_ERR_CONFIG;
+        }
     }
 
     client->last_dns_refresh_ms = 0;

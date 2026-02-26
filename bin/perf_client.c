@@ -18,14 +18,14 @@
 #include <arpa/nameser.h>
 
 #include "../include/r_client.h"
+#include "../src/r_crypto.h"
 
 #define PERF_MAX_PACKET 1400
 
 typedef struct perf_config {
     const char *srv_domain;
+    const char *auth_bech32;
     r_auth_type_t auth_type;
-    const char *aes_secret;
-    const char *cookie_secret;
     uint64_t tenant_id;
     size_t concurrent_clients;
     uint64_t requests_per_client;
@@ -67,6 +67,37 @@ typedef struct worker_ctx {
 } worker_ctx_t;
 
 static atomic_bool g_stop_progress = false;
+
+static const char *perf_auth_label(r_auth_type_t auth_type) {
+    switch (auth_type) {
+        case R_AUTH_COOKIE: return "Cookie";
+        case R_AUTH_AES_GCM: return "AES";
+        case R_AUTH_NONE:
+        default: return "None";
+    }
+}
+
+static int perf_parse_auth_bech32(const char *auth_bech32, r_auth_type_t *out_type, uint64_t *out_tenant_id) {
+    if (!auth_bech32 || !out_type || !out_tenant_id) {
+        return -1;
+    }
+    uint8_t secret[64];
+    size_t secret_len = 0;
+    r_auth_type_t t = R_AUTH_NONE;
+    uint64_t key_id = 0;
+    if (r_decode_api_key_bech32(auth_bech32, &t, &key_id, secret, sizeof(secret), &secret_len) != 0) {
+        return -1;
+    }
+    if ((t == R_AUTH_COOKIE || t == R_AUTH_AES_GCM) && secret_len != 32u) {
+        return -1;
+    }
+    if (t == R_AUTH_NONE && secret_len != 0u) {
+        return -1;
+    }
+    *out_type = t;
+    *out_tenant_id = key_id;
+    return 0;
+}
 
 static uint64_t perf_now_ms(void *ctx) {
     (void)ctx;
@@ -593,11 +624,7 @@ static void *perf_worker(void *arg) {
     r_auth_config_t auth;
     memset(&auth, 0, sizeof(auth));
     auth.type = worker->config->auth_type;
-    if (auth.type == R_AUTH_AES_GCM) {
-        auth.secret = worker->config->aes_secret;
-    } else if (auth.type == R_AUTH_COOKIE) {
-        auth.secret = worker->config->cookie_secret;
-    }
+    auth.secret = worker->config->auth_bech32;
 
     r_tenant_config_t tenant;
     memset(&tenant, 0, sizeof(tenant));
@@ -742,10 +769,10 @@ static uint64_t perf_parse_u64(const char *value, uint64_t fallback) {
 static perf_config_t perf_config_from_args(int argc, char **argv) {
     perf_config_t cfg;
     memset(&cfg, 0, sizeof(cfg));
+    const char *default_auth = "rl-none1qyqqqqqqqqqqq70t2lw";
     cfg.srv_domain = "rl.glar.com";
+    cfg.auth_bech32 = default_auth;
     cfg.auth_type = R_AUTH_NONE;
-    cfg.aes_secret = "secret";
-    cfg.cookie_secret = "secret";
     cfg.tenant_id = 1;
     cfg.concurrent_clients = 10;
     cfg.requests_per_client = 1000;
@@ -776,30 +803,14 @@ static perf_config_t perf_config_from_args(int argc, char **argv) {
         cfg.duration_secs = perf_parse_u64(duration, 0);
     }
 
-    const char *aes_secret = perf_find_arg(argc, argv, "--aes-secret");
-    if (aes_secret) {
-        cfg.aes_secret = aes_secret;
-    }
-
-    const char *cookie_secret = perf_find_arg(argc, argv, "--cookie-secret");
-    if (cookie_secret) {
-        cfg.cookie_secret = cookie_secret;
-    }
-
     const char *auth = perf_find_arg(argc, argv, "--auth");
     if (auth) {
-        if (strcmp(auth, "cookie") == 0) {
-            cfg.auth_type = R_AUTH_COOKIE;
-        } else if (strcmp(auth, "aes") == 0) {
-            cfg.auth_type = R_AUTH_AES_GCM;
-        } else {
-            cfg.auth_type = R_AUTH_NONE;
-        }
+        cfg.auth_bech32 = auth;
     }
-
-    const char *tenant = perf_find_arg(argc, argv, "--tenant");
-    if (tenant) {
-        cfg.tenant_id = perf_parse_u64(tenant, cfg.tenant_id);
+    if (perf_parse_auth_bech32(cfg.auth_bech32, &cfg.auth_type, &cfg.tenant_id) != 0) {
+        fprintf(stderr, "Invalid --auth value '%s' (expected rl-none... / rl-cookie... / rl-aes...)\n",
+                cfg.auth_bech32 ? cfg.auth_bech32 : "");
+        exit(2);
     }
 
     const char *bucket = perf_find_arg(argc, argv, "--bucket-prefix");
@@ -821,16 +832,14 @@ static void perf_print_help(void) {
     printf("  --clients=<n>           Concurrent clients (default: 10)\n");
     printf("  --requests=<n>          Requests per client (default: 1000)\n");
     printf("  --duration=<secs>       Run for duration instead of request count\n");
-    printf("  --auth=<none|cookie|aes> Auth method (default: none)\n");
-    printf("  --aes-secret=<value>    AES secret (default: secret)\n");
-    printf("  --cookie-secret=<value> Cookie secret (default: secret)\n");
-    printf("  --tenant=<id>           Tenant ID (default: 1)\n");
+    printf("  --auth=<bech32>         Tenant auth Bech32 key (rl-none... / rl-cookie... / rl-aes...)\n");
+    printf("                         Tenant ID is derived from the embedded key_id\n");
     printf("  --bucket-prefix=<name>  Bucket name prefix (default: perf_bucket)\n");
     printf("  --ignore-steering       Ignore steering_feedback from server\n");
     printf("  --debug-steering        Show steering_feedback values\n\n");
     printf("Examples:\n");
     printf("  perf_client --clients=50 --requests=10000\n");
-    printf("  perf_client --duration=60 --auth=aes\n");
+    printf("  perf_client --duration=60 --auth=rl-aes1...\n");
     printf("  perf_client --srv=rl1.glar.com --duration=30 --clients=50\n");
 }
 
@@ -871,7 +880,7 @@ int main(int argc, char **argv) {
     printf("RateLimitly Performance Client\n");
     printf("==============================\n");
     printf("SRV domain: %s\n", cfg.srv_domain);
-    printf("Auth: %s\n", cfg.auth_type == R_AUTH_COOKIE ? "Cookie" : cfg.auth_type == R_AUTH_AES_GCM ? "AES" : "None");
+    printf("Auth: %s\n", perf_auth_label(cfg.auth_type));
     printf("Tenant: %llu\n", (unsigned long long)cfg.tenant_id);
     printf("Concurrent clients: %zu\n", cfg.concurrent_clients);
     if (cfg.has_duration) {

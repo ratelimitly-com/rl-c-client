@@ -2,6 +2,7 @@
 
 This is a C implementation of the Ratelimitly r-client. It follows the
 protocol specs in `docs/spec/r-client.md` and `docs/spec/wire_protocol.md`.
+Auth for `cookie`/`aes` uses Bech32 API keys (`rl-cookie...`, `rl-aes...`) rather than passphrase strings.
 
 ## Build
 
@@ -54,7 +55,7 @@ bin/perf_client --clients=50 --requests=10000
 Examples:
 
 ```sh
-bin/perf_client --duration=60 --auth=aes
+bin/perf_client --duration=60 --auth=rl-aes1...
 bin/perf_client --srv=rl1.glar.com --duration=30 --clients=50
 RCLIENT_DNS_SERVER=127.0.0.1:5353 bin/perf_client
 ```
