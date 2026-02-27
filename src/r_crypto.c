@@ -267,6 +267,8 @@ int r_decode_api_key_bech32(
         free(s);
         return -1;
     }
+    // Split in-place so checksum and HRP comparisons see only the hrp prefix.
+    sep[0] = '\0';
 
     uint8_t *data = (uint8_t *)malloc(data_chars_len);
     if (!data) {
