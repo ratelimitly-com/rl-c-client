@@ -29,9 +29,9 @@
 
 ### 3.3 Authentication
 - **None** (TLV 0x414E)
-- **Cookie** (TLV 0x4143) where cookie is raw SHA-256(secret)
+- **Cookie** (TLV 0x4143) where cookie is the 32-byte payload embedded in `rl-cookie...`
 - **AES-256-GCM** (TLV 0x4541) with:
-  - PBKDF2-HMAC-SHA256, 100,000 iterations, salt `ratelimitly_salt`
+  - 32-byte AES key payload embedded in `rl-aes...`
   - 12-byte nonce, 16-byte auth tag
   - PDU encrypted; tenant header remains in clear
 
@@ -59,7 +59,7 @@
 - `r_client_config_t` with:
   - tenant dns name
   - key_id (u64)
-  - auth method (none/cookie/aes) + secret
+  - auth method (none/cookie/aes) + Bech32 auth key (`rl-none...`/`rl-cookie...`/`rl-aes...`)
   - timeout_ms, retry_attempts
   - dns_refresh_interval_s
   - server_stability_threshold_ms

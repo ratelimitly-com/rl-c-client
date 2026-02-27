@@ -7,8 +7,6 @@
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 
-#define R_PBKDF2_ITERS 100000
-static const char k_ratelimitly_salt[] = "ratelimitly_salt";
 static const uint32_t k_bech32_gen[5] = {
     0x3B6A57B2u, 0x26508E6Du, 0x1EA119FAu, 0x3D4233DDu, 0x2A1462B3u
 };
@@ -212,26 +210,6 @@ int r_sha256_cookie(const char *secret, size_t secret_len, uint8_t out[32]) {
 cleanup:
     EVP_MD_CTX_free(ctx);
     return ok ? 0 : -1;
-}
-
-int r_derive_aes_key(const char *secret, size_t secret_len, uint8_t out_key[32]) {
-    if (!secret || !out_key) {
-        return -1;
-    }
-    if (secret_len == 0) {
-        secret_len = strlen(secret);
-    }
-    int ok = PKCS5_PBKDF2_HMAC(
-        secret,
-        (int)secret_len,
-        (const unsigned char *)k_ratelimitly_salt,
-        (int)strlen(k_ratelimitly_salt),
-        R_PBKDF2_ITERS,
-        EVP_sha256(),
-        32,
-        out_key
-    );
-    return ok == 1 ? 0 : -1;
 }
 
 int r_decode_api_key_bech32(
