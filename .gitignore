@@ -2,3 +2,4 @@
 *.a
 *.so
 /tests/test_protocol
+/bin/perf_client

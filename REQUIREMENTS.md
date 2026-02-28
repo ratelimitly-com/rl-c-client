@@ -19,13 +19,13 @@
 ### 3.2 Protocol Compliance
 - UDP transport, **single datagram per message**.
 - **Little-endian** encoding for all integers.
-- **Alignment/padding** must match spec: guard/service blocks are 40 bytes, resource blocks are 28 bytes with 2-byte padding.
+- **Alignment/padding** MUST match spec: guard/service blocks are 40 bytes, resource blocks are 28 bytes with 2-byte padding.
 - **Max payload** target ~1200 bytes to avoid fragmentation.
 - Support **metrics label TLV** in rate requests.
 - Support **tenant header** fields: key_id, unique_id (16 bytes), timestamp (ms since epoch), steering_feedback, tenant_mgmt_flag.
-  - Client must always send `steering_feedback = 0` in requests (allow steering).
-  - Client must always react to server steering feedback in responses.
-- **unique_id** should be UUIDv4 (binary 16 bytes), or equivalent high-entropy identifier.
+  - Client MUST always send `steering_feedback = 0` in requests (allow steering).
+  - Client MUST always react to server steering feedback in responses.
+- **unique_id** SHOULD be UUIDv4 (binary 16 bytes), or equivalent high-entropy identifier.
 
 ### 3.3 Authentication
 - **None** (TLV 0x414E)
@@ -39,14 +39,16 @@
 - DNS discovery via **SRV lookup** `_ratelimitly._udp.<tenant_dns_name>`.
 - Fallback to **A/AAAA records** for `<tenant_dns_name>` on port 8080.
 - Only SRV discovery is supported (no static server list).
-- **Broadcast requests** to all discovered servers (same unique_id).
+- Requests may be sent to multiple discovered servers with the same `unique_id`.
+- **Commit safety**: for mutating operations, client MUST ensure exactly one logical commit authority (single commit target, or strongly consistent shared token state with one effective commit).
 - **Response selection policy**: implement the full policy surface (see Rust `request_policy.rs`), not only the default behavior.
 - Track **server_id** (from tenant header key_id in responses) for basic stability filtering (per Rust client behavior).
 
 ### 3.5 Timeouts and Retries
 - Enforce per-request timeout for operations expecting responses.
 - Minimal retry support: retry on timeout with configurable attempt count and delay.
-- If auth fails, server blackholes request; timeout handling must cover this.
+- If auth fails, server drops the request and sends no response (blackhole behavior); timeout handling must cover this.
+- Duplicate handling is keyed by `(tenant, unique_id)`: server resends the cached first response and does not payload-compare or reprocess duplicates within the dedup window.
 
 ### 3.6 Hashing for IDs
 - Use **BLAKE2s-128** (first 16 bytes of BLAKE2s-256) for:
@@ -80,7 +82,7 @@
 - Avoid heap allocations on hot path where feasible.
 
 ## 5) Async and I/O Abstraction
-- **Core client must be I/O-agnostic**: it should not assume a specific event loop.
+- **Core client MUST be I/O-agnostic**: it SHOULD NOT assume a specific event loop.
 - Provide an **I/O adapter interface** (send/receive + time + timers) so nginx can supply its own UDP + timer facilities.
 - Provide an optional **POSIX UDP adapter** for non-nginx use (e.g., epoll or poll based), but keep it modular.
 
