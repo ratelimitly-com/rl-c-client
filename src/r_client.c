@@ -661,6 +661,9 @@ static void r_dns_srv_cb_fn(void *user, int status, const r_srv_record_t *record
 
     size_t pending = 0;
     uint64_t min_ttl_ms = 0;
+    // Keep refresh alive while scheduling address lookups so synchronous
+    // resolvers cannot finish and free it re-entrantly from r_dns_addr_cb_fn.
+    refresh->pending = 1;
     for (size_t i = 0; i < record_count; i++) {
         bool ok = false;
         uint64_t server_id = r_parse_server_id_from_target(records[i].target, &ok);
@@ -682,21 +685,28 @@ static void r_dns_srv_cb_fn(void *user, int status, const r_srv_record_t *record
         ctx->has_server_id = true;
         r_dns_req_id_t req_id = 0;
         pending++;
+        refresh->pending++;
         int rc = client->resolver.resolve_addrs(client->resolver.ctx, records[i].target, &req_id, r_dns_addr_cb_fn, ctx);
         if (rc != 0) {
             pending--;
+            if (refresh->pending > 0) {
+                refresh->pending--;
+            }
             free(ctx);
         }
     }
 
-    if (pending == 0) {
+    refresh->min_ttl_ms = min_ttl_ms;
+    if (refresh->pending > 0) {
+        refresh->pending--;
+    }
+
+    if (refresh->pending == 0) {
         if (r_dns_start_fallback(client, refresh) != RCLIENT_OK) {
             r_dns_refresh_finish(refresh);
         }
         return;
     }
-    refresh->pending = pending;
-    refresh->min_ttl_ms = min_ttl_ms;
 }
 
 static void r_dns_addr_cb_fn(void *user, int status, const r_addr_t *addrs, size_t addr_count) {
