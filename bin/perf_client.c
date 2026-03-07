@@ -769,7 +769,7 @@ static uint64_t perf_parse_u64(const char *value, uint64_t fallback) {
 static perf_config_t perf_config_from_args(int argc, char **argv) {
     perf_config_t cfg;
     memset(&cfg, 0, sizeof(cfg));
-    const char *default_auth = "rl-none1qyqqqqqqqqqqq70t2lw";
+    const char *default_auth = "rl-none1qyqqqqqqqqqqqqqqqyqqqpqqqqqpqqqqgqqqqqqr3g0pd";
     cfg.srv_domain = "rl.glar.com";
     cfg.auth_bech32 = default_auth;
     cfg.auth_type = R_AUTH_NONE;

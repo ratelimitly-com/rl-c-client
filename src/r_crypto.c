@@ -140,10 +140,6 @@ static uint64_t r_read_le64_local(const uint8_t *p) {
            ((uint64_t)p[7] << 56);
 }
 
-static uint16_t r_read_le16_local(const uint8_t *p) {
-    return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
-}
-
 int r_hash_id_blake2s_128(const char *input, uint8_t out_id[16]) {
     if (!input || !out_id) {
         return -1;
@@ -322,7 +318,7 @@ int r_decode_api_key_bech32(
     size_t secret_len = 0;
 
     if (auth_type == R_AUTH_NONE) {
-        if (payload_len != 8u) {
+        if (payload_len != 24u) {
             free(payload);
             free(data);
             free(s);
@@ -331,20 +327,14 @@ int r_decode_api_key_bech32(
         key_id = r_read_le64_local(payload);
         secret_len = 0;
     } else {
-        if (payload_len < 10u) {
+        if (payload_len != 56u) {
             free(payload);
             free(data);
             free(s);
             return -1;
         }
         key_id = r_read_le64_local(payload);
-        secret_len = (size_t)r_read_le16_local(payload + 8);
-        if (payload_len != 10u + secret_len) {
-            free(payload);
-            free(data);
-            free(s);
-            return -1;
-        }
+        secret_len = 32u;
         if (secret_len > out_secret_cap) {
             free(payload);
             free(data);
@@ -352,7 +342,7 @@ int r_decode_api_key_bech32(
             return -1;
         }
         if (secret_len > 0) {
-            memcpy(out_secret, payload + 10, secret_len);
+            memcpy(out_secret, payload + 8, secret_len);
         }
     }
 

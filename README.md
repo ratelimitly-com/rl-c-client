@@ -2,7 +2,7 @@
 
 This is a C implementation of the Ratelimitly r-client. It follows the
 protocol specs in `docs/spec/r-client.md` and `docs/spec/wire_protocol.md`.
-Auth for `cookie`/`aes` uses Bech32 API keys (`rl-cookie...`, `rl-aes...`) rather than passphrase strings.
+Auth for `cookie`/`aes` uses tenant Bech32 keys (`rl-cookie...`, `rl-aes...`) with embedded quotas rather than passphrase strings.
 
 ## Build
 
