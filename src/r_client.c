@@ -132,6 +132,8 @@ typedef struct r_dns_target_ctx {
     bool has_server_id;
 } r_dns_target_ctx_t;
 
+#define R_SERVER_ID_EPOCH_S_2025 1735689600ULL
+
 static char *r_strdup_n(const char *src, size_t len) {
     if (!src) {
         return NULL;
@@ -168,6 +170,18 @@ static void r_write_le16(uint8_t *p, uint16_t v) {
 }
 
 static uint64_t r_rand_range(uint64_t max);
+
+static uint64_t r_server_start_s_from_id(uint64_t server_id) {
+    return R_SERVER_ID_EPOCH_S_2025 + (server_id >> 23);
+}
+
+static uint64_t r_server_age_ms(uint64_t server_id, uint64_t now_ms) {
+    uint64_t start_ms = r_server_start_s_from_id(server_id) * 1000ULL;
+    if (now_ms <= start_ms) {
+        return 0;
+    }
+    return now_ms - start_ms;
+}
 
 static uint64_t r_now_ms(r_client_t *client) {
     if (!client || !client->io.now_ms) {
@@ -319,11 +333,7 @@ static bool r_server_stable(r_client_t *client, uint64_t server_id, uint64_t now
     if (client->config.server_stability_threshold_ms == 0) {
         return true;
     }
-    r_server_stat_t *stat = r_stats_get(client, server_id);
-    if (!stat) {
-        return false;
-    }
-    return (now_ms - stat->first_seen_ms) >= client->config.server_stability_threshold_ms;
+    return r_server_age_ms(server_id, now_ms) >= client->config.server_stability_threshold_ms;
 }
 
 static int r_seen_addr_add(r_client_req_t *req, const r_addr_t *addr) {
@@ -385,17 +395,14 @@ static bool r_is_better_candidate(
     uint64_t best_id,
     uint64_t now_ms
 ) {
+    (void)now_ms;
     r_server_stat_t *cand_stats = r_stats_get(client, cand_id);
     r_server_stat_t *best_stats = r_stats_get(client, best_id);
 
-    bool cand_stable = cand_stats
-        ? (now_ms - cand_stats->first_seen_ms) >= client->config.server_stability_threshold_ms
-        : false;
-    bool best_stable = best_stats
-        ? (now_ms - best_stats->first_seen_ms) >= client->config.server_stability_threshold_ms
-        : false;
-    if (cand_stable != best_stable) {
-        return cand_stable;
+    uint64_t cand_start_s = r_server_start_s_from_id(cand_id);
+    uint64_t best_start_s = r_server_start_s_from_id(best_id);
+    if (cand_start_s != best_start_s) {
+        return cand_start_s < best_start_s;
     }
 
     uint64_t cand_valid = cand_stats ? cand_stats->valid_responses : 0;
