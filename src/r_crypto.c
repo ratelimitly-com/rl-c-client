@@ -140,6 +140,13 @@ static uint64_t r_read_le64_local(const uint8_t *p) {
            ((uint64_t)p[7] << 56);
 }
 
+static uint32_t r_read_le32_local(const uint8_t *p) {
+    return ((uint32_t)p[0]) |
+           ((uint32_t)p[1] << 8) |
+           ((uint32_t)p[2] << 16) |
+           ((uint32_t)p[3] << 24);
+}
+
 int r_hash_id_blake2s_128(const char *input, uint8_t out_id[16]) {
     if (!input || !out_id) {
         return -1;
@@ -215,6 +222,26 @@ int r_decode_api_key_bech32(
     uint8_t *out_secret,
     size_t out_secret_cap,
     size_t *out_secret_len
+) {
+    return r_decode_api_key_bech32_with_quotas(
+        encoded,
+        out_type,
+        out_key_id,
+        out_secret,
+        out_secret_cap,
+        out_secret_len,
+        NULL
+    );
+}
+
+int r_decode_api_key_bech32_with_quotas(
+    const char *encoded,
+    r_auth_type_t *out_type,
+    uint64_t *out_key_id,
+    uint8_t *out_secret,
+    size_t out_secret_cap,
+    size_t *out_secret_len,
+    r_bech32_quotas_t *out_quotas
 ) {
     if (!encoded || !out_type || !out_key_id || !out_secret || !out_secret_len) {
         return -1;
@@ -349,6 +376,13 @@ int r_decode_api_key_bech32(
     *out_type = auth_type;
     *out_key_id = key_id;
     *out_secret_len = secret_len;
+    if (out_quotas) {
+        size_t quota_offset = auth_type == R_AUTH_NONE ? 8u : 40u;
+        out_quotas->rate_buckets_max = r_read_le32_local(payload + quota_offset);
+        out_quotas->latency_services_max = r_read_le32_local(payload + quota_offset + 4u);
+        out_quotas->metrics_labels_max = r_read_le32_local(payload + quota_offset + 8u);
+        out_quotas->latency_buffer_size_max = r_read_le32_local(payload + quota_offset + 12u);
+    }
 
     free(payload);
     free(data);
