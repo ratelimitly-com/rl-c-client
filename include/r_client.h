@@ -129,6 +129,7 @@ typedef struct r_retry_policy {
 
 typedef struct r_request_policy {
     uint64_t attempt_timeout_ms;
+    uint32_t dedup_ttl_ms;
     r_wait_policy_t wait;
     r_response_quorum_t quorum;
     r_quorum_requirement_t quorum_requirement;

@@ -32,8 +32,15 @@ typedef struct perf_config {
     bool has_duration;
     uint64_t duration_secs;
     const char *bucket_prefix;
+    uint64_t attempt_timeout_ms;
+    uint32_t retry_attempts;
+    r_retry_on_t retry_on;
+    r_resend_policy_t retry_resend;
+    bool retry_refresh_dns_on_retry;
+    uint64_t retry_total_timeout_ms;
     bool ignore_steering;
     bool debug_steering;
+    const struct perf_dns_cache *dns_cache;
 } perf_config_t;
 
 typedef struct perf_stats {
@@ -59,6 +66,21 @@ typedef struct dns_resolver_ctx {
     bool initialized;
 } dns_resolver_ctx_t;
 
+typedef struct perf_dns_addr_entry {
+    char *name;
+    r_addr_t *items;
+    size_t count;
+} perf_dns_addr_entry_t;
+
+typedef struct perf_dns_cache {
+    char *tenant_name;
+    char *srv_name;
+    r_srv_record_t *srv_records;
+    size_t srv_count;
+    perf_dns_addr_entry_t *addr_entries;
+    size_t addr_entry_count;
+} perf_dns_cache_t;
+
 typedef struct worker_ctx {
     size_t client_id;
     const perf_config_t *config;
@@ -74,6 +96,24 @@ static const char *perf_auth_label(r_auth_type_t auth_type) {
         case R_AUTH_AES_GCM: return "AES";
         case R_AUTH_NONE:
         default: return "None";
+    }
+}
+
+static const char *perf_retry_on_label(r_retry_on_t retry_on) {
+    switch (retry_on) {
+        case R_RETRY_TIMEOUT_ONLY: return "timeout";
+        case R_RETRY_QUORUM_NOT_MET: return "quorum";
+        case R_RETRY_INCONSISTENT: return "inconsistent";
+        case R_RETRY_NEVER:
+        default: return "never";
+    }
+}
+
+static const char *perf_retry_resend_label(r_resend_policy_t resend) {
+    switch (resend) {
+        case R_RESEND_MISSING_ONLY: return "missing";
+        case R_RESEND_ALL:
+        default: return "all";
     }
 }
 
@@ -341,6 +381,25 @@ static void addr_list_free(addr_list_t *list) {
     list->cap = 0;
 }
 
+static int addr_list_clone(const addr_list_t *list, r_addr_t **out_items, size_t *out_count) {
+    if (!list || !out_items || !out_count) {
+        return -1;
+    }
+    *out_items = NULL;
+    *out_count = 0;
+    if (list->count == 0) {
+        return 0;
+    }
+    r_addr_t *items = (r_addr_t *)calloc(list->count, sizeof(r_addr_t));
+    if (!items) {
+        return -1;
+    }
+    memcpy(items, list->items, list->count * sizeof(r_addr_t));
+    *out_items = items;
+    *out_count = list->count;
+    return 0;
+}
+
 static int dns_parse_addrs(unsigned char *answer, int len, int qtype, addr_list_t *list) {
     ns_msg handle;
     if (ns_initparse(answer, len, &handle) < 0) {
@@ -379,73 +438,54 @@ static int dns_parse_addrs(unsigned char *answer, int len, int qtype, addr_list_
     return 0;
 }
 
-static int perf_resolve_addrs(
-    void *ctx,
-    const char *name,
-    r_dns_req_id_t *out_req_id,
-    r_dns_addr_cb cb,
-    void *user
-) {
-    (void)out_req_id;
-    dns_resolver_ctx_t *resolver = (dns_resolver_ctx_t *)ctx;
-    if (!resolver || !resolver->initialized || !name || !cb) {
+static int dns_query_addrs(dns_resolver_ctx_t *resolver, const char *name, addr_list_t *list) {
+    if (!resolver || !resolver->initialized || !name || !list) {
         return -1;
     }
-
-    addr_list_t list;
-    memset(&list, 0, sizeof(list));
+    memset(list, 0, sizeof(*list));
 
     unsigned char answer[4096];
     int len_a = res_nquery(&resolver->state, name, ns_c_in, ns_t_a, answer, sizeof(answer));
     if (len_a > 0) {
-        (void)dns_parse_addrs(answer, len_a, ns_t_a, &list);
+        (void)dns_parse_addrs(answer, len_a, ns_t_a, list);
     }
 
     int len_aaaa = res_nquery(&resolver->state, name, ns_c_in, ns_t_aaaa, answer, sizeof(answer));
     if (len_aaaa > 0) {
-        (void)dns_parse_addrs(answer, len_aaaa, ns_t_aaaa, &list);
+        (void)dns_parse_addrs(answer, len_aaaa, ns_t_aaaa, list);
     }
-
-    int status = list.count > 0 ? 0 : -1;
-    cb(user, status, list.items, list.count);
-    addr_list_free(&list);
-    return 0;
+    return list->count > 0 ? 0 : -1;
 }
 
-static int perf_resolve_srv(
-    void *ctx,
+static int dns_query_srv(
+    dns_resolver_ctx_t *resolver,
     const char *name,
-    r_dns_req_id_t *out_req_id,
-    r_dns_srv_cb cb,
-    void *user
+    r_srv_record_t **out_records,
+    size_t *out_count
 ) {
-    (void)out_req_id;
-    dns_resolver_ctx_t *resolver = (dns_resolver_ctx_t *)ctx;
-    if (!resolver || !resolver->initialized || !name || !cb) {
+    if (!resolver || !resolver->initialized || !name || !out_records || !out_count) {
         return -1;
     }
-
+    *out_records = NULL;
+    *out_count = 0;
     unsigned char answer[4096];
     int len = res_nquery(&resolver->state, name, ns_c_in, ns_t_srv, answer, sizeof(answer));
     if (len <= 0) {
-        cb(user, -1, NULL, 0);
-        return 0;
+        return -1;
     }
 
     ns_msg handle;
     if (ns_initparse(answer, len, &handle) < 0) {
-        cb(user, -1, NULL, 0);
-        return 0;
+        return -1;
     }
 
     int count = ns_msg_count(handle, ns_s_an);
     r_srv_record_t *records = (r_srv_record_t *)calloc((size_t)count, sizeof(r_srv_record_t));
     if (!records) {
-        cb(user, -1, NULL, 0);
-        return 0;
+        return -1;
     }
 
-    size_t out_count = 0;
+    size_t record_count = 0;
     for (int i = 0; i < count; i++) {
         ns_rr rr;
         if (ns_parserr(&handle, ns_s_an, i, &rr) != 0) {
@@ -468,30 +508,191 @@ static int perf_resolve_srv(
             continue;
         }
 
-        records[out_count].priority = priority;
-        records[out_count].weight = weight;
-        records[out_count].port = port;
-        records[out_count].ttl_ms = (uint32_t)ns_rr_ttl(rr) * 1000u;
-        records[out_count].target = perf_strdup(target);
-        if (!records[out_count].target) {
+        records[record_count].priority = priority;
+        records[record_count].weight = weight;
+        records[record_count].port = port;
+        records[record_count].ttl_ms = (uint32_t)ns_rr_ttl(rr) * 1000u;
+        records[record_count].target = perf_strdup(target);
+        if (!records[record_count].target) {
             continue;
         }
-        out_count++;
+        record_count++;
     }
-
-    int status = out_count > 0 ? 0 : -1;
-    cb(user, status, records, out_count);
-
-    for (size_t i = 0; i < out_count; i++) {
-        free((char *)records[i].target);
+    if (record_count == 0) {
+        free(records);
+        return -1;
     }
-    free(records);
+    *out_records = records;
+    *out_count = record_count;
     return 0;
 }
 
 static void perf_resolver_cancel(void *ctx, r_dns_req_id_t req_id) {
     (void)ctx;
     (void)req_id;
+}
+
+static void perf_dns_cache_reset(perf_dns_cache_t *cache) {
+    if (!cache) {
+        return;
+    }
+    for (size_t i = 0; i < cache->srv_count; i++) {
+        free((char *)cache->srv_records[i].target);
+    }
+    free(cache->srv_records);
+    for (size_t i = 0; i < cache->addr_entry_count; i++) {
+        free(cache->addr_entries[i].name);
+        free(cache->addr_entries[i].items);
+    }
+    free(cache->addr_entries);
+    free(cache->srv_name);
+    free(cache->tenant_name);
+    memset(cache, 0, sizeof(*cache));
+}
+
+static const perf_dns_addr_entry_t *perf_dns_cache_find_addrs(const perf_dns_cache_t *cache, const char *name) {
+    if (!cache || !name) {
+        return NULL;
+    }
+    for (size_t i = 0; i < cache->addr_entry_count; i++) {
+        if (strcmp(cache->addr_entries[i].name, name) == 0) {
+            return &cache->addr_entries[i];
+        }
+    }
+    return NULL;
+}
+
+static int perf_dns_cache_add_addrs(perf_dns_cache_t *cache, const char *name, const addr_list_t *list) {
+    if (!cache || !name || !list || list->count == 0) {
+        return -1;
+    }
+    if (perf_dns_cache_find_addrs(cache, name)) {
+        return 0;
+    }
+    perf_dns_addr_entry_t *next = (perf_dns_addr_entry_t *)realloc(
+        cache->addr_entries,
+        (cache->addr_entry_count + 1) * sizeof(*cache->addr_entries)
+    );
+    if (!next) {
+        return -1;
+    }
+    cache->addr_entries = next;
+    perf_dns_addr_entry_t *entry = &cache->addr_entries[cache->addr_entry_count];
+    memset(entry, 0, sizeof(*entry));
+    entry->name = perf_strdup(name);
+    if (!entry->name) {
+        return -1;
+    }
+    if (addr_list_clone(list, &entry->items, &entry->count) != 0) {
+        free(entry->name);
+        memset(entry, 0, sizeof(*entry));
+        return -1;
+    }
+    cache->addr_entry_count++;
+    return 0;
+}
+
+static int perf_dns_cache_init(perf_dns_cache_t *cache, const char *tenant_name) {
+    if (!cache || !tenant_name) {
+        return -1;
+    }
+    memset(cache, 0, sizeof(*cache));
+    cache->tenant_name = perf_strdup(tenant_name);
+    if (!cache->tenant_name) {
+        perf_dns_cache_reset(cache);
+        return -1;
+    }
+
+    dns_resolver_ctx_t resolver;
+    if (dns_resolver_init(&resolver) != 0) {
+        perf_dns_cache_reset(cache);
+        return -1;
+    }
+
+    char srv_name[512];
+    int n = snprintf(srv_name, sizeof(srv_name), "_ratelimitly._udp.%s", tenant_name);
+    if (n < 0 || (size_t)n >= sizeof(srv_name)) {
+        dns_resolver_close(&resolver);
+        perf_dns_cache_reset(cache);
+        return -1;
+    }
+    cache->srv_name = perf_strdup(srv_name);
+    if (!cache->srv_name) {
+        dns_resolver_close(&resolver);
+        perf_dns_cache_reset(cache);
+        return -1;
+    }
+
+    (void)dns_query_srv(&resolver, cache->srv_name, &cache->srv_records, &cache->srv_count);
+
+    for (size_t i = 0; i < cache->srv_count; i++) {
+        addr_list_t list;
+        memset(&list, 0, sizeof(list));
+        if (dns_query_addrs(&resolver, cache->srv_records[i].target, &list) == 0) {
+            if (perf_dns_cache_add_addrs(cache, cache->srv_records[i].target, &list) != 0) {
+                addr_list_free(&list);
+                dns_resolver_close(&resolver);
+                perf_dns_cache_reset(cache);
+                return -1;
+            }
+        }
+        addr_list_free(&list);
+    }
+
+    addr_list_t fallback;
+    memset(&fallback, 0, sizeof(fallback));
+    if (dns_query_addrs(&resolver, tenant_name, &fallback) == 0) {
+        if (perf_dns_cache_add_addrs(cache, tenant_name, &fallback) != 0) {
+            addr_list_free(&fallback);
+            dns_resolver_close(&resolver);
+            perf_dns_cache_reset(cache);
+            return -1;
+        }
+    }
+    addr_list_free(&fallback);
+    dns_resolver_close(&resolver);
+    return 0;
+}
+
+static int perf_resolve_addrs(
+    void *ctx,
+    const char *name,
+    r_dns_req_id_t *out_req_id,
+    r_dns_addr_cb cb,
+    void *user
+) {
+    (void)out_req_id;
+    const perf_dns_cache_t *cache = (const perf_dns_cache_t *)ctx;
+    if (!cache || !name || !cb) {
+        return -1;
+    }
+    const perf_dns_addr_entry_t *entry = perf_dns_cache_find_addrs(cache, name);
+    if (!entry || entry->count == 0) {
+        cb(user, -1, NULL, 0);
+        return 0;
+    }
+    cb(user, 0, entry->items, entry->count);
+    return 0;
+}
+
+static int perf_resolve_srv(
+    void *ctx,
+    const char *name,
+    r_dns_req_id_t *out_req_id,
+    r_dns_srv_cb cb,
+    void *user
+) {
+    (void)out_req_id;
+    const perf_dns_cache_t *cache = (const perf_dns_cache_t *)ctx;
+    if (!cache || !name || !cb) {
+        return -1;
+    }
+    if (!cache->srv_name || strcmp(cache->srv_name, name) != 0 || cache->srv_count == 0) {
+        cb(user, -1, NULL, 0);
+        return 0;
+    }
+    cb(user, 0, cache->srv_records, cache->srv_count);
+    return 0;
 }
 
 static void perf_record_stats(perf_stats_t *stats, uint64_t latency_ns, bool success) {
@@ -592,13 +793,6 @@ static void *perf_worker(void *arg) {
         return (void *)(intptr_t)1;
     }
 
-    dns_resolver_ctx_t resolver;
-    if (dns_resolver_init(&resolver) != 0) {
-        close(io.sockfd);
-        worker->worker_error = 1;
-        return (void *)(intptr_t)1;
-    }
-
     r_io_ops_t io_ops;
     memset(&io_ops, 0, sizeof(io_ops));
     io_ops.ctx = &io;
@@ -609,16 +803,24 @@ static void *perf_worker(void *arg) {
 
     r_resolver_ops_t resolver_ops;
     memset(&resolver_ops, 0, sizeof(resolver_ops));
-    resolver_ops.ctx = &resolver;
+    resolver_ops.ctx = (void *)worker->config->dns_cache;
     resolver_ops.resolve_srv = perf_resolve_srv;
     resolver_ops.resolve_addrs = perf_resolve_addrs;
     resolver_ops.cancel = perf_resolver_cancel;
 
     r_request_policy_t policy;
     r_client_default_request_policy(&policy);
-    policy.attempt_timeout_ms = 500;
-    policy.retry.retry_attempts = 0;
-    policy.retry.retry_on = R_RETRY_NEVER;
+    policy.attempt_timeout_ms = worker->config->attempt_timeout_ms;
+    policy.retry.retry_attempts = worker->config->retry_attempts;
+    policy.retry.retry_on = worker->config->retry_on;
+    policy.retry.resend = worker->config->retry_resend;
+    policy.retry.backoff.kind = R_BACKOFF_NONE;
+    policy.retry.backoff.delay_ms = 0;
+    policy.retry.backoff.base_delay_ms = 0;
+    policy.retry.backoff.max_delay_ms = 0;
+    policy.retry.backoff.jitter_ms = 0;
+    policy.retry.refresh_dns_on_retry = worker->config->retry_refresh_dns_on_retry;
+    policy.retry.total_timeout_ms = worker->config->retry_total_timeout_ms;
     policy.dns_resync.refresh_interval_ms = 3600u * 1000u;
 
     r_auth_config_t auth;
@@ -643,7 +845,6 @@ static void *perf_worker(void *arg) {
     if (rc != RCLIENT_OK) {
         fprintf(stderr, "[ERROR] client_%zu: %s (%d)\n", worker->client_id, perf_err_str(rc), rc);
         perf_maybe_print_dns_hint(rc);
-        dns_resolver_close(&resolver);
         close(io.sockfd);
         worker->worker_error = 1;
         return (void *)(intptr_t)1;
@@ -724,7 +925,6 @@ static void *perf_worker(void *arg) {
     }
 
     r_client_destroy(client);
-    dns_resolver_close(&resolver);
     close(io.sockfd);
     return (void *)(intptr_t)0;
 }
@@ -766,6 +966,44 @@ static uint64_t perf_parse_u64(const char *value, uint64_t fallback) {
     return (uint64_t)out;
 }
 
+static bool perf_parse_retry_on(const char *value, r_retry_on_t *out) {
+    if (!value || !out) {
+        return false;
+    }
+    if (strcmp(value, "timeout") == 0) {
+        *out = R_RETRY_TIMEOUT_ONLY;
+        return true;
+    }
+    if (strcmp(value, "quorum") == 0) {
+        *out = R_RETRY_QUORUM_NOT_MET;
+        return true;
+    }
+    if (strcmp(value, "inconsistent") == 0) {
+        *out = R_RETRY_INCONSISTENT;
+        return true;
+    }
+    if (strcmp(value, "never") == 0) {
+        *out = R_RETRY_NEVER;
+        return true;
+    }
+    return false;
+}
+
+static bool perf_parse_retry_resend(const char *value, r_resend_policy_t *out) {
+    if (!value || !out) {
+        return false;
+    }
+    if (strcmp(value, "all") == 0) {
+        *out = R_RESEND_ALL;
+        return true;
+    }
+    if (strcmp(value, "missing") == 0) {
+        *out = R_RESEND_MISSING_ONLY;
+        return true;
+    }
+    return false;
+}
+
 static perf_config_t perf_config_from_args(int argc, char **argv) {
     perf_config_t cfg;
     memset(&cfg, 0, sizeof(cfg));
@@ -779,6 +1017,12 @@ static perf_config_t perf_config_from_args(int argc, char **argv) {
     cfg.has_duration = false;
     cfg.duration_secs = 0;
     cfg.bucket_prefix = "perf_bucket";
+    cfg.attempt_timeout_ms = 500;
+    cfg.retry_attempts = 0;
+    cfg.retry_on = R_RETRY_NEVER;
+    cfg.retry_resend = R_RESEND_ALL;
+    cfg.retry_refresh_dns_on_retry = false;
+    cfg.retry_total_timeout_ms = 0;
     cfg.ignore_steering = false;
     cfg.debug_steering = false;
 
@@ -818,6 +1062,37 @@ static perf_config_t perf_config_from_args(int argc, char **argv) {
         cfg.bucket_prefix = bucket;
     }
 
+    const char *attempt_timeout = perf_find_arg(argc, argv, "--attempt-timeout-ms");
+    if (attempt_timeout) {
+        cfg.attempt_timeout_ms = perf_parse_u64(attempt_timeout, cfg.attempt_timeout_ms);
+    }
+
+    const char *retry_attempts = perf_find_arg(argc, argv, "--retry-attempts");
+    if (retry_attempts) {
+        cfg.retry_attempts = (uint32_t)perf_parse_u64(retry_attempts, cfg.retry_attempts);
+    }
+
+    const char *retry_on = perf_find_arg(argc, argv, "--retry-on");
+    if (retry_on && !perf_parse_retry_on(retry_on, &cfg.retry_on)) {
+        fprintf(stderr, "Invalid --retry-on value '%s' (expected timeout / quorum / inconsistent / never)\n",
+                retry_on);
+        exit(2);
+    }
+
+    const char *retry_resend = perf_find_arg(argc, argv, "--retry-resend");
+    if (retry_resend && !perf_parse_retry_resend(retry_resend, &cfg.retry_resend)) {
+        fprintf(stderr, "Invalid --retry-resend value '%s' (expected all / missing)\n",
+                retry_resend);
+        exit(2);
+    }
+
+    const char *retry_total_timeout = perf_find_arg(argc, argv, "--retry-total-timeout-ms");
+    if (retry_total_timeout) {
+        cfg.retry_total_timeout_ms = perf_parse_u64(retry_total_timeout, cfg.retry_total_timeout_ms);
+    }
+
+    cfg.retry_refresh_dns_on_retry = perf_has_flag(argc, argv, "--retry-refresh-dns");
+
     cfg.ignore_steering = perf_has_flag(argc, argv, "--ignore-steering");
     cfg.debug_steering = perf_has_flag(argc, argv, "--debug-steering");
 
@@ -835,12 +1110,19 @@ static void perf_print_help(void) {
     printf("  --auth=<bech32>         Tenant auth Bech32 key (rl-none... / rl-cookie... / rl-aes...)\n");
     printf("                         Tenant ID is derived from the embedded key_id\n");
     printf("  --bucket-prefix=<name>  Bucket name prefix (default: perf_bucket)\n");
+    printf("  --attempt-timeout-ms=<n> Per-attempt UDP reply deadline (default: 500)\n");
+    printf("  --retry-attempts=<n>    Retry count after the first attempt (default: 0)\n");
+    printf("  --retry-on=<mode>       Retry trigger: timeout | quorum | inconsistent | never\n");
+    printf("  --retry-resend=<mode>   Retry resend policy: all | missing\n");
+    printf("  --retry-total-timeout-ms=<n> Overall timeout cap across retries (0 disables cap)\n");
+    printf("  --retry-refresh-dns     Refresh DNS before retry attempts\n");
     printf("  --ignore-steering       Ignore steering_feedback from server\n");
     printf("  --debug-steering        Show steering_feedback values\n\n");
     printf("Examples:\n");
     printf("  perf_client --clients=50 --requests=10000\n");
     printf("  perf_client --duration=60 --auth=rl-aes1...\n");
     printf("  perf_client --srv=rl1.glar.com --duration=30 --clients=50\n");
+    printf("  perf_client --attempt-timeout-ms=750 --retry-attempts=2 --retry-on=timeout\n");
 }
 
 static void *perf_progress_thread(void *arg) {
@@ -876,6 +1158,13 @@ int main(int argc, char **argv) {
     }
 
     perf_config_t cfg = perf_config_from_args(argc, argv);
+    perf_dns_cache_t dns_cache;
+    if (perf_dns_cache_init(&dns_cache, cfg.srv_domain) != 0) {
+        fprintf(stderr, "[ERROR] Failed to pre-resolve DNS for %s\n", cfg.srv_domain);
+        perf_maybe_print_dns_hint(RCLIENT_ERR_DNS);
+        return 1;
+    }
+    cfg.dns_cache = &dns_cache;
 
     printf("RateLimitly Performance Client\n");
     printf("==============================\n");
@@ -883,6 +1172,18 @@ int main(int argc, char **argv) {
     printf("Auth: %s\n", perf_auth_label(cfg.auth_type));
     printf("Tenant: %llu\n", (unsigned long long)cfg.tenant_id);
     printf("Concurrent clients: %zu\n", cfg.concurrent_clients);
+    printf("Attempt timeout: %llu ms\n", (unsigned long long)cfg.attempt_timeout_ms);
+    printf("Retry policy: attempts=%u on=%s resend=%s backoff=none",
+           cfg.retry_attempts,
+           perf_retry_on_label(cfg.retry_on),
+           perf_retry_resend_label(cfg.retry_resend));
+    if (cfg.retry_total_timeout_ms > 0) {
+        printf(" total_timeout=%llu ms", (unsigned long long)cfg.retry_total_timeout_ms);
+    }
+    if (cfg.retry_refresh_dns_on_retry) {
+        printf(" refresh_dns=true");
+    }
+    printf("\n");
     if (cfg.has_duration) {
         printf("Duration: %llu s\n", (unsigned long long)cfg.duration_secs);
     } else {
@@ -903,6 +1204,7 @@ int main(int argc, char **argv) {
         free(threads);
         free(workers);
         free(started);
+        perf_dns_cache_reset(&dns_cache);
         return 1;
     }
 
@@ -982,5 +1284,6 @@ int main(int argc, char **argv) {
     free(threads);
     free(workers);
     free(started);
+    perf_dns_cache_reset(&dns_cache);
     return 0;
 }

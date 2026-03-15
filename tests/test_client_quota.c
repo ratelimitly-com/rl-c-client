@@ -9,7 +9,7 @@
 #include "../src/r_protocol.h"
 
 static const char *SAMPLE_NONE_KEY_TENANT_1 =
-    "rl-none1qyqqqqqqqqqqqqqqqyqqqpqqqqqpqqqqgqqqqqqr3g0pd";
+    "rl-none1qyqqqqqqqqqqqqqqqyqqqpqqqqqpqqqqgqqqqqpvqyqqqr8h9gt";
 
 typedef struct test_ctx {
     uint8_t last_packet[R_MAX_PACKET_SIZE];

@@ -5,6 +5,7 @@ void r_client_default_request_policy(r_request_policy_t *out_policy) {
         return;
     }
     out_policy->attempt_timeout_ms = 1000;
+    out_policy->dedup_ttl_ms = 300;
     out_policy->wait = R_WAIT_FOR_DEADLINE;
     out_policy->quorum.kind = R_QUORUM_ALL;
     out_policy->quorum.count = 0;
@@ -27,4 +28,3 @@ void r_client_default_request_policy(r_request_policy_t *out_policy) {
     out_policy->dns_resync.min_interval_ms = 1000;
     out_policy->dns_resync.jitter_ms = 0;
 }
-

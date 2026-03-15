@@ -58,7 +58,18 @@ Examples:
 bin/perf_client --duration=60 --auth=rl-aes1...
 bin/perf_client --srv=rl1.glar.com --duration=30 --clients=50
 RCLIENT_DNS_SERVER=127.0.0.1:5353 bin/perf_client
+bin/perf_client --attempt-timeout-ms=750 --retry-attempts=2 --retry-on=timeout
+bin/perf_client --retry-attempts=3 --retry-on=inconsistent --retry-total-timeout-ms=1500
 ```
+
+Retry-related flags:
+
+- `--attempt-timeout-ms=<n>`: per-attempt UDP reply deadline in milliseconds
+- `--retry-attempts=<n>`: retry count after the initial attempt
+- `--retry-on=timeout|quorum|inconsistent|never`
+- `--retry-resend=all|missing`
+- `--retry-total-timeout-ms=<n>`: overall timeout cap across retries (`0` disables the cap)
+- `--retry-refresh-dns`: refresh DNS before retry attempts
 
 ## Notes
 

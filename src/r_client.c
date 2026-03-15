@@ -68,10 +68,10 @@ struct r_client_req {
     uint64_t start_ms;
     uint64_t attempt_deadline_ms;
     uint64_t total_deadline_ms;
+    uint64_t dedup_deadline_ms;
     uint32_t attempt;
     uint32_t total_attempts;
-    bool pending_retry;
-    uint64_t retry_at_ms;
+    uint32_t dedup_ttl_ms;
 
     r_addr_t *seen_addrs;
     size_t seen_addr_count;
@@ -196,6 +196,18 @@ static bool r_latency_buffer_size_quota(const r_client_t *client, uint32_t *out_
     }
     *out_limit = client->quotas.latency_buffer_size_max;
     return true;
+}
+
+static uint32_t r_effective_dedup_ttl_ms(const r_client_t *client) {
+    if (!client) {
+        return 0;
+    }
+    if (client->has_quotas
+        && client->quotas.dedup_ttl_ms_max > 0
+        && client->policy.dedup_ttl_ms > client->quotas.dedup_ttl_ms_max) {
+        return client->quotas.dedup_ttl_ms_max;
+    }
+    return client->policy.dedup_ttl_ms;
 }
 
 static int r_validate_latency_guards(
@@ -899,7 +911,7 @@ static int r_build_rate_request_packet(
 
     uint8_t pdu[R_MAX_PACKET_SIZE];
     size_t pdu_len = 0;
-    rc = r_build_pdu(R_PDU_RATE_REQUEST, body, body_len, pdu, sizeof(pdu), &pdu_len);
+    rc = r_build_rate_request_pdu(req->dedup_ttl_ms, body, body_len, pdu, sizeof(pdu), &pdu_len);
     if (rc != RCLIENT_OK) {
         return rc;
     }
@@ -1169,37 +1181,6 @@ static uint64_t r_rand_range(uint64_t max) {
     return value % (max + 1);
 }
 
-static uint64_t r_backoff_delay_ms(const r_retry_policy_t *retry, uint32_t attempt) {
-    if (!retry) {
-        return 0;
-    }
-    switch (retry->backoff.kind) {
-    case R_BACKOFF_NONE:
-        return 0;
-    case R_BACKOFF_FIXED:
-        return retry->backoff.delay_ms;
-    case R_BACKOFF_EXPONENTIAL: {
-        uint64_t base = retry->backoff.base_delay_ms;
-        uint64_t max = retry->backoff.max_delay_ms;
-        uint64_t jitter = retry->backoff.jitter_ms;
-        uint32_t exp = attempt > 0 ? (attempt - 1) : 0;
-        if (exp > 62) {
-            exp = 62;
-        }
-        uint64_t delay = base << exp;
-        if (max > 0 && delay > max) {
-            delay = max;
-        }
-        if (jitter > 0) {
-            delay += r_rand_range(jitter);
-        }
-        return delay;
-    }
-    default:
-        return 0;
-    }
-}
-
 static void r_request_reset_attempt_state(r_client_req_t *req) {
     if (!req) {
         return;
@@ -1236,8 +1217,29 @@ static int r_request_start_attempt(r_client_t *client, r_client_req_t *req) {
     if (req->total_deadline_ms > 0 && req->attempt_deadline_ms > req->total_deadline_ms) {
         req->attempt_deadline_ms = req->total_deadline_ms;
     }
-    req->pending_retry = false;
-    req->retry_at_ms = 0;
+    return RCLIENT_OK;
+}
+
+static void r_request_complete(r_client_t *client, r_client_req_t *req, int status, r_candidate_t *selected);
+
+static int r_request_retry_now(r_client_t *client, r_client_req_t *req, uint64_t now_ms) {
+    if (!client || !req) {
+        return RCLIENT_ERR_CONFIG;
+    }
+    if (now_ms >= req->dedup_deadline_ms) {
+        r_request_complete(client, req, RCLIENT_ERR_TIMEOUT, NULL);
+        return RCLIENT_OK;
+    }
+    if (req->total_deadline_ms > 0 && now_ms >= req->total_deadline_ms) {
+        r_request_complete(client, req, RCLIENT_ERR_TIMEOUT, NULL);
+        return RCLIENT_OK;
+    }
+
+    req->attempt++;
+    int rc = r_request_start_attempt(client, req);
+    if (rc != RCLIENT_OK) {
+        r_request_complete(client, req, rc, NULL);
+    }
     return RCLIENT_OK;
 }
 
@@ -1476,6 +1478,12 @@ static int r_client_check_rate_limit_async_impl(
 
     r_generate_request_id(req->request_id);
     req->start_ms = r_now_ms(client);
+    req->dedup_ttl_ms = r_effective_dedup_ttl_ms(client);
+    if (req->dedup_ttl_ms == 0u) {
+        r_request_free(req);
+        return RCLIENT_ERR_CONFIG;
+    }
+    req->dedup_deadline_ms = req->start_ms + (uint64_t)req->dedup_ttl_ms;
     req->attempt = 0;
     req->total_attempts = client->policy.retry.retry_attempts + 1;
     if (client->policy.retry.total_timeout_ms > 0) {
@@ -1733,10 +1741,6 @@ int r_client_on_datagram(
     if (!req) {
         return RCLIENT_OK;
     }
-    if (req->pending_retry) {
-        return RCLIENT_OK;
-    }
-
     uint64_t server_id = tenant.key_id;
     if (!r_allowed_server_id(req, server_id)) {
         uint64_t now_ms = r_now_ms(client);
@@ -1903,10 +1907,6 @@ int r_client_request_deadline_ms(
     if (!req || !out_deadline_ms) {
         return RCLIENT_ERR_CONFIG;
     }
-    if (req->pending_retry) {
-        *out_deadline_ms = req->retry_at_ms;
-        return RCLIENT_OK;
-    }
     *out_deadline_ms = req->attempt_deadline_ms;
     return RCLIENT_OK;
 }
@@ -1919,15 +1919,6 @@ int r_client_on_timeout(
     if (!client || !req) {
         return RCLIENT_ERR_CONFIG;
     }
-    if (req->pending_retry && now_ms >= req->retry_at_ms) {
-        req->attempt++;
-        int rc = r_request_start_attempt(client, req);
-        if (rc != RCLIENT_OK) {
-            r_request_complete(client, req, rc, NULL);
-        }
-        return RCLIENT_OK;
-    }
-
     if (now_ms < req->attempt_deadline_ms) {
         return RCLIENT_OK;
     }
@@ -1951,18 +1942,10 @@ int r_client_on_timeout(
             if (selected && selected->has) {
                 if (inconsistent && client->policy.retry.retry_on == R_RETRY_INCONSISTENT
                     && req->attempt + 1 < req->total_attempts) {
-                    uint64_t delay = r_backoff_delay_ms(&client->policy.retry, req->attempt + 1);
                     if (client->policy.retry.refresh_dns_on_retry || client->policy.dns_resync.on == R_DNS_ON_RETRY) {
                         (void)r_dns_maybe_refresh(client, true);
                     }
-                    uint64_t retry_at = now_ms + delay;
-                    if (req->total_deadline_ms > 0 && retry_at > req->total_deadline_ms) {
-                        r_request_complete(client, req, RCLIENT_ERR_TIMEOUT, NULL);
-                        return RCLIENT_OK;
-                    }
-                    req->pending_retry = true;
-                    req->retry_at_ms = retry_at;
-                    return RCLIENT_OK;
+                    return r_request_retry_now(client, req, now_ms);
                 }
                 r_request_complete(client, req, RCLIENT_OK, selected);
                 return RCLIENT_OK;
@@ -1994,15 +1977,7 @@ int r_client_on_timeout(
         if (client->policy.retry.refresh_dns_on_retry || client->policy.dns_resync.on == R_DNS_ON_RETRY) {
             (void)r_dns_maybe_refresh(client, true);
         }
-        uint64_t delay = r_backoff_delay_ms(&client->policy.retry, req->attempt + 1);
-        uint64_t retry_at = now_ms + delay;
-        if (req->total_deadline_ms > 0 && retry_at > req->total_deadline_ms) {
-            r_request_complete(client, req, RCLIENT_ERR_TIMEOUT, NULL);
-            return RCLIENT_OK;
-        }
-        req->pending_retry = true;
-        req->retry_at_ms = retry_at;
-        return RCLIENT_OK;
+        return r_request_retry_now(client, req, now_ms);
     }
 
     r_request_complete(client, req, RCLIENT_ERR_TIMEOUT, NULL);

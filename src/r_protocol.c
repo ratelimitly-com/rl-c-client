@@ -355,6 +355,29 @@ int r_build_pdu(
     return RCLIENT_OK;
 }
 
+int r_build_rate_request_pdu(
+    uint32_t dedup_ttl_ms,
+    const uint8_t *body,
+    size_t body_len,
+    uint8_t *out,
+    size_t out_cap,
+    size_t *out_len
+) {
+    if (!out || !out_len || !body) {
+        return RCLIENT_ERR_PROTOCOL;
+    }
+    size_t pdu_size = R_PDU_HEADER_LEN + body_len;
+    if (pdu_size > 0xffffu || pdu_size > out_cap) {
+        return RCLIENT_ERR_PROTOCOL;
+    }
+    r_write_le16(out, R_PDU_RATE_REQUEST);
+    r_write_le16(out + 2, (uint16_t)pdu_size);
+    r_write_le32(out + 4, dedup_ttl_ms);
+    memcpy(out + R_PDU_HEADER_LEN, body, body_len);
+    *out_len = pdu_size;
+    return RCLIENT_OK;
+}
+
 int r_parse_rate_response_pdu(
     const uint8_t *pdu,
     size_t pdu_len,
@@ -437,4 +460,3 @@ int r_parse_rate_response_pdu(
     }
     return RCLIENT_OK;
 }
-

@@ -116,6 +116,15 @@ int r_build_latency_report_body(
     size_t *out_len
 );
 
+int r_build_rate_request_pdu(
+    uint32_t dedup_ttl_ms,
+    const uint8_t *body,
+    size_t body_len,
+    uint8_t *out,
+    size_t out_cap,
+    size_t *out_len
+);
+
 int r_build_pdu(
     uint16_t pdu_type,
     const uint8_t *body,

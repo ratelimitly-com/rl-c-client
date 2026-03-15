@@ -345,7 +345,7 @@ int r_decode_api_key_bech32_with_quotas(
     size_t secret_len = 0;
 
     if (auth_type == R_AUTH_NONE) {
-        if (payload_len != 24u) {
+        if (payload_len != 28u) {
             free(payload);
             free(data);
             free(s);
@@ -354,7 +354,7 @@ int r_decode_api_key_bech32_with_quotas(
         key_id = r_read_le64_local(payload);
         secret_len = 0;
     } else {
-        if (payload_len != 56u) {
+        if (payload_len != 60u) {
             free(payload);
             free(data);
             free(s);
@@ -382,6 +382,7 @@ int r_decode_api_key_bech32_with_quotas(
         out_quotas->latency_services_max = r_read_le32_local(payload + quota_offset + 4u);
         out_quotas->metrics_labels_max = r_read_le32_local(payload + quota_offset + 8u);
         out_quotas->latency_buffer_size_max = r_read_le32_local(payload + quota_offset + 12u);
+        out_quotas->dedup_ttl_ms_max = r_read_le32_local(payload + quota_offset + 16u);
     }
 
     free(payload);
