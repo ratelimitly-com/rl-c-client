@@ -46,7 +46,8 @@ Startup flow:
 5. For each SRV target returned, it resolves A/AAAA records with
    `dns_query_addrs()`.
 6. It also performs a direct A/AAAA lookup for `<tenant_name>` itself and saves
-   that as a fallback address entry.
+   that as a legacy fallback address entry in the perf client cache. This is
+   not the intended normative discovery contract for Ratelimitly clients.
 7. The resolver context is closed after the cache is populated.
 8. Each worker receives a pointer to the shared immutable cache through
    `perf_config.dns_cache`.
@@ -62,8 +63,8 @@ Important nuance:
 
 - `perf_dns_cache_init()` ignores SRV lookup failure and direct address lookup
   failure as long as the cache machinery itself initializes correctly. That
-  means startup can still succeed with an empty cache; resolution failure is
-  then surfaced later through the resolver callbacks.
+  means this perf-client startup path can still succeed with an empty cache;
+  resolution failure is then surfaced later through the resolver callbacks.
 
 Net effect:
 

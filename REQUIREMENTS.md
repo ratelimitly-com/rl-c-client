@@ -37,7 +37,7 @@
 
 ### 3.4 Discovery and HA
 - DNS discovery via **SRV lookup** `_ratelimitly._udp.<tenant_dns_name>`.
-- Fallback to **A/AAAA records** for `<tenant_dns_name>` on port 8080.
+- Resolve **A/AAAA records** for the SRV target hostnames returned by that lookup.
 - Only SRV discovery is supported (no static server list).
 - Requests may be sent to multiple discovered servers with the same `unique_id`.
 - **Commit safety**: for mutating operations, client MUST ensure exactly one logical commit authority (single commit target, or strongly consistent shared token state with one effective commit).
@@ -101,7 +101,7 @@
   - None/Cookie/AES auth
   - Rate request/response parsing
   - Latency report generation
-  - DNS discovery and fallback
+  - DNS discovery and SRV-target address resolution
   - Retry/timeout behavior
 - Tests should be runnable via Makefile target (e.g., `make test`).
 
@@ -115,5 +115,5 @@
 ## 10) Clarifications (resolved)
 - **Tenant management PDUs**: excluded from C client MVP.
 - **Response selection policy**: implement the full policy surface (as in Rust `request_policy.rs`).
-- **DNS resolver**: mimic Rust behavior (SRV → A fallback, server_id parsing from SRV target) but keep resolver pluggable for nginx or other hosts.
+- **DNS resolver**: mimic Rust behavior (SRV lookup, server_id parsing from SRV target, then A/AAAA resolution for those SRV targets) while keeping the resolver pluggable for nginx or other hosts.
 - **Metrics label**: no extra constraints beyond UTF-8 and length prefix per spec.

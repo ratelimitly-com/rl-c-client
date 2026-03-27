@@ -7,7 +7,7 @@ This document defines the event-loop friendly I/O abstraction for the C r-client
 - **Non-blocking**. The client never blocks; it only reacts to events.
 - **Push-based receive**. The host delivers UDP datagrams to the client.
 - **Host-scheduled timers**. The host controls timers; the client exposes deadlines.
-- **Pluggable DNS**. SRV/A lookups are delegated to a resolver interface.
+- **Pluggable DNS**. SRV lookup and SRV-target A/AAAA resolution are delegated to a resolver interface.
 
 ## Core Event Flow
 1. Host creates `r_client_t` with `r_io_ops` and `r_resolver_ops`.
@@ -51,7 +51,7 @@ This matches nginx's per-request timer model and works with other reactors.
 ## DNS Resolver Abstraction
 The client requires SRV and A/AAAA resolution matching Rust behavior:
 - `_ratelimitly._udp.<tenant>` SRV
-- If SRV fails, fallback to A/AAAA on `<tenant>` with port 8080
+- A/AAAA resolution for each SRV target hostname returned by that SRV lookup
 
 DNS is delegated to a resolver interface so nginx can plug in its own resolver.
 Synchronous resolvers may call the callback inline.
