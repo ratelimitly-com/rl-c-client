@@ -2,4 +2,5 @@
 *.a
 *.so
 /tests/test_protocol
+/tests/test_client_quota
 /bin/perf_client
