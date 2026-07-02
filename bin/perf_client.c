@@ -18,7 +18,6 @@
 #include <arpa/nameser.h>
 
 #include "../include/r_client.h"
-#include "../src/r_crypto.h"
 
 #define PERF_MAX_PACKET 1400
 
@@ -121,21 +120,12 @@ static int perf_parse_auth_bech32(const char *auth_bech32, r_auth_type_t *out_ty
     if (!auth_bech32 || !out_type || !out_tenant_id) {
         return -1;
     }
-    uint8_t secret[64];
-    size_t secret_len = 0;
-    r_auth_type_t t = R_AUTH_NONE;
-    uint64_t key_id = 0;
-    if (r_decode_api_key_bech32(auth_bech32, &t, &key_id, secret, sizeof(secret), &secret_len) != 0) {
+    r_auth_key_info_t info;
+    if (r_client_parse_auth_key(auth_bech32, &info) != RCLIENT_OK) {
         return -1;
     }
-    if ((t == R_AUTH_COOKIE || t == R_AUTH_AES_GCM) && secret_len != 32u) {
-        return -1;
-    }
-    if (t == R_AUTH_NONE && secret_len != 0u) {
-        return -1;
-    }
-    *out_type = t;
-    *out_tenant_id = key_id;
+    *out_type = info.type;
+    *out_tenant_id = info.key_id;
     return 0;
 }
 

@@ -49,9 +49,10 @@ librclient.so: $(LIB_OBJS)
 src/%.o: src/%.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -fPIC -c $< -o $@
 
-test: tests/test_protocol tests/test_client_quota
+test: tests/test_protocol tests/test_client_quota tests/test_public_api
 	./tests/test_protocol
 	./tests/test_client_quota
+	./tests/test_public_api
 
 tests/test_protocol: tests/test_protocol.c src/r_protocol.o
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ -o $@
@@ -59,5 +60,8 @@ tests/test_protocol: tests/test_protocol.c src/r_protocol.o
 tests/test_client_quota: tests/test_client_quota.c librclient.a
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $^ -o $@ -lcrypto -lresolv -pthread
 
+tests/test_public_api: tests/test_public_api.c librclient.a
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $^ -o $@ -lcrypto -lresolv -pthread
+
 clean:
-	rm -f $(LIB_OBJS) librclient.a librclient.so tests/test_protocol tests/test_client_quota $(PERF_BIN)
+	rm -f $(LIB_OBJS) librclient.a librclient.so tests/test_protocol tests/test_client_quota tests/test_public_api $(PERF_BIN)
