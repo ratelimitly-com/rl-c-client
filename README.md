@@ -175,5 +175,4 @@ Retry-related flags:
 
 ## Repository Status
 
-This repository is being prepared for public release. Publication is blocked
-until the project license is confirmed; see [LICENSE_PENDING.md](LICENSE_PENDING.md).
+This repository is licensed under the MIT License; see [LICENSE](LICENSE).
