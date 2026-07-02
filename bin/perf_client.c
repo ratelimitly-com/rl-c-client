@@ -93,8 +93,7 @@ static const char *perf_auth_label(r_auth_type_t auth_type) {
     switch (auth_type) {
         case R_AUTH_COOKIE: return "Cookie";
         case R_AUTH_AES_GCM: return "AES";
-        case R_AUTH_NONE:
-        default: return "None";
+        default: return "Unknown";
     }
 }
 
@@ -997,11 +996,10 @@ static bool perf_parse_retry_resend(const char *value, r_resend_policy_t *out) {
 static perf_config_t perf_config_from_args(int argc, char **argv) {
     perf_config_t cfg;
     memset(&cfg, 0, sizeof(cfg));
-    const char *default_auth = "rl-none1qyqqqqqqqqqqqqqqqyqqqpqqqqqpqqqqgqqqqqqr3g0pd";
     cfg.srv_domain = "rl.glar.com";
-    cfg.auth_bech32 = default_auth;
-    cfg.auth_type = R_AUTH_NONE;
-    cfg.tenant_id = 1;
+    cfg.auth_bech32 = NULL;
+    cfg.auth_type = (r_auth_type_t)0;
+    cfg.tenant_id = 0;
     cfg.concurrent_clients = 10;
     cfg.requests_per_client = 1000;
     cfg.has_duration = false;
@@ -1041,8 +1039,12 @@ static perf_config_t perf_config_from_args(int argc, char **argv) {
     if (auth) {
         cfg.auth_bech32 = auth;
     }
+    if (!cfg.auth_bech32) {
+        fprintf(stderr, "Missing required --auth value (expected rl-cookie... or rl-aes...)\n");
+        exit(2);
+    }
     if (perf_parse_auth_bech32(cfg.auth_bech32, &cfg.auth_type, &cfg.tenant_id) != 0) {
-        fprintf(stderr, "Invalid --auth value '%s' (expected rl-none... / rl-cookie... / rl-aes...)\n",
+        fprintf(stderr, "Invalid --auth value '%s' (expected rl-cookie... or rl-aes...)\n",
                 cfg.auth_bech32 ? cfg.auth_bech32 : "");
         exit(2);
     }
@@ -1097,7 +1099,7 @@ static void perf_print_help(void) {
     printf("  --clients=<n>           Concurrent clients (default: 10)\n");
     printf("  --requests=<n>          Requests per client (default: 1000)\n");
     printf("  --duration=<secs>       Run for duration instead of request count\n");
-    printf("  --auth=<bech32>         Tenant auth Bech32 key (rl-none... / rl-cookie... / rl-aes...)\n");
+    printf("  --auth=<bech32>         Tenant auth Bech32 key (rl-cookie... or rl-aes...)\n");
     printf("                         Tenant ID is derived from the embedded key_id\n");
     printf("  --bucket-prefix=<name>  Bucket name prefix (default: perf_bucket)\n");
     printf("  --attempt-timeout-ms=<n> Per-attempt UDP reply deadline (default: 500)\n");
@@ -1109,10 +1111,10 @@ static void perf_print_help(void) {
     printf("  --ignore-steering       Ignore steering_feedback from server\n");
     printf("  --debug-steering        Show steering_feedback values\n\n");
     printf("Examples:\n");
-    printf("  perf_client --clients=50 --requests=10000\n");
+    printf("  perf_client --clients=50 --requests=10000 --auth=rl-aes1...\n");
     printf("  perf_client --duration=60 --auth=rl-aes1...\n");
-    printf("  perf_client --srv=rl1.glar.com --duration=30 --clients=50\n");
-    printf("  perf_client --attempt-timeout-ms=750 --retry-attempts=2 --retry-on=timeout\n");
+    printf("  perf_client --srv=rl1.glar.com --duration=30 --clients=50 --auth=rl-aes1...\n");
+    printf("  perf_client --attempt-timeout-ms=750 --retry-attempts=2 --retry-on=timeout --auth=rl-aes1...\n");
 }
 
 static void *perf_progress_thread(void *arg) {

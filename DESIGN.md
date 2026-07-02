@@ -31,7 +31,6 @@ packet helpers remain private.
 
 Tenant keys are Bech32 credentials:
 
-- `rl-none...`
 - `rl-cookie...`
 - `rl-aes...`
 

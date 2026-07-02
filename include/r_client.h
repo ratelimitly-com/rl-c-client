@@ -29,14 +29,13 @@ typedef enum r_client_error {
 
 // Auth configuration.
 typedef enum r_auth_type {
-    R_AUTH_NONE = 0,
     R_AUTH_COOKIE = 1,
     R_AUTH_AES_GCM = 2,
 } r_auth_type_t;
 
 typedef struct r_auth_config {
     r_auth_type_t type;
-    const char *secret; // Bech32 auth key string: rl-none... / rl-cookie... / rl-aes...
+    const char *secret; // Bech32 auth key string: rl-cookie... / rl-aes...
     size_t secret_len; // 0 means null-terminated
 } r_auth_config_t;
 

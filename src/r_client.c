@@ -932,16 +932,7 @@ static int r_build_rate_request_packet(
     r_tenant_header_write(&tenant, out, R_TENANT_TLV_LEN);
     pos += R_TENANT_TLV_LEN;
 
-    if (client->config.tenant.auth.type == R_AUTH_NONE) {
-        if (pos + 4 + pdu_len > out_cap) {
-            return RCLIENT_ERR_PROTOCOL;
-        }
-        r_write_le16(out + pos, R_TLV_AUTH_NONE);
-        r_write_le16(out + pos + 2, 4);
-        pos += 4;
-        memcpy(out + pos, pdu, pdu_len);
-        pos += pdu_len;
-    } else if (client->config.tenant.auth.type == R_AUTH_COOKIE) {
+    if (client->config.tenant.auth.type == R_AUTH_COOKIE) {
         if (!client->has_cookie) {
             return RCLIENT_ERR_AUTH;
         }
@@ -979,7 +970,7 @@ static int r_build_rate_request_packet(
         memcpy(out + pos, cipher, cipher_len);
         pos += cipher_len;
     } else {
-        return RCLIENT_ERR_AUTH;
+        return RCLIENT_ERR_CONFIG;
     }
 
     if (pos > R_MAX_PACKET_SIZE) {
@@ -1028,24 +1019,18 @@ static int r_extract_pdu_data(
         return rc;
     }
 
-    uint16_t expected_type = R_TLV_AUTH_NONE;
+    uint16_t expected_type = 0;
     if (client->config.tenant.auth.type == R_AUTH_COOKIE) {
         expected_type = R_TLV_AUTH_COOKIE;
     } else if (client->config.tenant.auth.type == R_AUTH_AES_GCM) {
         expected_type = R_TLV_AUTH_AES;
+    } else {
+        return RCLIENT_ERR_CONFIG;
     }
     if (auth_type != expected_type) {
         return RCLIENT_ERR_AUTH;
     }
 
-    if (auth_type == R_TLV_AUTH_NONE) {
-        if (auth_size != 4) {
-            return RCLIENT_ERR_PROTOCOL;
-        }
-        *out_pdu = buf + pdu_pos;
-        *out_pdu_len = len - pdu_pos;
-        return RCLIENT_OK;
-    }
     if (auth_type == R_TLV_AUTH_COOKIE) {
         if (auth_size != 36 || auth_body_len != 32) {
             return RCLIENT_ERR_PROTOCOL;
@@ -1284,7 +1269,12 @@ int r_client_create(
     }
     client->config.tenant.dns_name = client->dns_name;
 
-    if (config->tenant.auth.type != R_AUTH_NONE && !config->tenant.auth.secret) {
+    if (config->tenant.auth.type != R_AUTH_COOKIE &&
+        config->tenant.auth.type != R_AUTH_AES_GCM) {
+        r_client_destroy(client);
+        return RCLIENT_ERR_CONFIG;
+    }
+    if (!config->tenant.auth.secret) {
         r_client_destroy(client);
         return RCLIENT_ERR_CONFIG;
     }
@@ -1308,7 +1298,7 @@ int r_client_create(
     if (client->auth_secret) {
         uint8_t decoded_secret[64];
         size_t decoded_secret_len = 0;
-        r_auth_type_t decoded_type = R_AUTH_NONE;
+        r_auth_type_t decoded_type = (r_auth_type_t)0;
         uint64_t decoded_key_id = 0;
         if (r_decode_api_key_bech32_with_quotas(
                 client->auth_secret,
@@ -1344,7 +1334,7 @@ int r_client_create(
             }
             memcpy(client->aes_key, decoded_secret, 32u);
             client->has_aes_key = true;
-        } else if (decoded_type == R_AUTH_NONE && decoded_secret_len != 0u) {
+        } else {
             r_client_destroy(client);
             return RCLIENT_ERR_CONFIG;
         }
@@ -1637,13 +1627,7 @@ int r_client_report_latency(
     r_tenant_header_write(&tenant, packet, R_TENANT_TLV_LEN);
     pos += R_TENANT_TLV_LEN;
 
-    if (client->config.tenant.auth.type == R_AUTH_NONE) {
-        r_write_le16(packet + pos, R_TLV_AUTH_NONE);
-        r_write_le16(packet + pos + 2, 4);
-        pos += 4;
-        memcpy(packet + pos, pdu, pdu_len);
-        pos += pdu_len;
-    } else if (client->config.tenant.auth.type == R_AUTH_COOKIE) {
+    if (client->config.tenant.auth.type == R_AUTH_COOKIE) {
         if (!client->has_cookie) {
             if (owns_filtered_reports) {
                 free(filtered_reports);
@@ -1687,7 +1671,7 @@ int r_client_report_latency(
         if (owns_filtered_reports) {
             free(filtered_reports);
         }
-        return RCLIENT_ERR_AUTH;
+        return RCLIENT_ERR_CONFIG;
     }
 
     if (pos > R_MAX_PACKET_SIZE) {
@@ -2008,7 +1992,7 @@ int r_client_parse_auth_key(const char *encoded, r_auth_key_info_t *out_info) {
     r_bech32_quotas_t quotas;
     memset(&quotas, 0, sizeof(quotas));
 
-    r_auth_type_t type = R_AUTH_NONE;
+    r_auth_type_t type = (r_auth_type_t)0;
     uint64_t key_id = 0;
     size_t secret_len = 0;
     if (r_decode_api_key_bech32_with_quotas(
@@ -2022,10 +2006,7 @@ int r_client_parse_auth_key(const char *encoded, r_auth_key_info_t *out_info) {
         return RCLIENT_ERR_CONFIG;
     }
 
-    if ((type == R_AUTH_COOKIE || type == R_AUTH_AES_GCM) && secret_len != 32u) {
-        return RCLIENT_ERR_CONFIG;
-    }
-    if (type == R_AUTH_NONE && secret_len != 0u) {
+    if ((type != R_AUTH_COOKIE && type != R_AUTH_AES_GCM) || secret_len != 32u) {
         return RCLIENT_ERR_CONFIG;
     }
 

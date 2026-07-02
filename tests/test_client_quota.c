@@ -8,8 +8,8 @@
 #include "../include/r_client.h"
 #include "../src/r_protocol.h"
 
-static const char *SAMPLE_NONE_KEY_TENANT_1 =
-    "rl-none1qyqqqqqqqqqqqqqqqyqqqpqqqqqpqqqqgqqqqqpvqyqqqr8h9gt";
+static const char *SAMPLE_COOKIE_KEY_TENANT_2 =
+    "rl-cookie1qgqqqqqqqqqqqqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqqqqzqqqqsqqqqqsqqqyqqqqqqkqzqqqfn54mv";
 
 typedef struct test_ctx {
     uint8_t last_packet[R_MAX_PACKET_SIZE];
@@ -113,9 +113,9 @@ static r_client_t *make_client(test_ctx_t *ctx) {
     r_client_config_t config;
     memset(&config, 0, sizeof(config));
     config.tenant.dns_name = "example.local";
-    config.tenant.key_id = 1;
-    config.tenant.auth.type = R_AUTH_NONE;
-    config.tenant.auth.secret = SAMPLE_NONE_KEY_TENANT_1;
+    config.tenant.key_id = 2;
+    config.tenant.auth.type = R_AUTH_COOKIE;
+    config.tenant.auth.secret = SAMPLE_COOKIE_KEY_TENANT_2;
     config.tenant.auth.secret_len = 0;
 
     r_client_t *client = NULL;
@@ -193,7 +193,7 @@ static void test_report_latency_filters_oversized_reports(void) {
     size_t pos = 0;
     rc = r_parse_tenant_header(ctx.last_packet, ctx.last_packet_len, &tenant, &pos);
     assert(rc == RCLIENT_OK);
-    assert(tenant.key_id == 1u);
+    assert(tenant.key_id == 2u);
 
     uint16_t auth_type = 0;
     size_t auth_size = 0;
@@ -211,10 +211,12 @@ static void test_report_latency_filters_oversized_reports(void) {
         &pdu_pos
     );
     assert(rc == RCLIENT_OK);
-    assert(auth_type == R_TLV_AUTH_NONE);
-    assert(auth_size == 4u);
-    assert(auth_body_len == 0u);
-    (void)auth_body;
+    assert(auth_type == R_TLV_AUTH_COOKIE);
+    assert(auth_size == 36u);
+    assert(auth_body_len == 32u);
+    for (size_t i = 0; i < auth_body_len; i++) {
+        assert(auth_body[i] == 2u);
+    }
     assert(pdu_pos + 10 <= ctx.last_packet_len);
 
     const uint8_t *pdu = ctx.last_packet + pdu_pos;

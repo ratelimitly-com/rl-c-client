@@ -16,7 +16,7 @@ request API to avoid per-request copies.
 
 - Async rate-limit checks over UDP.
 - Fire-and-forget latency reports for load-shedding feedback.
-- Tenant credentials in Bech32 form: `rl-none...`, `rl-cookie...`, `rl-aes...`.
+- Tenant credentials in Bech32 form: `rl-cookie...` or `rl-aes...`.
 - Cookie and AES-256-GCM authentication using OpenSSL libcrypto.
 - SRV discovery for `_ratelimitly._udp.<tenant-dns-name>`, followed by A/AAAA
   resolution for returned SRV targets.
@@ -104,7 +104,6 @@ See [docs/api.md](docs/api.md) for the API contract and
 
 Ratelimitly tenant credentials are Bech32 strings:
 
-- `rl-none...`: no request authentication
 - `rl-cookie...`: 32-byte cookie secret
 - `rl-aes...`: 32-byte AES-256-GCM key
 
