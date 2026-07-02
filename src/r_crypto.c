@@ -328,9 +328,7 @@ int r_decode_api_key_bech32_with_quotas(
     }
 
     r_auth_type_t auth_type;
-    if (strcmp(s, "rl-none") == 0) {
-        auth_type = R_AUTH_NONE;
-    } else if (strcmp(s, "rl-cookie") == 0) {
+    if (strcmp(s, "rl-cookie") == 0) {
         auth_type = R_AUTH_COOKIE;
     } else if (strcmp(s, "rl-aes") == 0) {
         auth_type = R_AUTH_AES_GCM;
@@ -344,40 +342,27 @@ int r_decode_api_key_bech32_with_quotas(
     uint64_t key_id = 0;
     size_t secret_len = 0;
 
-    if (auth_type == R_AUTH_NONE) {
-        if (payload_len != 28u) {
-            free(payload);
-            free(data);
-            free(s);
-            return -1;
-        }
-        key_id = r_read_le64_local(payload);
-        secret_len = 0;
-    } else {
-        if (payload_len != 60u) {
-            free(payload);
-            free(data);
-            free(s);
-            return -1;
-        }
-        key_id = r_read_le64_local(payload);
-        secret_len = 32u;
-        if (secret_len > out_secret_cap) {
-            free(payload);
-            free(data);
-            free(s);
-            return -1;
-        }
-        if (secret_len > 0) {
-            memcpy(out_secret, payload + 8, secret_len);
-        }
+    if (payload_len != 60u) {
+        free(payload);
+        free(data);
+        free(s);
+        return -1;
     }
+    key_id = r_read_le64_local(payload);
+    secret_len = 32u;
+    if (secret_len > out_secret_cap) {
+        free(payload);
+        free(data);
+        free(s);
+        return -1;
+    }
+    memcpy(out_secret, payload + 8, secret_len);
 
     *out_type = auth_type;
     *out_key_id = key_id;
     *out_secret_len = secret_len;
     if (out_quotas) {
-        size_t quota_offset = auth_type == R_AUTH_NONE ? 8u : 40u;
+        size_t quota_offset = 40u;
         out_quotas->rate_buckets_max = r_read_le32_local(payload + quota_offset);
         out_quotas->latency_services_max = r_read_le32_local(payload + quota_offset + 4u);
         out_quotas->metrics_labels_max = r_read_le32_local(payload + quota_offset + 8u);

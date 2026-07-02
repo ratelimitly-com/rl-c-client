@@ -4,8 +4,6 @@
 
 #include "../include/r_client.h"
 
-static const char *SAMPLE_NONE_KEY_TENANT_1 =
-    "rl-none1qyqqqqqqqqqqqqqqqyqqqpqqqqqpqqqqgqqqqqpvqyqqqr8h9gt";
 static const char *SAMPLE_COOKIE_KEY_TENANT_2 =
     "rl-cookie1qgqqqqqqqqqqqqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqqqqzqqqqsqqqqqsqqqyqqqqqqkqzqqqfn54mv";
 static const char *SAMPLE_AES_KEY_TENANT_3 =
@@ -17,18 +15,6 @@ static void assert_default_quotas(const r_auth_key_info_t *info) {
     assert(info->metrics_labels_max == 4096u);
     assert(info->latency_buffer_size_max == 64u);
     assert(info->dedup_ttl_ms_max == 300u);
-}
-
-static void test_parse_none_key(void) {
-    r_auth_key_info_t info;
-    memset(&info, 0xff, sizeof(info));
-
-    int rc = r_client_parse_auth_key(SAMPLE_NONE_KEY_TENANT_1, &info);
-    assert(rc == RCLIENT_OK);
-    assert(info.type == R_AUTH_NONE);
-    assert(info.key_id == 1u);
-    assert(info.secret_len == 0u);
-    assert_default_quotas(&info);
 }
 
 static void test_parse_cookie_key(void) {
@@ -65,7 +51,6 @@ static void test_reject_invalid_key(void) {
     r_auth_key_info_t info;
     memset(&info, 0xff, sizeof(info));
     assert(r_client_parse_auth_key("rl-aes1not-valid", &info) == RCLIENT_ERR_CONFIG);
-    assert(info.type == R_AUTH_NONE);
     assert(info.key_id == 0u);
     assert(info.secret_len == 0u);
     assert(r_client_parse_auth_key(NULL, &info) == RCLIENT_ERR_CONFIG);
@@ -85,7 +70,6 @@ static void test_hash_id_known_vector(void) {
 }
 
 int main(void) {
-    test_parse_none_key();
     test_parse_cookie_key();
     test_parse_aes_key();
     test_reject_invalid_key();

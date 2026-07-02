@@ -16,7 +16,6 @@ extern "C" {
 #define R_MAX_PACKET_SIZE 1200u
 
 #define R_TLV_TENANT 0x4C52u
-#define R_TLV_AUTH_NONE 0x414Eu
 #define R_TLV_AUTH_COOKIE 0x4143u
 #define R_TLV_AUTH_AES 0x4541u
 #define R_TLV_METRICS_LABEL 0x4C4Du

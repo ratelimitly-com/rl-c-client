@@ -49,10 +49,10 @@ the duration of the call.
 
 `r_client_parse_auth_key` validates a tenant credential and returns:
 
-- `type`: one of `R_AUTH_NONE`, `R_AUTH_COOKIE`, `R_AUTH_AES_GCM`
+- `type`: one of `R_AUTH_COOKIE`, `R_AUTH_AES_GCM`
 - `key_id`: tenant identifier embedded in the key
 - `secret`: raw cookie/AES material for authenticated keys
-- `secret_len`: `0` for `rl-none`, `32` for `rl-cookie` and `rl-aes`
+- `secret_len`: `32`
 - quota fields used by the client for local input clamping/validation
 
 The raw secret is sensitive. Use it only for validation or diagnostics that do
