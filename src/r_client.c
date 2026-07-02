@@ -756,7 +756,6 @@ static void r_dns_srv_cb_fn(void *user, int status, const r_srv_record_t *record
         return;
     }
 
-    size_t pending = 0;
     uint64_t min_ttl_ms = 0;
     // Keep refresh alive while scheduling address lookups so synchronous
     // resolvers cannot finish and free it re-entrantly from r_dns_addr_cb_fn.
@@ -781,11 +780,9 @@ static void r_dns_srv_cb_fn(void *user, int status, const r_srv_record_t *record
         ctx->server_id = server_id;
         ctx->has_server_id = true;
         r_dns_req_id_t req_id = 0;
-        pending++;
         refresh->pending++;
         int rc = client->resolver.resolve_addrs(client->resolver.ctx, records[i].target, &req_id, r_dns_addr_cb_fn, ctx);
         if (rc != 0) {
-            pending--;
             if (refresh->pending > 0) {
                 refresh->pending--;
             }
@@ -1997,4 +1994,50 @@ void r_client_hash_id(const char *input, uint8_t out_id[16]) {
         return;
     }
     (void)r_hash_id_blake2s_128(input, out_id);
+}
+
+int r_client_parse_auth_key(const char *encoded, r_auth_key_info_t *out_info) {
+    if (!encoded || !out_info) {
+        return RCLIENT_ERR_CONFIG;
+    }
+    memset(out_info, 0, sizeof(*out_info));
+
+    r_auth_key_info_t info;
+    memset(&info, 0, sizeof(info));
+
+    r_bech32_quotas_t quotas;
+    memset(&quotas, 0, sizeof(quotas));
+
+    r_auth_type_t type = R_AUTH_NONE;
+    uint64_t key_id = 0;
+    size_t secret_len = 0;
+    if (r_decode_api_key_bech32_with_quotas(
+            encoded,
+            &type,
+            &key_id,
+            info.secret,
+            sizeof(info.secret),
+            &secret_len,
+            &quotas) != 0) {
+        return RCLIENT_ERR_CONFIG;
+    }
+
+    if ((type == R_AUTH_COOKIE || type == R_AUTH_AES_GCM) && secret_len != 32u) {
+        return RCLIENT_ERR_CONFIG;
+    }
+    if (type == R_AUTH_NONE && secret_len != 0u) {
+        return RCLIENT_ERR_CONFIG;
+    }
+
+    info.type = type;
+    info.key_id = key_id;
+    info.secret_len = secret_len;
+    info.rate_buckets_max = quotas.rate_buckets_max;
+    info.latency_services_max = quotas.latency_services_max;
+    info.metrics_labels_max = quotas.metrics_labels_max;
+    info.latency_buffer_size_max = quotas.latency_buffer_size_max;
+    info.dedup_ttl_ms_max = quotas.dedup_ttl_ms_max;
+
+    *out_info = info;
+    return RCLIENT_OK;
 }

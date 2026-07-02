@@ -40,6 +40,18 @@ typedef struct r_auth_config {
     size_t secret_len; // 0 means null-terminated
 } r_auth_config_t;
 
+typedef struct r_auth_key_info {
+    r_auth_type_t type;
+    uint64_t key_id;
+    uint8_t secret[32];
+    size_t secret_len;
+    uint32_t rate_buckets_max;
+    uint32_t latency_services_max;
+    uint32_t metrics_labels_max;
+    uint32_t latency_buffer_size_max;
+    uint32_t dedup_ttl_ms_max;
+} r_auth_key_info_t;
+
 typedef struct r_tenant_config {
     const char *dns_name;
     uint64_t key_id;
@@ -275,6 +287,7 @@ void r_client_cancel_request(r_client_t *client, r_client_req_t *req);
 // Helpers.
 void r_client_default_request_policy(r_request_policy_t *out_policy);
 void r_client_hash_id(const char *input, uint8_t out_id[16]);
+int r_client_parse_auth_key(const char *encoded, r_auth_key_info_t *out_info);
 
 #ifdef __cplusplus
 }

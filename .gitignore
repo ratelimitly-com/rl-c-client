@@ -1,6 +1,10 @@
 *.o
 *.a
 *.so
+.DS_Store
+compile_commands.json
+.cache/
 /tests/test_protocol
 /tests/test_client_quota
+/tests/test_public_api
 /bin/perf_client
