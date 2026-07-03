@@ -118,19 +118,27 @@ struct r_client {
 typedef struct r_dns_refresh {
     r_client_t *client;
     bool fallback;
+    bool detached;
     size_t pending;
+    size_t scheduling;
+    struct r_dns_lookup_ctx *lookups;
     r_server_endpoint_t *endpoints;
     size_t endpoint_count;
     size_t endpoint_cap;
     uint64_t min_ttl_ms;
 } r_dns_refresh_t;
 
-typedef struct r_dns_target_ctx {
+typedef struct r_dns_lookup_ctx {
     r_dns_refresh_t *refresh;
+    r_dns_req_id_t req_id;
+    bool has_req_id;
+    bool completed;
+    bool in_resolver_call;
     uint16_t port;
     uint64_t server_id;
     bool has_server_id;
-} r_dns_target_ctx_t;
+    struct r_dns_lookup_ctx *next;
+} r_dns_lookup_ctx_t;
 
 #define R_SERVER_ID_EPOCH_S_2025 1735689600ULL
 
@@ -628,19 +636,57 @@ static int r_dns_refresh_add_endpoint(r_dns_refresh_t *refresh, const r_addr_t *
     return 0;
 }
 
+static void r_dns_lookup_free_all(r_dns_lookup_ctx_t *lookup) {
+    while (lookup) {
+        r_dns_lookup_ctx_t *next = lookup->next;
+        free(lookup);
+        lookup = next;
+    }
+}
+
+static void r_dns_lookup_link(r_dns_refresh_t *refresh, r_dns_lookup_ctx_t *lookup) {
+    if (!refresh || !lookup) {
+        return;
+    }
+    lookup->next = refresh->lookups;
+    refresh->lookups = lookup;
+}
+
+static void r_dns_lookup_unlink(r_dns_lookup_ctx_t *lookup) {
+    if (!lookup || !lookup->refresh) {
+        return;
+    }
+    r_dns_lookup_ctx_t **cur = &lookup->refresh->lookups;
+    while (*cur) {
+        if (*cur == lookup) {
+            *cur = lookup->next;
+            lookup->next = NULL;
+            return;
+        }
+        cur = &(*cur)->next;
+    }
+}
+
 static void r_dns_refresh_free(r_dns_refresh_t *refresh) {
     if (!refresh) {
         return;
     }
+    r_dns_lookup_free_all(refresh->lookups);
     free(refresh->endpoints);
     free(refresh);
 }
+
+static int r_dns_start_fallback(r_client_t *client, r_dns_refresh_t *refresh);
 
 static void r_dns_refresh_finish(r_dns_refresh_t *refresh) {
     if (!refresh) {
         return;
     }
     r_client_t *client = refresh->client;
+    if (!client || refresh->detached) {
+        r_dns_refresh_free(refresh);
+        return;
+    }
     if (refresh->endpoint_count > 0) {
         free(client->servers);
         client->servers = refresh->endpoints;
@@ -653,35 +699,181 @@ static void r_dns_refresh_finish(r_dns_refresh_t *refresh) {
         refresh->endpoint_cap = 0;
     }
     client->dns_refresh_inflight = false;
-    client->dns_refresh = NULL;
+    if (client->dns_refresh == refresh) {
+        client->dns_refresh = NULL;
+    }
     r_dns_refresh_free(refresh);
+}
+
+static void r_dns_refresh_maybe_complete(r_dns_refresh_t *refresh) {
+    if (!refresh || refresh->pending != 0 || refresh->scheduling != 0) {
+        return;
+    }
+    if (refresh->detached || !refresh->client) {
+        r_dns_refresh_free(refresh);
+        return;
+    }
+    if (refresh->endpoint_count == 0 && !refresh->fallback) {
+        if (r_dns_start_fallback(refresh->client, refresh) == RCLIENT_OK) {
+            return;
+        }
+    }
+    r_dns_refresh_finish(refresh);
+}
+
+static void r_dns_lookup_finish(r_dns_lookup_ctx_t *lookup) {
+    if (!lookup) {
+        return;
+    }
+    r_dns_refresh_t *refresh = lookup->refresh;
+    lookup->completed = true;
+    if (refresh && refresh->pending > 0) {
+        refresh->pending--;
+    }
+    if (!lookup->in_resolver_call) {
+        r_dns_lookup_unlink(lookup);
+        lookup->refresh = NULL;
+        free(lookup);
+    }
+    r_dns_refresh_maybe_complete(refresh);
+}
+
+static void r_dns_refresh_cancel_lookups(r_dns_refresh_t *refresh) {
+    if (!refresh || !refresh->client || !refresh->client->resolver.cancel) {
+        return;
+    }
+    r_client_t *client = refresh->client;
+    for (r_dns_lookup_ctx_t *lookup = refresh->lookups; lookup; lookup = lookup->next) {
+        if (!lookup->completed && lookup->has_req_id) {
+            client->resolver.cancel(client->resolver.ctx, lookup->req_id);
+        }
+    }
+}
+
+static void r_dns_refresh_detach(r_dns_refresh_t *refresh) {
+    if (!refresh) {
+        return;
+    }
+    r_client_t *client = refresh->client;
+    r_dns_refresh_cancel_lookups(refresh);
+    if (client) {
+        if (client->dns_refresh == refresh) {
+            client->dns_refresh = NULL;
+        }
+        client->dns_refresh_inflight = false;
+    }
+    refresh->client = NULL;
+    refresh->detached = true;
+    r_dns_refresh_maybe_complete(refresh);
 }
 
 static void r_dns_addr_cb_fn(void *user, int status, const r_addr_t *addrs, size_t addr_count);
 static void r_dns_srv_cb_fn(void *user, int status, const r_srv_record_t *records, size_t record_count);
 
-static int r_dns_start_fallback(r_client_t *client, r_dns_refresh_t *refresh) {
-    if (!client || !refresh) {
+static int r_dns_schedule_addr_lookup(
+    r_client_t *client,
+    r_dns_refresh_t *refresh,
+    const char *name,
+    uint16_t port,
+    uint64_t server_id,
+    bool has_server_id
+) {
+    if (!client || !refresh || !name || refresh->detached) {
         return RCLIENT_ERR_DNS;
     }
-    r_dns_target_ctx_t *ctx = (r_dns_target_ctx_t *)calloc(1, sizeof(*ctx));
-    if (!ctx) {
+    r_dns_lookup_ctx_t *lookup = (r_dns_lookup_ctx_t *)calloc(1, sizeof(*lookup));
+    if (!lookup) {
         return RCLIENT_ERR_NOMEM;
     }
-    ctx->refresh = refresh;
-    ctx->port = 8080;
-    ctx->server_id = 0;
-    ctx->has_server_id = false;
-    refresh->fallback = true;
-    refresh->pending = 1;
+    lookup->refresh = refresh;
+    lookup->port = port;
+    lookup->server_id = server_id;
+    lookup->has_server_id = has_server_id;
+    lookup->in_resolver_call = true;
+    r_dns_lookup_link(refresh, lookup);
+    refresh->pending++;
+    refresh->scheduling++;
+
     r_dns_req_id_t req_id = 0;
-    int rc = client->resolver.resolve_addrs(client->resolver.ctx, client->dns_name, &req_id, r_dns_addr_cb_fn, ctx);
-    if (rc != 0) {
-        free(ctx);
-        refresh->pending = 0;
+    int rc = client->resolver.resolve_addrs(client->resolver.ctx, name, &req_id, r_dns_addr_cb_fn, lookup);
+    if (rc == 0 && !lookup->completed && req_id != 0) {
+        lookup->req_id = req_id;
+        lookup->has_req_id = true;
+    }
+    if (rc != 0 && !lookup->completed) {
+        lookup->completed = true;
+        if (refresh->pending > 0) {
+            refresh->pending--;
+        }
+    }
+
+    lookup->in_resolver_call = false;
+    if (rc != 0 || lookup->completed) {
+        r_dns_lookup_unlink(lookup);
+        lookup->refresh = NULL;
+        free(lookup);
+    }
+    if (refresh->scheduling > 0) {
+        refresh->scheduling--;
+    }
+    r_dns_refresh_maybe_complete(refresh);
+    return rc == 0 ? RCLIENT_OK : RCLIENT_ERR_DNS;
+}
+
+static int r_dns_start_fallback(r_client_t *client, r_dns_refresh_t *refresh) {
+    if (!client || !refresh || refresh->detached) {
         return RCLIENT_ERR_DNS;
     }
-    return RCLIENT_OK;
+    refresh->fallback = true;
+    refresh->scheduling++;
+    int rc = r_dns_schedule_addr_lookup(client, refresh, client->dns_name, 8080, 0, false);
+    if (refresh->scheduling > 0) {
+        refresh->scheduling--;
+    }
+    if (rc == RCLIENT_OK) {
+        r_dns_refresh_maybe_complete(refresh);
+    }
+    return rc;
+}
+
+static int r_dns_schedule_srv_lookup(r_client_t *client, r_dns_refresh_t *refresh, const char *name) {
+    if (!client || !refresh || !name || refresh->detached) {
+        return RCLIENT_ERR_DNS;
+    }
+    r_dns_lookup_ctx_t *lookup = (r_dns_lookup_ctx_t *)calloc(1, sizeof(*lookup));
+    if (!lookup) {
+        return RCLIENT_ERR_NOMEM;
+    }
+    lookup->refresh = refresh;
+    lookup->in_resolver_call = true;
+    r_dns_lookup_link(refresh, lookup);
+    refresh->pending++;
+    refresh->scheduling++;
+
+    r_dns_req_id_t req_id = 0;
+    int rc = client->resolver.resolve_srv(client->resolver.ctx, name, &req_id, r_dns_srv_cb_fn, lookup);
+    if (rc == 0 && !lookup->completed && req_id != 0) {
+        lookup->req_id = req_id;
+        lookup->has_req_id = true;
+    }
+    if (rc != 0 && !lookup->completed) {
+        lookup->completed = true;
+        if (refresh->pending > 0) {
+            refresh->pending--;
+        }
+    }
+
+    lookup->in_resolver_call = false;
+    if (rc != 0 || lookup->completed) {
+        r_dns_lookup_unlink(lookup);
+        lookup->refresh = NULL;
+        free(lookup);
+    }
+    if (refresh->scheduling > 0) {
+        refresh->scheduling--;
+    }
+    r_dns_refresh_maybe_complete(refresh);
+    return rc == 0 ? RCLIENT_OK : RCLIENT_ERR_DNS;
 }
 
 static int r_dns_start_refresh(r_client_t *client) {
@@ -704,12 +896,13 @@ static int r_dns_start_refresh(r_client_t *client) {
         r_dns_refresh_free(refresh);
         return RCLIENT_ERR_CONFIG;
     }
-    r_dns_req_id_t req_id = 0;
-    int rc = client->resolver.resolve_srv(client->resolver.ctx, name_buf, &req_id, r_dns_srv_cb_fn, refresh);
-    if (rc != 0) {
-        return r_dns_start_fallback(client, refresh);
+    int rc = r_dns_schedule_srv_lookup(client, refresh, name_buf);
+    if (rc != RCLIENT_OK && client->dns_refresh == refresh && refresh->pending == 0 && refresh->scheduling == 0) {
+        client->dns_refresh_inflight = false;
+        client->dns_refresh = NULL;
+        r_dns_refresh_free(refresh);
     }
-    return RCLIENT_OK;
+    return rc;
 }
 
 static int r_dns_maybe_refresh(r_client_t *client, bool force) {
@@ -744,95 +937,57 @@ static int r_dns_maybe_refresh(r_client_t *client, bool force) {
 }
 
 static void r_dns_srv_cb_fn(void *user, int status, const r_srv_record_t *records, size_t record_count) {
-    r_dns_refresh_t *refresh = (r_dns_refresh_t *)user;
-    if (!refresh) {
+    r_dns_lookup_ctx_t *lookup = (r_dns_lookup_ctx_t *)user;
+    if (!lookup || !lookup->refresh) {
+        return;
+    }
+    r_dns_refresh_t *refresh = lookup->refresh;
+    if (refresh->detached || !refresh->client) {
+        r_dns_lookup_finish(lookup);
         return;
     }
     r_client_t *client = refresh->client;
-    if (status != 0 || !records || record_count == 0) {
-        if (r_dns_start_fallback(client, refresh) != RCLIENT_OK) {
-            r_dns_refresh_finish(refresh);
-        }
-        return;
-    }
-
-    uint64_t min_ttl_ms = 0;
-    // Keep refresh alive while scheduling address lookups so synchronous
-    // resolvers cannot finish and free it re-entrantly from r_dns_addr_cb_fn.
-    refresh->pending = 1;
-    for (size_t i = 0; i < record_count; i++) {
-        bool ok = false;
-        uint64_t server_id = r_parse_server_id_from_target(records[i].target, &ok);
-        if (!ok) {
-            continue;
-        }
-        if (records[i].ttl_ms > 0) {
-            if (min_ttl_ms == 0 || records[i].ttl_ms < min_ttl_ms) {
-                min_ttl_ms = records[i].ttl_ms;
+    if (status == 0 && records && record_count > 0) {
+        uint64_t min_ttl_ms = 0;
+        for (size_t i = 0; i < record_count; i++) {
+            bool ok = false;
+            uint64_t server_id = r_parse_server_id_from_target(records[i].target, &ok);
+            if (!ok) {
+                continue;
             }
-        }
-        r_dns_target_ctx_t *ctx = (r_dns_target_ctx_t *)calloc(1, sizeof(*ctx));
-        if (!ctx) {
-            continue;
-        }
-        ctx->refresh = refresh;
-        ctx->port = records[i].port;
-        ctx->server_id = server_id;
-        ctx->has_server_id = true;
-        r_dns_req_id_t req_id = 0;
-        refresh->pending++;
-        int rc = client->resolver.resolve_addrs(client->resolver.ctx, records[i].target, &req_id, r_dns_addr_cb_fn, ctx);
-        if (rc != 0) {
-            if (refresh->pending > 0) {
-                refresh->pending--;
+            if (records[i].ttl_ms > 0) {
+                if (min_ttl_ms == 0 || records[i].ttl_ms < min_ttl_ms) {
+                    min_ttl_ms = records[i].ttl_ms;
+                }
             }
-            free(ctx);
+            (void)r_dns_schedule_addr_lookup(
+                client,
+                refresh,
+                records[i].target,
+                records[i].port,
+                server_id,
+                true
+            );
         }
+        refresh->min_ttl_ms = min_ttl_ms;
     }
-
-    refresh->min_ttl_ms = min_ttl_ms;
-    if (refresh->pending > 0) {
-        refresh->pending--;
-    }
-
-    if (refresh->pending == 0) {
-        if (r_dns_start_fallback(client, refresh) != RCLIENT_OK) {
-            r_dns_refresh_finish(refresh);
-        }
-        return;
-    }
+    r_dns_lookup_finish(lookup);
 }
 
 static void r_dns_addr_cb_fn(void *user, int status, const r_addr_t *addrs, size_t addr_count) {
-    r_dns_target_ctx_t *ctx = (r_dns_target_ctx_t *)user;
-    if (!ctx || !ctx->refresh) {
-        free(ctx);
+    r_dns_lookup_ctx_t *lookup = (r_dns_lookup_ctx_t *)user;
+    if (!lookup || !lookup->refresh) {
         return;
     }
-    r_dns_refresh_t *refresh = ctx->refresh;
-    if (status == 0 && addrs && addr_count > 0) {
+    r_dns_refresh_t *refresh = lookup->refresh;
+    if (!refresh->detached && refresh->client && status == 0 && addrs && addr_count > 0) {
         for (size_t i = 0; i < addr_count; i++) {
             r_addr_t addr = addrs[i];
-            r_addr_set_port(&addr, ctx->port);
-            r_dns_refresh_add_endpoint(refresh, &addr, ctx->server_id, ctx->has_server_id);
+            r_addr_set_port(&addr, lookup->port);
+            r_dns_refresh_add_endpoint(refresh, &addr, lookup->server_id, lookup->has_server_id);
         }
     }
-
-    if (refresh->pending > 0) {
-        refresh->pending--;
-    }
-
-    if (refresh->pending == 0) {
-        if (refresh->endpoint_count == 0 && !refresh->fallback) {
-            if (r_dns_start_fallback(refresh->client, refresh) != RCLIENT_OK) {
-                r_dns_refresh_finish(refresh);
-            }
-            free(ctx);
-            return;
-        }
-        r_dns_refresh_finish(refresh);
-    }
-    free(ctx);
+    r_dns_lookup_finish(lookup);
 }
 
 static int r_request_snapshot_targets(r_client_t *client, r_client_req_t *req) {
@@ -1369,8 +1524,7 @@ void r_client_destroy(r_client_t *client) {
     free(client->servers);
     free(client->stats.items);
     if (client->dns_refresh) {
-        r_dns_refresh_free(client->dns_refresh);
-        client->dns_refresh = NULL;
+        r_dns_refresh_detach(client->dns_refresh);
     }
     free(client->dns_name);
     free(client->auth_secret);
@@ -1581,6 +1735,12 @@ int r_client_report_latency(
             free(filtered_reports);
         }
         return RCLIENT_OK;
+    }
+    if (!client->io.udp_send) {
+        if (owns_filtered_reports) {
+            free(filtered_reports);
+        }
+        return RCLIENT_ERR_IO;
     }
 
     (void)r_dns_maybe_refresh(client, false);

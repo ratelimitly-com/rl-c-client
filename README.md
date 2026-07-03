@@ -107,6 +107,12 @@ Ratelimitly tenant credentials are Bech32 strings:
 - `rl-cookie...`: 32-byte cookie secret
 - `rl-aes...`: 32-byte AES-256-GCM key
 
+Use `rl-aes...` credentials for deployments that require packet
+confidentiality and integrity over an untrusted network. Cookie mode is a
+private-network mode: the cookie is sent on the wire and does not authenticate
+the packet contents, so it must be used only where on-path modification and
+capture are outside the deployment threat model.
+
 Each tenant key also carries tenant quota values. Use
 `r_client_parse_auth_key` to validate a key before constructing config:
 

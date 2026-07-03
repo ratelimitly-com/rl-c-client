@@ -20,6 +20,10 @@ The host application must provide:
 
 All callbacks may be synchronous or asynchronous. Resolver callback buffers are
 copied by the client during the callback and do not need to live afterward.
+Asynchronous resolver implementations should set `out_req_id` to a nonzero
+request ID before returning so the client can call `cancel` during teardown.
+Late resolver callbacks after cancellation are allowed; the client will ignore
+them.
 
 ## Request Flow
 
