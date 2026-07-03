@@ -141,6 +141,25 @@ static void test_cancel(void *ctx, r_dns_req_id_t req_id) {
     test->cancelled_ids[test->cancel_count++] = req_id;
 }
 
+static void test_cancel_calls_addr_cb(void *ctx, r_dns_req_id_t req_id) {
+    test_ctx_t *test = (test_ctx_t *)ctx;
+    test_cancel(ctx, req_id);
+    if (test->pending_addr_cb) {
+        r_dns_addr_cb cb = test->pending_addr_cb;
+        void *user = test->pending_addr_user;
+        test->pending_addr_cb = NULL;
+        test->pending_addr_user = NULL;
+
+        r_addr_t addr;
+        memset(&addr, 0, sizeof(addr));
+        struct sockaddr_in *sin = (struct sockaddr_in *)&addr.sa;
+        sin->sin_family = AF_INET;
+        inet_pton(AF_INET, "127.0.0.1", &sin->sin_addr);
+        addr.len = sizeof(*sin);
+        cb(user, 0, &addr, 1);
+    }
+}
+
 static void noop_rate_limit_cb(
     void *user,
     r_client_req_t *req,
@@ -405,11 +424,39 @@ static void test_destroy_ignores_late_dns_addr_callback(void) {
     ctx.pending_addr_cb(ctx.pending_addr_user, 0, &addr, 1);
 }
 
+static void test_destroy_handles_dns_cancel_callback(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    r_io_ops_t io = {
+        .ctx = &ctx,
+        .udp_send = test_udp_send,
+        .now_ms = test_now_ms,
+        .log = NULL,
+        .on_steering_feedback = NULL,
+    };
+    r_resolver_ops_t resolver = {
+        .ctx = &ctx,
+        .resolve_srv = test_resolve_srv,
+        .resolve_addrs = test_resolve_addrs_async,
+        .cancel = test_cancel_calls_addr_cb,
+    };
+    r_client_t *client = make_client_with_ops(&ctx, &io, &resolver);
+    assert(ctx.pending_addr_cb != NULL);
+    assert(ctx.pending_addr_user != NULL);
+
+    r_client_destroy(client);
+    assert(ctx.cancel_count == 1u);
+    assert(ctx.cancelled_ids[0] == 202u);
+    assert(ctx.pending_addr_cb == NULL);
+    assert(ctx.pending_addr_user == NULL);
+}
+
 int main(void) {
     test_check_rate_limit_rejects_oversized_guard();
     test_report_latency_filters_oversized_reports();
     test_report_latency_requires_udp_send();
     test_destroy_ignores_late_dns_srv_callback();
     test_destroy_ignores_late_dns_addr_callback();
+    test_destroy_handles_dns_cancel_callback();
     return 0;
 }
