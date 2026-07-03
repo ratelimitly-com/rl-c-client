@@ -11,6 +11,13 @@ Tenant credentials can contain raw cookie or AES key material. Do not log:
 - `r_auth_key_info_t.secret`
 - packet bytes containing authenticated payloads
 
+## Authentication Modes
+
+Use AES credentials for deployments that cross an untrusted network. Cookie
+credentials are intended only for private-network deployments where passive
+capture and on-path modification are outside the threat model. Cookie mode does
+not provide packet integrity.
+
 ## Supported Versions
 
 No public releases have been made yet. Security support begins with the first

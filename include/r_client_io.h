@@ -66,6 +66,7 @@ typedef struct r_resolver_ops {
     void *ctx;
 
     // Resolve SRV records for a name. May invoke callback synchronously.
+    // Async resolvers should set a nonzero out_req_id for cancellation.
     int (*resolve_srv)(
         void *ctx,
         const char *name,
@@ -75,6 +76,7 @@ typedef struct r_resolver_ops {
     );
 
     // Resolve A/AAAA records for a name. May invoke callback synchronously.
+    // Async resolvers should set a nonzero out_req_id for cancellation.
     int (*resolve_addrs)(
         void *ctx,
         const char *name,
