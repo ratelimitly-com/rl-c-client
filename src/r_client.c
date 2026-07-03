@@ -6,6 +6,7 @@
 #include <arpa/inet.h>
 #include <stdio.h>
 
+#include <openssl/crypto.h>
 #include <openssl/rand.h>
 
 #include "r_crypto.h"
@@ -96,6 +97,7 @@ struct r_client {
     r_resolver_ops_t resolver;
     char *dns_name;
     char *auth_secret;
+    size_t auth_secret_len;
     bool has_quotas;
     r_bech32_quotas_t quotas;
     uint8_t cookie[32];
@@ -1196,7 +1198,7 @@ static int r_extract_pdu_data(
         if (auth_size != 36 || auth_body_len != 32) {
             return RCLIENT_ERR_PROTOCOL;
         }
-        if (!client->has_cookie || memcmp(auth_body, client->cookie, 32) != 0) {
+        if (!client->has_cookie || CRYPTO_memcmp(auth_body, client->cookie, 32) != 0) {
             return RCLIENT_ERR_AUTH;
         }
         *out_pdu = buf + pdu_pos;
@@ -1441,11 +1443,16 @@ int r_client_create(
     }
 
     if (config->tenant.auth.secret) {
+        size_t auth_secret_len = config->tenant.auth.secret_len;
+        if (auth_secret_len == 0) {
+            auth_secret_len = strlen(config->tenant.auth.secret);
+        }
         client->auth_secret = r_strdup_n(config->tenant.auth.secret, config->tenant.auth.secret_len);
         if (!client->auth_secret) {
             r_client_destroy(client);
             return RCLIENT_ERR_NOMEM;
         }
+        client->auth_secret_len = auth_secret_len;
         client->config.tenant.auth.secret = client->auth_secret;
         client->config.tenant.auth.secret_len = 0;
     }
@@ -1461,43 +1468,45 @@ int r_client_create(
         size_t decoded_secret_len = 0;
         r_auth_type_t decoded_type = (r_auth_type_t)0;
         uint64_t decoded_key_id = 0;
-        if (r_decode_api_key_bech32_with_quotas(
+        int decode_rc = r_decode_api_key_bech32_with_quotas(
                 client->auth_secret,
                 &decoded_type,
                 &decoded_key_id,
                 decoded_secret,
                 sizeof(decoded_secret),
                 &decoded_secret_len,
-                &client->quotas) != 0) {
-            r_client_destroy(client);
-            return RCLIENT_ERR_CONFIG;
-        }
-        client->has_quotas = true;
-        if (decoded_type != config->tenant.auth.type) {
-            r_client_destroy(client);
-            return RCLIENT_ERR_CONFIG;
-        }
-        if (decoded_key_id != config->tenant.key_id) {
-            r_client_destroy(client);
-            return RCLIENT_ERR_CONFIG;
-        }
-        if (decoded_type == R_AUTH_COOKIE) {
-            if (decoded_secret_len != 32u) {
-                r_client_destroy(client);
-                return RCLIENT_ERR_CONFIG;
-            }
-            memcpy(client->cookie, decoded_secret, 32u);
-            client->has_cookie = true;
-        } else if (decoded_type == R_AUTH_AES_GCM) {
-            if (decoded_secret_len != 32u) {
-                r_client_destroy(client);
-                return RCLIENT_ERR_CONFIG;
-            }
-            memcpy(client->aes_key, decoded_secret, 32u);
-            client->has_aes_key = true;
+                &client->quotas);
+        int config_rc = RCLIENT_OK;
+        if (decode_rc != 0) {
+            config_rc = RCLIENT_ERR_CONFIG;
         } else {
+            client->has_quotas = true;
+            if (decoded_type != config->tenant.auth.type) {
+                config_rc = RCLIENT_ERR_CONFIG;
+            } else if (decoded_key_id != config->tenant.key_id) {
+                config_rc = RCLIENT_ERR_CONFIG;
+            } else if (decoded_type == R_AUTH_COOKIE) {
+                if (decoded_secret_len != 32u) {
+                    config_rc = RCLIENT_ERR_CONFIG;
+                } else {
+                    memcpy(client->cookie, decoded_secret, 32u);
+                    client->has_cookie = true;
+                }
+            } else if (decoded_type == R_AUTH_AES_GCM) {
+                if (decoded_secret_len != 32u) {
+                    config_rc = RCLIENT_ERR_CONFIG;
+                } else {
+                    memcpy(client->aes_key, decoded_secret, 32u);
+                    client->has_aes_key = true;
+                }
+            } else {
+                config_rc = RCLIENT_ERR_CONFIG;
+            }
+        }
+        OPENSSL_cleanse(decoded_secret, sizeof(decoded_secret));
+        if (config_rc != RCLIENT_OK) {
             r_client_destroy(client);
-            return RCLIENT_ERR_CONFIG;
+            return config_rc;
         }
     }
 
@@ -1533,7 +1542,12 @@ void r_client_destroy(r_client_t *client) {
     free(client->servers);
     free(client->stats.items);
     free(client->dns_name);
-    free(client->auth_secret);
+    if (client->auth_secret) {
+        OPENSSL_cleanse(client->auth_secret, client->auth_secret_len);
+        free(client->auth_secret);
+    }
+    OPENSSL_cleanse(client->cookie, sizeof(client->cookie));
+    OPENSSL_cleanse(client->aes_key, sizeof(client->aes_key));
     free(client);
 }
 
