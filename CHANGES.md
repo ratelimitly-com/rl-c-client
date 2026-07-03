@@ -11,3 +11,5 @@ release tag, use git history as the detailed changelog.
 - Reworked documentation for public integration without requiring private
   server source access.
 - Added open-source readiness files and CI.
+- Hardened credential handling by using constant-time cookie comparison,
+  cleansing secret material, and removing unused SHA-256 cookie helper code.

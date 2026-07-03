@@ -4,12 +4,23 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 
 static const uint32_t k_bech32_gen[5] = {
     0x3B6A57B2u, 0x26508E6Du, 0x1EA119FAu, 0x3D4233DDu, 0x2A1462B3u
 };
+
+static void r_cleanse_free(void *ptr, size_t len) {
+    if (!ptr) {
+        return;
+    }
+    if (len > 0) {
+        OPENSSL_cleanse(ptr, len);
+    }
+    free(ptr);
+}
 
 static int r_bech32_char_value(char c, uint8_t *out) {
     if (!out) {
@@ -183,38 +194,6 @@ cleanup:
     return ok ? 0 : -1;
 }
 
-int r_sha256_cookie(const char *secret, size_t secret_len, uint8_t out[32]) {
-    if (!secret || !out) {
-        return -1;
-    }
-    if (secret_len == 0) {
-        secret_len = strlen(secret);
-    }
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    if (!ctx) {
-        return -1;
-    }
-    int ok = 0;
-    unsigned int digest_len = 0;
-    if (EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) != 1) {
-        goto cleanup;
-    }
-    if (EVP_DigestUpdate(ctx, secret, secret_len) != 1) {
-        goto cleanup;
-    }
-    if (EVP_DigestFinal_ex(ctx, out, &digest_len) != 1) {
-        goto cleanup;
-    }
-    if (digest_len != 32) {
-        goto cleanup;
-    }
-    ok = 1;
-
-cleanup:
-    EVP_MD_CTX_free(ctx);
-    return ok ? 0 : -1;
-}
-
 int r_decode_api_key_bech32(
     const char *encoded,
     r_auth_type_t *out_type,
@@ -321,7 +300,7 @@ int r_decode_api_key_bech32_with_quotas(
     }
     size_t payload_len = 0;
     if (r_convert_bits_5_to_8_no_pad(data, payload5_len, payload, payload_cap, &payload_len) != 0) {
-        free(payload);
+        r_cleanse_free(payload, payload_cap);
         free(data);
         free(s);
         return -1;
@@ -333,7 +312,7 @@ int r_decode_api_key_bech32_with_quotas(
     } else if (strcmp(s, "rl-aes") == 0) {
         auth_type = R_AUTH_AES_GCM;
     } else {
-        free(payload);
+        r_cleanse_free(payload, payload_cap);
         free(data);
         free(s);
         return -1;
@@ -343,7 +322,7 @@ int r_decode_api_key_bech32_with_quotas(
     size_t secret_len = 0;
 
     if (payload_len != 60u) {
-        free(payload);
+        r_cleanse_free(payload, payload_cap);
         free(data);
         free(s);
         return -1;
@@ -351,7 +330,7 @@ int r_decode_api_key_bech32_with_quotas(
     key_id = r_read_le64_local(payload);
     secret_len = 32u;
     if (secret_len > out_secret_cap) {
-        free(payload);
+        r_cleanse_free(payload, payload_cap);
         free(data);
         free(s);
         return -1;
@@ -370,7 +349,7 @@ int r_decode_api_key_bech32_with_quotas(
         out_quotas->dedup_ttl_ms_max = r_read_le32_local(payload + quota_offset + 16u);
     }
 
-    free(payload);
+    r_cleanse_free(payload, payload_cap);
     free(data);
     free(s);
     return 0;
