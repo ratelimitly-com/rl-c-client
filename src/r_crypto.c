@@ -359,13 +359,16 @@ int r_encrypt_pdu_aes_gcm(
     const uint8_t *pdu,
     size_t pdu_len,
     const uint8_t key[32],
+    const uint8_t *aad_prefix,
+    size_t aad_prefix_len,
     uint8_t *cipher,
     size_t cipher_cap,
     size_t *cipher_len,
     uint8_t nonce[12],
     uint8_t tag[16]
 ) {
-    if (!pdu || !key || !cipher || !cipher_len || !nonce || !tag) {
+    if (!pdu || !key || (!aad_prefix && aad_prefix_len > 0) ||
+        !cipher || !cipher_len || !nonce || !tag) {
         return -1;
     }
     if (cipher_cap < pdu_len) {
@@ -391,6 +394,14 @@ int r_encrypt_pdu_aes_gcm(
         goto cleanup;
     }
     if (EVP_EncryptInit_ex(ctx, NULL, NULL, key, nonce) != 1) {
+        goto cleanup;
+    }
+    if (aad_prefix_len > 0) {
+        if (EVP_EncryptUpdate(ctx, NULL, &len, aad_prefix, (int)aad_prefix_len) != 1) {
+            goto cleanup;
+        }
+    }
+    if (EVP_EncryptUpdate(ctx, NULL, &len, nonce, 12) != 1) {
         goto cleanup;
     }
     if (EVP_EncryptUpdate(ctx, cipher, &len, pdu, (int)pdu_len) != 1) {
@@ -419,11 +430,14 @@ int r_decrypt_pdu_aes_gcm(
     const uint8_t key[32],
     const uint8_t nonce[12],
     const uint8_t tag[16],
+    const uint8_t *aad,
+    size_t aad_len,
     uint8_t *out,
     size_t out_cap,
     size_t *out_len
 ) {
-    if (!cipher || !key || !nonce || !tag || !out || !out_len) {
+    if (!cipher || !key || !nonce || !tag || (!aad && aad_len > 0) ||
+        !out || !out_len) {
         return -1;
     }
     if (out_cap < cipher_len) {
@@ -447,6 +461,11 @@ int r_decrypt_pdu_aes_gcm(
     }
     if (EVP_DecryptInit_ex(ctx, NULL, NULL, key, nonce) != 1) {
         goto cleanup;
+    }
+    if (aad_len > 0) {
+        if (EVP_DecryptUpdate(ctx, NULL, &len, aad, (int)aad_len) != 1) {
+            goto cleanup;
+        }
     }
     if (EVP_DecryptUpdate(ctx, out, &len, cipher, (int)cipher_len) != 1) {
         goto cleanup;

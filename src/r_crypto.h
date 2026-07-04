@@ -41,6 +41,8 @@ int r_encrypt_pdu_aes_gcm(
     const uint8_t *pdu,
     size_t pdu_len,
     const uint8_t key[32],
+    const uint8_t *aad_prefix,
+    size_t aad_prefix_len,
     uint8_t *cipher,
     size_t cipher_cap,
     size_t *cipher_len,
@@ -54,6 +56,8 @@ int r_decrypt_pdu_aes_gcm(
     const uint8_t key[32],
     const uint8_t nonce[12],
     const uint8_t tag[16],
+    const uint8_t *aad,
+    size_t aad_len,
     uint8_t *out,
     size_t out_cap,
     size_t *out_len

@@ -54,8 +54,8 @@ test: tests/test_protocol tests/test_client_quota tests/test_public_api
 	./tests/test_client_quota
 	./tests/test_public_api
 
-tests/test_protocol: tests/test_protocol.c src/r_protocol.o
-	$(CC) $(CPPFLAGS) $(CFLAGS) $^ -o $@
+tests/test_protocol: tests/test_protocol.c src/r_protocol.o src/r_crypto.o
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $^ -o $@ -lcrypto
 
 tests/test_client_quota: tests/test_client_quota.c librclient.a
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $^ -o $@ -lcrypto -lresolv -pthread
