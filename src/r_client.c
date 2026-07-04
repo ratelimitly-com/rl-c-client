@@ -1117,15 +1117,29 @@ static int r_build_rate_request_packet(
         size_t cipher_len = 0;
         uint8_t nonce[12];
         uint8_t tag[16];
-        if (r_encrypt_pdu_aes_gcm(pdu, pdu_len, client->aes_key, cipher, sizeof(cipher), &cipher_len, nonce, tag) != 0) {
-            return RCLIENT_ERR_AUTH;
-        }
-        if (pos + 4 + 12 + 16 + cipher_len > out_cap) {
+        if (pos + 4 + 12 + 16 + pdu_len > out_cap) {
             return RCLIENT_ERR_PROTOCOL;
         }
         r_write_le16(out + pos, R_TLV_AUTH_AES);
         r_write_le16(out + pos + 2, 32);
+        if (r_encrypt_pdu_aes_gcm(
+                pdu,
+                pdu_len,
+                client->aes_key,
+                out,
+                pos + 4,
+                cipher,
+                sizeof(cipher),
+                &cipher_len,
+                nonce,
+                tag
+            ) != 0) {
+            return RCLIENT_ERR_AUTH;
+        }
         pos += 4;
+        if (pos + 12 + 16 + cipher_len > out_cap) {
+            return RCLIENT_ERR_PROTOCOL;
+        }
         memcpy(out + pos, nonce, 12);
         pos += 12;
         memcpy(out + pos, tag, 16);
@@ -1219,7 +1233,18 @@ static int r_extract_pdu_data(
         const uint8_t *tag = auth_body + 12;
         size_t cipher_len = len - pdu_pos;
         size_t out_len = 0;
-        if (r_decrypt_pdu_aes_gcm(buf + pdu_pos, cipher_len, client->aes_key, nonce, tag, pdu_buf, pdu_cap, &out_len) != 0) {
+        if (r_decrypt_pdu_aes_gcm(
+                buf + pdu_pos,
+                cipher_len,
+                client->aes_key,
+                nonce,
+                tag,
+                buf,
+                pos + 4 + 12,
+                pdu_buf,
+                pdu_cap,
+                &out_len
+            ) != 0) {
             return RCLIENT_ERR_PROTOCOL;
         }
         *out_pdu = pdu_buf;
@@ -1832,14 +1857,25 @@ int r_client_report_latency(
         size_t cipher_len = 0;
         uint8_t nonce[12];
         uint8_t tag[16];
-        if (r_encrypt_pdu_aes_gcm(pdu, pdu_len, client->aes_key, cipher, sizeof(cipher), &cipher_len, nonce, tag) != 0) {
+        r_write_le16(packet + pos, R_TLV_AUTH_AES);
+        r_write_le16(packet + pos + 2, 32);
+        if (r_encrypt_pdu_aes_gcm(
+                pdu,
+                pdu_len,
+                client->aes_key,
+                packet,
+                pos + 4,
+                cipher,
+                sizeof(cipher),
+                &cipher_len,
+                nonce,
+                tag
+            ) != 0) {
             if (owns_filtered_reports) {
                 free(filtered_reports);
             }
             return RCLIENT_ERR_AUTH;
         }
-        r_write_le16(packet + pos, R_TLV_AUTH_AES);
-        r_write_le16(packet + pos + 2, 32);
         pos += 4;
         memcpy(packet + pos, nonce, 12);
         pos += 12;
