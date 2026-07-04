@@ -98,6 +98,9 @@ The callback receives:
   `RCLIENT_ERR_PROTOCOL` when no usable result is available
 
 Pointers inside `r_rate_limit_result_t` are valid only during the callback.
+The `r_client_req_t *` passed to the callback is owned by the client and is not
+valid after the callback returns. Calling `r_client_cancel_request` on that same
+request from inside the completion callback is harmless and treated as a no-op.
 
 ## Latency Reports
 
@@ -123,6 +126,9 @@ request completes, times out, or is canceled, later datagrams with the same
 `unique_id` are ignored. The authenticated timestamp is retained as protocol
 framing, but the client does not apply a separate clock-skew freshness check.
 Keep request deadlines short and deliver timeout/cancel events promptly.
+
+`cfg.request_policy` is borrowed only for the duration of `r_client_create`; the
+client copies the policy by value and does not retain the caller's pointer.
 
 ## Error Codes
 

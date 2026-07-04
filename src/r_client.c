@@ -524,18 +524,19 @@ static int r_allowed_server_id(r_client_req_t *req, uint64_t server_id) {
     return 0;
 }
 
-static void r_request_remove(r_client_t *client, r_client_req_t *req) {
+static bool r_request_remove(r_client_t *client, r_client_req_t *req) {
     if (!client || !req) {
-        return;
+        return false;
     }
     r_client_req_t **cur = &client->inflight;
     while (*cur) {
         if (*cur == req) {
             *cur = req->next;
-            break;
+            return true;
         }
         cur = &(*cur)->next;
     }
+    return false;
 }
 
 static void r_request_free(r_client_req_t *req) {
@@ -1232,6 +1233,9 @@ static int r_extract_pdu_data(
         const uint8_t *nonce = auth_body;
         const uint8_t *tag = auth_body + 12;
         size_t cipher_len = len - pdu_pos;
+        if (cipher_len == 0) {
+            return RCLIENT_ERR_PROTOCOL;
+        }
         size_t out_len = 0;
         if (r_decrypt_pdu_aes_gcm(
                 buf + pdu_pos,
@@ -1449,6 +1453,7 @@ int r_client_create(
     client->io = *io_ops;
     client->resolver = *resolver_ops;
     client->config = *config;
+    client->config.request_policy = NULL;
 
     client->dns_name = r_strdup_n(config->tenant.dns_name, 0);
     if (!client->dns_name) {
@@ -2185,7 +2190,9 @@ void r_client_cancel_request(r_client_t *client, r_client_req_t *req) {
     if (!client || !req) {
         return;
     }
-    r_request_remove(client, req);
+    if (!r_request_remove(client, req)) {
+        return;
+    }
     r_request_free(req);
 }
 

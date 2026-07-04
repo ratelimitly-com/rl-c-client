@@ -227,7 +227,7 @@ int r_build_rate_request_body(
     if (resource_count > 0xffffu || guard_count > 0xffffu) {
         return RCLIENT_ERR_PROTOCOL;
     }
-    size_t needed = 4 + guard_count * sizeof(r_guard_block_t) + resource_count * sizeof(r_resource_block_t);
+    size_t needed = 4 + guard_count * R_GUARD_BLOCK_WIRE_LEN + resource_count * R_RESOURCE_BLOCK_WIRE_LEN;
     if (needed > out_cap) {
         return RCLIENT_ERR_PROTOCOL;
     }
@@ -254,7 +254,7 @@ int r_build_rate_request_body(
         r_write_le32(out + pos + 28, block.min_sample_threshold);
         r_write_le32(out + pos + 32, block.latency_threshold);
         r_write_le32(out + pos + 36, block.current_latency);
-        pos += sizeof(r_guard_block_t);
+        pos += R_GUARD_BLOCK_WIRE_LEN;
     }
 
     for (size_t i = 0; i < resource_count; i++) {
@@ -270,7 +270,7 @@ int r_build_rate_request_body(
         r_write_le32(out + pos + 20, block.rate_limit);
         r_write_le16(out + pos + 24, block.tokens_requested);
         r_write_le16(out + pos + 26, block.padding);
-        pos += sizeof(r_resource_block_t);
+        pos += R_RESOURCE_BLOCK_WIRE_LEN;
     }
 
     if (metrics_label && metrics_label[0] != '\0') {
@@ -297,7 +297,7 @@ int r_build_latency_report_body(
     if (report_count > 0xffffu) {
         return RCLIENT_ERR_PROTOCOL;
     }
-    size_t needed = 4 + report_count * R_SERVICE_LATENCY_BLOCK_LEN;
+    size_t needed = 4 + report_count * R_SERVICE_LATENCY_BLOCK_WIRE_LEN;
     if (needed > out_cap) {
         return RCLIENT_ERR_PROTOCOL;
     }
@@ -322,7 +322,7 @@ int r_build_latency_report_body(
         r_write_le32(out + pos + 24, block.buffer_size);
         r_write_le32(out + pos + 28, block.min_sample_threshold);
         r_write_le32(out + pos + 32, block.observed_latency);
-        pos += R_SERVICE_LATENCY_BLOCK_LEN;
+        pos += R_SERVICE_LATENCY_BLOCK_WIRE_LEN;
     }
 
     *out_len = pos;
@@ -417,7 +417,7 @@ int r_parse_rate_response_pdu(
     bool success = true;
 
     for (uint16_t i = 0; i < guard_count; i++) {
-        if (body_len < pos + sizeof(r_guard_block_t)) {
+        if (body_len < pos + R_GUARD_BLOCK_WIRE_LEN) {
             return RCLIENT_ERR_PROTOCOL;
         }
         const uint8_t *p = body + pos;
@@ -430,11 +430,11 @@ int r_parse_rate_response_pdu(
         if (!guards[i].passed) {
             success = false;
         }
-        pos += sizeof(r_guard_block_t);
+        pos += R_GUARD_BLOCK_WIRE_LEN;
     }
 
     for (uint16_t i = 0; i < resource_count; i++) {
-        if (body_len < pos + sizeof(r_resource_block_t)) {
+        if (body_len < pos + R_RESOURCE_BLOCK_WIRE_LEN) {
             return RCLIENT_ERR_PROTOCOL;
         }
         const uint8_t *p = body + pos;
@@ -444,7 +444,7 @@ int r_parse_rate_response_pdu(
         if (resources[i].tokens_deficit != 0) {
             success = false;
         }
-        pos += sizeof(r_resource_block_t);
+        pos += R_RESOURCE_BLOCK_WIRE_LEN;
     }
 
     if (out_guard_count) {

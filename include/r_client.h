@@ -153,7 +153,7 @@ typedef struct r_request_policy {
 typedef struct r_client_config {
     r_tenant_config_t tenant;
     uint64_t server_stability_threshold_ms;
-    const r_request_policy_t *request_policy; // NULL => default behavior
+    const r_request_policy_t *request_policy; // Borrowed during r_client_create; NULL => default behavior
 } r_client_config_t;
 
 // Request inputs.
