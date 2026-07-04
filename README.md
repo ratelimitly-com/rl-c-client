@@ -129,6 +129,12 @@ cfg.tenant.auth.type = info.type;
 cfg.tenant.auth.secret = auth_key;
 ```
 
+`cfg.tenant.auth.secret` is the encoded Bech32 credential string, not raw
+secret bytes. Leave `cfg.tenant.auth.secret_len` as `0` for a normal
+null-terminated credential string, or set it to the encoded string length if
+the credential is not null-terminated. The client decodes the raw 32-byte
+cookie/AES material internally after validating the Bech32 credential.
+
 Do not log `info.secret`; it contains raw credential material for cookie and
 AES keys.
 
