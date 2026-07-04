@@ -41,6 +41,14 @@ r_client_t *client = NULL;
 int rc = r_client_create(&cfg, &io_ops, &resolver_ops, &client);
 ```
 
+`cfg.tenant.auth.secret` is the encoded Bech32 credential string itself
+(`rl-cookie...` or `rl-aes...`), not raw binary key material.
+`cfg.tenant.auth.secret_len` is the byte length of that encoded text string;
+leave it as `0` for ordinary null-terminated C strings. The supported Bech32
+credential alphabet is printable ASCII and does not carry embedded NUL bytes.
+The client validates and decodes the credential internally before copying the
+raw 32-byte cookie/AES material into private client state.
+
 The client copies `tenant.dns_name` and the auth secret string during
 `r_client_create`, so those configuration strings only need to remain valid for
 the duration of the call.
@@ -57,6 +65,10 @@ the duration of the call.
 
 The raw secret is sensitive. Use it only for validation or diagnostics that do
 not expose secret bytes.
+
+Do not pass `r_auth_key_info_t.secret` back into `cfg.tenant.auth.secret`.
+Configuration expects the encoded Bech32 string. The decoded `secret` field is
+provided only for callers that need to inspect or validate the credential.
 
 ## Hashing IDs
 

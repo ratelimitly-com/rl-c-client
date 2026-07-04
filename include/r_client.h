@@ -35,8 +35,8 @@ typedef enum r_auth_type {
 
 typedef struct r_auth_config {
     r_auth_type_t type;
-    const char *secret; // Bech32 auth key string: rl-cookie... / rl-aes...
-    size_t secret_len; // 0 means null-terminated
+    const char *secret; // Encoded Bech32 credential string: rl-cookie... / rl-aes...
+    size_t secret_len; // Encoded string length; 0 means null-terminated. Not raw secret bytes.
 } r_auth_config_t;
 
 typedef struct r_auth_key_info {
