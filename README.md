@@ -150,6 +150,10 @@ The client never blocks and does not create threads. The host application must:
 5. Deliver UDP responses through `r_client_on_datagram`.
 6. Call `r_client_on_timeout` when request timers fire.
 
+Response replay protection is scoped to this request lifecycle: AES responses
+must carry a matching authenticated `unique_id` for an in-flight request, and
+datagrams for completed, timed-out, or canceled requests are ignored.
+
 For nginx-style integrations, use `r_client_check_rate_limit_async_borrowed`
 when request buffers live until callback completion.
 

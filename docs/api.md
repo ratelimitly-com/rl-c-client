@@ -117,6 +117,13 @@ The host owns network receive and timers:
 - call `r_client_on_timeout` when the host timer fires
 - call `r_client_cancel_request` if the HTTP/request context is abandoned
 
+AES response replay handling is tied to the request lifecycle. The authenticated
+`unique_id` in the tenant header must match an in-flight request; once that
+request completes, times out, or is canceled, later datagrams with the same
+`unique_id` are ignored. The authenticated timestamp is retained as protocol
+framing, but the client does not apply a separate clock-skew freshness check.
+Keep request deadlines short and deliver timeout/cancel events promptly.
+
 ## Error Codes
 
 All errors are negative:
