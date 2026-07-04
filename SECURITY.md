@@ -18,6 +18,22 @@ credentials are intended only for private-network deployments where passive
 capture and on-path modification are outside the threat model. Cookie mode does
 not provide packet integrity.
 
+## Response Replay Model
+
+AES responses authenticate the clear tenant header and encrypted PDU. This binds
+the response `unique_id`, server id, timestamp, and steering feedback to the GCM
+tag, so an observed response cannot be retargeted to another request.
+
+The client treats `unique_id` as the replay boundary. A response is accepted only
+while a matching request is still in flight; after completion, timeout, or
+cancel, later datagrams with that `unique_id` are ignored. Duplicate responses
+from the same server id do not count as additional quorum members. The
+authenticated timestamp is not used as a wall-clock freshness check.
+
+Host integrations must keep request deadlines short and must call
+`r_client_on_timeout` or `r_client_cancel_request` when the application request
+is no longer active.
+
 ## Supported Versions
 
 No public releases have been made yet. Security support begins with the first
