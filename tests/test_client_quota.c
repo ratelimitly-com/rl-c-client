@@ -318,9 +318,12 @@ static void test_report_latency_filters_oversized_reports(void) {
 
     const uint8_t *pdu = ctx.last_packet + pdu_pos;
     uint16_t pdu_type = (uint16_t)pdu[0] | ((uint16_t)pdu[1] << 8);
+    uint16_t pdu_size = (uint16_t)pdu[2] | ((uint16_t)pdu[3] << 8);
     uint16_t service_count = (uint16_t)pdu[8] | ((uint16_t)pdu[9] << 8);
     assert(pdu_type == R_PDU_LATENCY_REPORT);
+    assert(pdu_size == 48u);
     assert(service_count == 1u);
+    assert(ctx.last_packet_len == pdu_pos + pdu_size);
 
     ctx.send_count = 0;
     rc = r_client_report_latency(client, &reports[1], 1);
