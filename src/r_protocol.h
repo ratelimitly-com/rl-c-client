@@ -14,6 +14,7 @@ extern "C" {
 #define R_TENANT_TLV_LEN 40u
 #define R_PDU_HEADER_LEN 8u
 #define R_MAX_PACKET_SIZE 1200u
+#define R_SERVICE_LATENCY_BLOCK_LEN 36u
 
 #define R_TLV_TENANT 0x4C52u
 #define R_TLV_AUTH_COOKIE 0x4143u
@@ -60,7 +61,6 @@ typedef struct r_service_latency_block {
     uint32_t buffer_size;
     uint32_t min_sample_threshold;
     uint32_t observed_latency;
-    uint32_t padding;
 } r_service_latency_block_t;
 
 void r_tenant_header_write(const r_tenant_header_t *header, uint8_t *buf, size_t len);

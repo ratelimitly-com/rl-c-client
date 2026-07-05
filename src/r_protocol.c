@@ -297,7 +297,7 @@ int r_build_latency_report_body(
     if (report_count > 0xffffu) {
         return RCLIENT_ERR_PROTOCOL;
     }
-    size_t needed = 4 + report_count * sizeof(r_service_latency_block_t);
+    size_t needed = 4 + report_count * R_SERVICE_LATENCY_BLOCK_LEN;
     if (needed > out_cap) {
         return RCLIENT_ERR_PROTOCOL;
     }
@@ -315,7 +315,6 @@ int r_build_latency_report_body(
         block.buffer_size = reports[i].buffer_size;
         block.min_sample_threshold = reports[i].min_sample_threshold;
         block.observed_latency = reports[i].observed_latency;
-        block.padding = 0;
 
         memcpy(out + pos, block.service_id, 16);
         r_write_le32(out + pos + 16, block.ttl_ms);
@@ -323,8 +322,7 @@ int r_build_latency_report_body(
         r_write_le32(out + pos + 24, block.buffer_size);
         r_write_le32(out + pos + 28, block.min_sample_threshold);
         r_write_le32(out + pos + 32, block.observed_latency);
-        r_write_le32(out + pos + 36, block.padding);
-        pos += sizeof(r_service_latency_block_t);
+        pos += R_SERVICE_LATENCY_BLOCK_LEN;
     }
 
     *out_len = pos;
