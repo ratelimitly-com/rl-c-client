@@ -101,7 +101,7 @@ static void test_latency_report_uses_36_byte_service_blocks(void) {
     size_t body_len = 0;
     int rc = r_build_latency_report_body(&report, 1, body, sizeof(body), &body_len);
     assert(rc == RCLIENT_OK);
-    assert(body_len == 4u + R_SERVICE_LATENCY_BLOCK_LEN);
+    assert(body_len == 4u + R_SERVICE_LATENCY_BLOCK_WIRE_LEN);
 
     uint8_t pdu[80];
     size_t pdu_len = 0;

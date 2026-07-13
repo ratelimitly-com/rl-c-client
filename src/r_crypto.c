@@ -158,6 +158,14 @@ static uint32_t r_read_le32_local(const uint8_t *p) {
            ((uint32_t)p[3] << 24);
 }
 
+enum {
+    R_CREDENTIAL_KEY_ID_LEN = 8u,
+    R_CREDENTIAL_SECRET_LEN = 32u,
+    R_CREDENTIAL_QUOTA_OFFSET = 40u,
+    R_CREDENTIAL_QUOTA_LEN = 20u,
+    R_CREDENTIAL_PAYLOAD_LEN = 60u,
+};
+
 int r_hash_id_blake2s_128(const char *input, uint8_t out_id[16]) {
     if (!input || !out_id) {
         return -1;
@@ -321,27 +329,33 @@ int r_decode_api_key_bech32_with_quotas(
     uint64_t key_id = 0;
     size_t secret_len = 0;
 
-    if (payload_len != 60u) {
+    if (payload_len != R_CREDENTIAL_PAYLOAD_LEN) {
         r_cleanse_free(payload, payload_cap);
         free(data);
         free(s);
         return -1;
     }
     key_id = r_read_le64_local(payload);
-    secret_len = 32u;
+    secret_len = R_CREDENTIAL_SECRET_LEN;
     if (secret_len > out_secret_cap) {
         r_cleanse_free(payload, payload_cap);
         free(data);
         free(s);
         return -1;
     }
-    memcpy(out_secret, payload + 8, secret_len);
+    memcpy(out_secret, payload + R_CREDENTIAL_KEY_ID_LEN, secret_len);
 
     *out_type = auth_type;
     *out_key_id = key_id;
     *out_secret_len = secret_len;
     if (out_quotas) {
-        size_t quota_offset = 40u;
+        if (payload_len < R_CREDENTIAL_QUOTA_OFFSET + R_CREDENTIAL_QUOTA_LEN) {
+            r_cleanse_free(payload, payload_cap);
+            free(data);
+            free(s);
+            return -1;
+        }
+        size_t quota_offset = R_CREDENTIAL_QUOTA_OFFSET;
         out_quotas->rate_buckets_max = r_read_le32_local(payload + quota_offset);
         out_quotas->latency_services_max = r_read_le32_local(payload + quota_offset + 4u);
         out_quotas->metrics_labels_max = r_read_le32_local(payload + quota_offset + 8u);

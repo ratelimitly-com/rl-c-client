@@ -469,6 +469,9 @@ static int dns_query_srv(
     }
 
     int count = ns_msg_count(handle, ns_s_an);
+    if (count <= 0) {
+        return -1;
+    }
     r_srv_record_t *records = (r_srv_record_t *)calloc((size_t)count, sizeof(r_srv_record_t));
     if (!records) {
         return -1;
