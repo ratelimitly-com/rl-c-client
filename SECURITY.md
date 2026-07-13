@@ -1,11 +1,25 @@
 # Security
 
-This repository is being prepared for public release. A permanent vulnerability
-reporting contact must be added before publication.
+Do not open public issues for suspected vulnerabilities.
+
+Until a dedicated security alias is published, report security concerns to:
+
+```text
+wojciech@ratelimitly.com
+```
+
+Include:
+
+- affected commit or release
+- compiler and operating system
+- build mode, static or shared
+- relevant configuration snippets with secrets removed
+- reproduction steps
+- expected and observed behavior
 
 ## Credential Handling
 
-Tenant credentials can contain raw cookie or AES key material. Do not log:
+API key credentials can contain raw cookie or AES key material. Do not log:
 
 - `r_auth_config_t.secret`
 - `r_auth_key_info_t.secret`
@@ -20,7 +34,7 @@ not provide packet integrity.
 
 ## Response Replay Model
 
-AES responses authenticate the clear tenant header and encrypted PDU. This binds
+AES responses authenticate the clear packet header and encrypted PDU. This binds
 the response `unique_id`, server id, timestamp, and steering feedback to the GCM
 tag, so an observed response cannot be retargeted to another request.
 
@@ -41,5 +55,5 @@ published release.
 
 ## Reporting
 
-Until a public contact is assigned, report security issues through the project
-maintainers directly and do not open public issues for suspected vulnerabilities.
+Use the private reporting process above. Do not publish proof-of-concept code or
+real credentials in public issues, pull requests, logs, or examples.

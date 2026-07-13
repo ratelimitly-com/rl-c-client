@@ -57,7 +57,7 @@ typedef struct r_tenant_config {
     r_auth_config_t auth;
 } r_tenant_config_t;
 
-// Request policy surface (mirrors Rust request_policy.rs).
+// Request policy surface for wait, quorum, retry, and DNS refresh behavior.
 typedef enum r_wait_policy {
     R_WAIT_RETURN_ON_FIRST_VALID = 0,
     R_WAIT_RETURN_ON_FIRST_STABLE = 1,
@@ -153,7 +153,8 @@ typedef struct r_request_policy {
 typedef struct r_client_config {
     r_tenant_config_t tenant;
     uint64_t server_stability_threshold_ms;
-    const r_request_policy_t *request_policy; // Borrowed during r_client_create; NULL => default behavior
+    // Borrowed during r_client_create; NULL selects default behavior.
+    const r_request_policy_t *request_policy;
 } r_client_config_t;
 
 // Request inputs.

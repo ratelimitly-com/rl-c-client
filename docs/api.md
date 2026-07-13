@@ -17,7 +17,9 @@ Use:
 
 ## Configuration
 
-Create one `r_client_t` per tenant/event-loop context:
+Create one `r_client_t` per API-key/event-loop context. The public C structures
+use `tenant` for the per-credential context because that context bundles the DNS
+name, key id, and authentication settings used by one configured client:
 
 ```c
 r_auth_key_info_t key;
@@ -26,7 +28,7 @@ if (r_client_parse_auth_key(auth_key, &key) != RCLIENT_OK) {
 }
 
 r_client_config_t cfg = {0};
-cfg.tenant.dns_name = "tenant.example.com";
+cfg.tenant.dns_name = "api-key.example.com";
 cfg.tenant.key_id = key.key_id;
 cfg.tenant.auth.type = key.type;
 cfg.tenant.auth.secret = auth_key;
@@ -55,10 +57,10 @@ the duration of the call.
 
 ## Credentials
 
-`r_client_parse_auth_key` validates a tenant credential and returns:
+`r_client_parse_auth_key` validates an API key credential and returns:
 
 - `type`: one of `R_AUTH_COOKIE`, `R_AUTH_AES_GCM`
-- `key_id`: tenant identifier embedded in the key
+- `key_id`: identifier embedded in the key
 - `secret`: raw cookie/AES material for authenticated keys
 - `secret_len`: `32`
 - quota fields used by the client for local input clamping/validation
@@ -108,8 +110,8 @@ request from inside the completion callback is harmless and treated as a no-op.
 for a response. If all reports are filtered out by quotas, the function returns
 `RCLIENT_OK` without sending.
 
-nginx-style integrations should call this after request completion when a
-latency guard was applied.
+Event-loop integrations should call this after request completion when a latency
+guard was applied.
 
 ## Datagrams and Timers
 
@@ -121,7 +123,7 @@ The host owns network receive and timers:
 - call `r_client_cancel_request` if the HTTP/request context is abandoned
 
 AES response replay handling is tied to the request lifecycle. The authenticated
-`unique_id` in the tenant header must match an in-flight request; once that
+`unique_id` in the authenticated packet header must match an in-flight request; once that
 request completes, times out, or is canceled, later datagrams with the same
 `unique_id` are ignored. The authenticated timestamp is retained as protocol
 framing, but the client does not apply a separate clock-skew freshness check.
@@ -142,7 +144,7 @@ All errors are negative:
 - `RCLIENT_ERR_CONFIG`
 - `RCLIENT_ERR_NOMEM`
 
-`RCLIENT_ERR_CONFIG` covers invalid arguments and invalid tenant credentials.
+`RCLIENT_ERR_CONFIG` covers invalid arguments and invalid API key credentials.
 
 ## Compatibility
 

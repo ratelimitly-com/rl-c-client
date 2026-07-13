@@ -45,7 +45,7 @@ needed afterward.
 The client discovers servers with:
 
 ```text
-_ratelimitly._udp.<tenant-dns-name>
+_ratelimitly._udp.<configured-dns-name>
 ```
 
 For each SRV record, the host resolver must resolve the SRV target hostname to
@@ -82,8 +82,8 @@ after timeout handling if the request is still active.
 metrics labels. The caller must keep every borrowed buffer valid until the
 request callback fires or the request is canceled.
 
-This is the preferred path for nginx, where per-request data can live in the
-nginx request pool.
+This is the preferred path for embedders that already have per-request memory
+with a lifetime that extends to callback completion.
 
 ## Steering Feedback
 
@@ -94,22 +94,22 @@ contains a response that requests rebinding, the client calls:
 on_steering_feedback(ctx, false)
 ```
 
-Do not close or rebind the socket while a request is in flight. nginx-style
+Do not close or rebind the socket while a request is in flight. Event-loop
 integrations should mark a worker-level rebind flag and reopen the UDP socket
 after the current request has completed.
 
-## nginx Notes
+## Proxy Module Notes
 
-The `rl-nginx` module should wire the client as follows:
+A proxy or HTTP-server module can wire the client as follows:
 
-- `udp_send`: `ngx_send`/UDP socket wrapper
-- `now_ms`: `ngx_current_msec`
-- `log`: `ngx_log_error`
+- `udp_send`: module UDP socket wrapper
+- `now_ms`: event-loop clock in Unix epoch milliseconds
+- `log`: module logging facility
 - `on_steering_feedback`: mark socket rebind pending
-- `resolve_srv`: nginx resolver SRV query
-- `resolve_addrs`: nginx resolver A/AAAA query
-- request timers: `ngx_event_t` per request
-- request memory: nginx request pool plus borrowed API
+- `resolve_srv`: event-loop resolver SRV query
+- `resolve_addrs`: event-loop resolver A/AAAA query
+- request timers: one host timer per in-flight request
+- request memory: request pool plus borrowed API
 
 Rate-limit request failures should be mapped by the module according to its
 configured fail-open/fail-close policy. Latency-report send failures should be

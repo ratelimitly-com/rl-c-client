@@ -1,7 +1,7 @@
 # Contributing
 
-This repository is being prepared for public release. Until the license is
-confirmed, external contributions should be limited to discussion and review.
+This project is released under the MIT License. Contributions should keep the
+public API small, documented, and usable from a clean checkout.
 
 ## Development Setup
 
@@ -33,8 +33,9 @@ public API instead.
 
 ## Documentation
 
-Public docs should explain the C API and integration behavior. Do not copy the
-private full wire protocol into this repository.
+Public docs should explain the C API and integration behavior using only files
+in this repository. If a change exposes behavior that users need to rely on,
+document that behavior here at the API level.
 
 ## Pull Requests
 

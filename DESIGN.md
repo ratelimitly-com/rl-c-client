@@ -8,7 +8,7 @@ timers, DNS, and memory lifetimes.
 
 - Keep the public API small and stable.
 - Avoid blocking calls and internal threads.
-- Support nginx and other event-loop embedders.
+- Support proxies and other event-loop embedders.
 - Keep packet encoding, credential handling, authentication, response parsing,
   retry policy, and server selection inside the library.
 - Keep transport, resolver, timer, and logging ownership in the host.
@@ -23,26 +23,26 @@ The supported public headers are:
 Files under `src/` are private. They may be used by tests inside this repo, but
 external consumers must not include them.
 
-The credential parser is intentionally public because embedders such as nginx
-need to validate tenant keys at configuration load time. Low-level crypto and
-packet helpers remain private.
+The credential parser is intentionally public because embedders often need to
+validate credentials at configuration load time. Low-level crypto and packet
+helpers remain private.
 
 ## Authentication
 
-Tenant keys are Bech32 credentials:
+API key credentials are Bech32 strings:
 
 - `rl-cookie...`
 - `rl-aes...`
 
-The parser validates the credential shape, extracts the tenant key id, exposes
-quota values, and returns raw secret bytes for cookie/AES keys. The client also
-parses the configured credential during `r_client_create` and rejects mismatches
-between configured auth type, tenant id, and credential contents.
+The parser validates the credential shape, extracts the key id, exposes quota
+values, and returns raw secret bytes for cookie/AES keys. The client also parses
+the configured credential during `r_client_create` and rejects mismatches
+between configured auth type, key id, and credential contents.
 
 ## DNS and Routing
 
 The client asks the host resolver for SRV records under
-`_ratelimitly._udp.<tenant-dns-name>`, then asks for A/AAAA addresses for each
+`_ratelimitly._udp.<configured-dns-name>`, then asks for A/AAAA addresses for each
 SRV target. The host supplies DNS results; the client copies them and decides
 which targets to use for each attempt.
 
@@ -63,15 +63,16 @@ request buffers alive until completion.
 
 ## Latency Reports
 
-Latency reports are fire-and-forget. They reuse the same tenant auth and routing
+Latency reports are fire-and-forget. They reuse the same credential auth and routing
 machinery but do not wait for responses. Reports that exceed credential quotas
 are filtered before send.
 
-## Release Readiness
+## Documentation Boundary
 
-Before public release:
+If behavior is required to integrate with this library, document it in this
+repository. Public readers should be able to build, configure, and embed the
+client using only files in this repository.
 
-- choose and add the project license
-- keep CI green on a clean checkout
-- verify no docs require the private server repository
-- verify embedders compile using only public headers
+Documentation should describe packet-related behavior at the C API level. The
+packet encoder, parser, and crypto helpers remain implementation details unless
+a behavior is exposed through `include/r_client.h` or `include/r_client_io.h`.

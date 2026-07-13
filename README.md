@@ -1,24 +1,24 @@
 # Ratelimitly C Client
 
 `rl-c-client` is a small C11 client library for integrating applications,
-proxies, and event-loop based servers with Ratelimitly.
+proxies, and event-loop-driven servers with Ratelimitly.
 
 The library is intentionally host-loop agnostic. It builds request packets,
 parses responses, tracks request deadlines, applies response-selection policy,
-and handles tenant credentials. The embedding application owns sockets, DNS,
+and handles API key credentials. The embedding application owns sockets, DNS,
 timers, memory lifetime, and logging.
 
-The nginx module in `rl-nginx` is the primary integration example: it provides
-nginx UDP sockets, nginx resolver callbacks, nginx timers, and uses the borrowed
-request API to avoid per-request copies.
+Proxy modules and other high-throughput embedders typically provide UDP
+sockets, resolver callbacks, request timers, and use the borrowed request API to
+avoid per-request copies.
 
 ## Features
 
 - Async rate-limit checks over UDP.
 - Fire-and-forget latency reports for load-shedding feedback.
-- Tenant credentials in Bech32 form: `rl-cookie...` or `rl-aes...`.
+- API key credentials in Bech32 form: `rl-cookie...` or `rl-aes...`.
 - Cookie and AES-256-GCM authentication using OpenSSL libcrypto.
-- SRV discovery for `_ratelimitly._udp.<tenant-dns-name>`, followed by A/AAAA
+- SRV discovery for `_ratelimitly._udp.<configured-dns-name>`, followed by A/AAAA
   resolution for returned SRV targets.
 - Per-request deadlines, timeout/retry policy, quorum policy, and server
   response selection.
@@ -26,8 +26,11 @@ request API to avoid per-request copies.
 - Optional steering feedback callback for source-port rebinding.
 - Static and shared library builds.
 
-This repository documents the public C API and integration contract. It does
-not publish the complete private wire-protocol specification.
+This repository contains the public C API and integration contract. Applications
+do not construct or parse Ratelimitly packets directly; the library owns packet
+encoding, authentication, response parsing, retry policy, and server selection.
+Integrators provide credentials, resource IDs, latency data, UDP I/O, DNS, and
+timers through the APIs documented here.
 
 ## Build
 
@@ -100,9 +103,9 @@ Core operations:
 See [docs/api.md](docs/api.md) for the API contract and
 [IO_ABSTRACTION.md](IO_ABSTRACTION.md) for event-loop integration.
 
-## Tenant Credentials
+## API Key Credentials
 
-Ratelimitly tenant credentials are Bech32 strings:
+Ratelimitly API key credentials are Bech32 strings:
 
 - `rl-cookie...`: 32-byte cookie secret
 - `rl-aes...`: 32-byte AES-256-GCM key
@@ -113,8 +116,10 @@ private-network mode: the cookie is sent on the wire and does not authenticate
 the packet contents, so it must be used only where on-path modification and
 capture are outside the deployment threat model.
 
-Each tenant key also carries tenant quota values. Use
-`r_client_parse_auth_key` to validate a key before constructing config:
+The public C structures use `tenant` to describe the per-credential context:
+DNS name, key id, and authentication settings. Each credential also carries
+quota values. Use `r_client_parse_auth_key` to validate a key before
+constructing config:
 
 ```c
 r_auth_key_info_t info;
@@ -123,7 +128,7 @@ if (r_client_parse_auth_key(auth_key, &info) != RCLIENT_OK) {
 }
 
 r_client_config_t cfg = {0};
-cfg.tenant.dns_name = "tenant.example.com";
+cfg.tenant.dns_name = "api-key.example.com";
 cfg.tenant.key_id = info.key_id;
 cfg.tenant.auth.type = info.type;
 cfg.tenant.auth.secret = auth_key;
@@ -154,8 +159,9 @@ Response replay protection is scoped to this request lifecycle: AES responses
 must carry a matching authenticated `unique_id` for an in-flight request, and
 datagrams for completed, timed-out, or canceled requests are ignored.
 
-For nginx-style integrations, use `r_client_check_rate_limit_async_borrowed`
-when request buffers live until callback completion.
+For integrations with request-scoped memory pools, use
+`r_client_check_rate_limit_async_borrowed` when request buffers live until
+callback completion.
 
 ## ID Hashing
 
@@ -175,7 +181,7 @@ Examples:
 ```sh
 bin/perf_client --clients=50 --requests=10000
 bin/perf_client --duration=60 --auth=rl-aes1...
-bin/perf_client --srv=tenant.example.com --duration=30 --clients=50
+bin/perf_client --srv=api-key.example.com --duration=30 --clients=50
 RCLIENT_DNS_SERVER=127.0.0.1:5353 bin/perf_client
 bin/perf_client --attempt-timeout-ms=750 --retry-attempts=2 --retry-on=timeout
 ```
