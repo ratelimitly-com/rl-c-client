@@ -64,6 +64,17 @@ Run local tests:
 make test
 ```
 
+Build the optional loopback-only protocol fixture used by downstream
+integration tests:
+
+```sh
+make test-responder
+```
+
+Its test-support contract and deterministic scenarios are documented in
+[docs/test-responder.md](docs/test-responder.md). The executable is not part of
+the production library API and contains only synthetic credentials.
+
 Clean generated files:
 
 ```sh
