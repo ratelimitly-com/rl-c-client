@@ -7,4 +7,6 @@ compile_commands.json
 /tests/test_protocol
 /tests/test_client_quota
 /tests/test_public_api
+/tests/test_responder
 /bin/perf_client
+/bin/r_test_responder

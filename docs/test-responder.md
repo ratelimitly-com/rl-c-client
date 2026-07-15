@@ -94,9 +94,11 @@ A latency report record contains at least:
 {"event":"latency_report","sequence":2,"reports":1}
 ```
 
-The process must never print credential material, raw authenticated packets,
-bucket ids, or service ids. Counts, the optional metrics label, scenario name,
-and response disposition are sufficient for downstream assertions.
+The runtime event stream must never print credential material, raw
+authenticated packets, bucket ids, or service ids. The explicit
+`--print-nginx-config` mode is the only credential-output exception and labels
+the credential as synthetic. Counts, the optional metrics label, scenario
+name, and response disposition are sufficient for downstream assertions.
 
 Malformed or unauthenticated inputs produce an `input_rejected` record and no
 response. Invalid command-line configuration exits nonzero before writing a
