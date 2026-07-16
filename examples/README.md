@@ -105,3 +105,17 @@ cc -I../include -Icommon -I/path/to/mongoose mongoose.c \
 ```
 
 Send `GET /limited` to port 8000.
+
+## CivetWeb
+
+`civetweb.c` keeps `r_client_t` on one dedicated poll thread. CivetWeb worker
+threads enqueue checks and wait on per-request condition variables, so no two
+threads enter the client concurrently.
+
+```sh
+cc -I../include -Icommon $(pkg-config --cflags civetweb) civetweb.c \
+  common/rl_example.c ../librclient.a $(pkg-config --libs civetweb) \
+  -lcrypto -lresolv -pthread -o civetweb-example
+```
+
+Send `GET /limited` to port 8000.
