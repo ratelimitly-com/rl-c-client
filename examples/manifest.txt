@@ -1,2 +1,3 @@
 # name|kind|framework API marker
 libuv|loop|uv_run(
+libevent|loop|event_base_dispatch(

@@ -37,3 +37,14 @@ deadline to a one-shot `uv_timer_t`.
 cc -I../include -Icommon libuv.c common/rl_example.c ../librclient.a \
   $(pkg-config --cflags --libs libuv) -lcrypto -lresolv -pthread -o libuv-example
 ```
+
+## libevent
+
+`libevent.c` uses persistent `EV_READ` events for UDP ingress and an `evtimer`
+for the current request deadline.
+
+```sh
+cc -I../include -Icommon libevent.c common/rl_example.c ../librclient.a \
+  $(pkg-config --cflags --libs libevent) -lcrypto -lresolv -pthread \
+  -o libevent-example
+```
