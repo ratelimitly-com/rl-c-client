@@ -1,166 +1,285 @@
-# Integration Examples
+# Integration examples
 
-These examples connect `rl-c-client` to popular C event loops, HTTP servers,
-and parsers. Every example includes only the public headers under `include/`.
+These examples show how to drive `rl-c-client` from common C event loops, HTTP
+servers, and parsers. They use only the public client headers under `include/`.
+Each source file starts with a numbered flow and an ownership summary; read
+those comments before transplanting the integration into an application.
 
-| Example | Integration model | Demonstrates |
+| Example | Integration model | Main technique |
 | --- | --- | --- |
-| libuv | Native event loop | `uv_poll_t` plus one-shot `uv_timer_t` |
+| libuv | Native event loop | `uv_poll_t` plus a one-shot `uv_timer_t` |
 | libevent | Native event loop | Persistent `EV_READ` plus `evtimer` |
 | libhv | Native event loop | `hio_t` readiness plus `htimer_t` |
 | liburing | Linux completion ring | `IORING_OP_POLL_ADD` through liburing |
-| epoll | Linux readiness API | Direct `epoll_wait` deadline integration |
-| io_uring | Linux completion ring | Raw syscalls and shared ring mappings |
-| Mongoose | Single-thread HTTP loop | Pending HTTP connection on `mg_mgr_poll` |
-| CivetWeb | Worker-thread HTTP server | Queue and dedicated client thread |
+| epoll | Linux readiness API | Direct `epoll_wait` with a request deadline |
+| io_uring | Raw Linux completion ring | Syscalls and shared ring mappings |
+| Mongoose | Single-thread HTTP loop | Pending connection state on `mg_mgr_poll` |
+| CivetWeb | Worker-thread HTTP server | Queue plus a dedicated client thread |
 | GNU libmicrohttpd | External HTTP loop | Suspended connections and merged `select` |
-| H2O | Native HTTP event loop | Duplicate descriptor watchers and pool cleanup |
-| Lwan | Coroutine HTTP server | Yielding handlers and dedicated client thread |
+| H2O | Native HTTP event loop | Descriptor watchers and pool cleanup |
+| Lwan | Coroutine HTTP server | Yielding handlers and a dedicated client thread |
 | libreactor | Native HTTP event loop | Descriptor and timer objects on one thread |
 | facil.io | Native HTTP event loop | Pause/resume handles with retained timers |
 | Onion | Worker-thread HTTP server | `OCS_YIELD` long-poll lifecycle |
-| Kore | Task-based HTTP server | Sleeping request and task-channel result |
-| Ulfius | Threaded HTTP server | Simple per-callback client ownership |
-| llhttp | Parser only | Fragmented parsing and explicit backpressure |
+| Kore | Task-based HTTP server | Sleeping requests and task-channel results |
+| Ulfius | Threaded HTTP server | A private client in each endpoint callback |
+| llhttp | Parser only | Fragmented input and resumable backpressure |
 
-`common/rl_example.c` keeps repeated setup out of each integration. It owns
-nonblocking IPv4 and IPv6 UDP sockets, provides synchronous SRV plus A/AAAA
-resolution, translates readable socket events into `r_client_on_datagram`, and
-wraps request deadlines. Synchronous DNS keeps the examples small; production
-event-loop integrations should replace it with their asynchronous resolver.
+## Choose an integration pattern
 
-Required environment:
+The examples intentionally cover several ownership models. Choose based on the
+concurrency model already used by the host application.
+
+| Host architecture | Start with | Trade-off |
+| --- | --- | --- |
+| One event-loop thread | libuv, libevent, libhv, epoll, io_uring, Mongoose, H2O, libreactor, or facil.io | No client lock is needed when all calls stay on the loop thread. |
+| Worker-thread HTTP server | CivetWeb, Lwan, or Onion | A dedicated bridge thread serializes client access; queue and shutdown ownership need care. |
+| Isolated request tasks | Kore | Each task owns its client and reports through the framework's task channel. |
+| Lowest-complexity threaded handler | Ulfius | A private client is simple, but the handler waits and client setup repeats per request. |
+| HTTP parser without a loop | llhttp | The host must provide TCP I/O, UDP readiness, deadlines, and connection lifetime. |
+
+Prefer a single long-lived client per event loop or bridge thread in a busy
+service. The per-request Ulfius pattern is included because its ownership is
+especially easy to understand, not because it minimizes setup cost.
+
+## Shared adapter and configuration
+
+`common/rl_example.c` removes protocol boilerplate from the integrations. It:
+
+- owns nonblocking IPv4 and IPv6 UDP sockets;
+- performs SRV and A/AAAA discovery;
+- passes readable datagrams to `r_client_on_datagram()`; and
+- exposes the current request deadline to the host loop.
+
+DNS resolution is synchronous to keep the examples focused. Production event
+loops should normally substitute their asynchronous resolver during startup or
+configuration refresh.
+
+Set the tenant and authentication key before running an example:
 
 ```sh
 export RATELIMITLY_TENANT=tenant.example.com
 export RATELIMITLY_AUTH_KEY=rl-aes1...
 ```
 
-For local testing without DNS, point the shared adapter at the synthetic test
-responder:
+For local development, bypass DNS and point the adapter at the repository's
+synthetic responder:
 
 ```sh
 export RATELIMITLY_EXAMPLE_SERVER_HOST=127.0.0.1
 export RATELIMITLY_EXAMPLE_SERVER_PORT=39082
 ```
 
-The fixed endpoint variables are development-only. Normal deployments should
-leave them unset so the adapter discovers `_ratelimitly._udp.<tenant>` SRV
-records.
+Leave the fixed endpoint variables unset in a normal deployment. The adapter
+then discovers `_ratelimitly._udp.<tenant>` SRV records.
 
-The six loop examples perform one check, print `allowed` or `denied`, and exit.
-The HTTP examples listen on port 8000 unless their framework configuration says
-otherwise; send `GET /limited` to exercise them. Build commands below assume
-they are run from this directory after `make` has produced `../librclient.a`.
+Build the library from the repository root, then enter this directory:
 
-Run the repository's common-adapter and example-contract tests with:
+```sh
+make
+cd examples
+```
+
+The commands below assume `../librclient.a` exists. Exact framework compiler
+flags can vary by distribution; `pkg-config` commands use the names exported by
+the upstream projects or common Linux packages.
+
+Run all repository tests, including the example inventory and shared-adapter
+tests, from the repository root:
 
 ```sh
 make test
 ```
 
-## libuv
+## Event-loop examples
 
-`libuv.c` registers both UDP sockets with `uv_poll_t` and maps each request
-deadline to a one-shot `uv_timer_t`.
+The six examples in this section submit one check, print `allowed` or `denied`,
+and exit. They are deliberately small references for readiness and deadline
+integration rather than HTTP servers.
+
+### libuv
+
+**Model.** `libuv.c` registers both UDP sockets with `uv_poll_t`. A one-shot
+`uv_timer_t` is rearmed from the current request deadline after every event.
+The loop thread owns the client and all watcher callbacks.
 
 ```sh
 cc -I../include -Icommon libuv.c common/rl_example.c ../librclient.a \
-  $(pkg-config --cflags --libs libuv) -lcrypto -lresolv -pthread -o libuv-example
+  $(pkg-config --cflags --libs libuv) -lcrypto -lresolv -pthread \
+  -o libuv-example
+./libuv-example
 ```
 
-## libevent
+**Production note.** Keep watcher teardown on the loop thread. Do not destroy
+the shared client while a poll or timer callback can still run.
 
-`libevent.c` uses persistent `EV_READ` events for UDP ingress and an `evtimer`
-for the current request deadline.
+### libevent
+
+**Model.** `libevent.c` uses persistent `EV_READ` events for UDP ingress and an
+`evtimer` for the active request. The event-base thread owns the client.
 
 ```sh
 cc -I../include -Icommon libevent.c common/rl_example.c ../librclient.a \
   $(pkg-config --cflags --libs libevent) -lcrypto -lresolv -pthread \
   -o libevent-example
+./libevent-example
 ```
 
-## libhv
+**Production note.** Free every successfully created event, including partial
+initialization paths, before destroying the client.
 
-`libhv.c` attaches each client UDP descriptor with `hio_add(..., HV_READ)` and
-uses a one-shot `htimer_t` for request deadlines.
+### libhv
+
+**Model.** `libhv.c` attaches each client descriptor with
+`hio_add(..., HV_READ)` and maps the request deadline to a one-shot `htimer_t`.
+All client calls remain on the libhv loop thread.
 
 ```sh
 cc -I../include -Icommon libhv.c common/rl_example.c ../librclient.a \
   $(pkg-config --cflags --libs libhv) -lcrypto -lresolv -pthread \
   -o libhv-example
+./libhv-example
 ```
 
-## liburing (Linux)
+**Production note.** If application work can run on other threads, marshal it
+onto this loop instead of calling the shared client concurrently.
 
-`liburing.c` submits one `IORING_OP_POLL_ADD` per UDP socket and uses
-`io_uring_wait_cqe_timeout` to bound each wait by the Ratelimitly deadline.
+### liburing (Linux)
+
+**Model.** `liburing.c` submits one `IORING_OP_POLL_ADD` per UDP socket and
+uses `io_uring_wait_cqe_timeout()` to cap each wait at the request deadline.
+Each completion is consumed before the corresponding poll is rearmed.
 
 ```sh
 cc -I../include -Icommon liburing.c common/rl_example.c ../librclient.a \
   $(pkg-config --cflags --libs liburing) -lcrypto -lresolv -pthread \
   -o liburing-example
+./liburing-example
 ```
 
-## epoll (Linux)
+**Production note.** User-data values identify watcher completions. Reserve a
+non-overlapping namespace if the same ring also serves application I/O.
 
-`epoll.c` registers the nonblocking UDP descriptors directly and passes the
-current Ratelimitly deadline to `epoll_wait`.
+### epoll (Linux)
+
+**Model.** `epoll.c` registers the nonblocking UDP descriptors directly. It
+recomputes the timeout passed to `epoll_wait()` from the client deadline on
+every iteration.
 
 ```sh
 cc -I../include -Icommon epoll.c common/rl_example.c ../librclient.a \
   -lcrypto -lresolv -pthread -o epoll-example
+./epoll-example
 ```
 
-## io_uring without liburing (Linux)
+**Production note.** Treat `EPOLLERR` and `EPOLLHUP` as terminal watcher
+failures; repeatedly retrying a broken descriptor creates a busy loop.
 
-`io_uring.c` uses only Linux UAPI headers and syscalls. It maps submission and
-completion rings directly, submits `IORING_OP_POLL_ADD`, and supplies the
-request deadline through `IORING_ENTER_EXT_ARG`.
+### io_uring without liburing (Linux)
+
+**Model.** `io_uring.c` uses Linux UAPI headers and syscalls directly. It maps
+the submission and completion rings, submits `IORING_OP_POLL_ADD`, and supplies
+the deadline through `IORING_ENTER_EXT_ARG`.
 
 ```sh
 cc -I../include -Icommon io_uring.c common/rl_example.c ../librclient.a \
   -lcrypto -lresolv -pthread -o io-uring-example
+./io-uring-example
 ```
 
-## Mongoose
+**Production note.** This is an educational raw-ring implementation. liburing
+is usually the safer compatibility layer for production code, especially when
+supporting several kernel versions or sharing a ring with other operations.
 
-`mongoose.c` keeps HTTP connections pending while checks run. The Mongoose
-poll loop drains Ratelimitly UDP sockets, advances per-request deadlines, and
-cancels a check if its HTTP connection closes.
+## HTTP framework examples
+
+Unless a section says otherwise, these examples listen on port 8000. Send
+`GET /limited` to run a check. Non-GET requests are rejected before starting a
+check, and an abandoned request is cancelled where the framework exposes a
+reliable disconnect lifecycle.
+
+### Mongoose
+
+**Model.** `mongoose.c` leaves an HTTP connection pending while its check runs.
+`mg_mgr_poll()` drains client UDP sockets, advances request deadlines, and
+cancels the check if the connection closes. One Mongoose thread owns all state.
 
 ```sh
-cc -I../include -Icommon -I/path/to/mongoose mongoose.c \
-  common/rl_example.c /path/to/mongoose/mongoose.c ../librclient.a \
-  -lcrypto -lresolv -pthread -o mongoose-example
+MONGOOSE=/path/to/mongoose
+cc -I../include -Icommon -I"$MONGOOSE" mongoose.c common/rl_example.c \
+  "$MONGOOSE/mongoose.c" ../librclient.a -lcrypto -lresolv -pthread \
+  -o mongoose-example
+./mongoose-example
+curl -i http://127.0.0.1:8000/limited
 ```
 
-Send `GET /limited` to port 8000.
+**Production note.** The sample uses a 10 ms Mongoose poll interval. A host
+with stricter latency or power requirements should derive its wait from both
+Mongoose work and the nearest client deadline.
 
-## H2O
+### CivetWeb
 
-`h2o.c` wraps duplicate UDP descriptors with `H2O_SOCKET_FLAG_DONT_READ`, so
-H2O reports readiness while `rl-c-client` consumes each datagram. Request-pool
-destructors cancel abandoned checks; one-shot H2O timers enforce deadlines.
+**Model.** `civetweb.c` keeps the client on one dedicated poll thread. CivetWeb
+worker threads enqueue jobs and wait on per-request condition variables, so no
+two threads enter the client concurrently. Server workers stop before bridge
+state is destroyed.
+
+```sh
+cc -I../include -Icommon $(pkg-config --cflags civetweb) civetweb.c \
+  common/rl_example.c ../librclient.a $(pkg-config --libs civetweb) \
+  -lcrypto -lresolv -pthread -o civetweb-example
+./civetweb-example
+curl -i http://127.0.0.1:8000/limited
+```
+
+**Production note.** Waiting consumes one CivetWeb worker per in-flight check.
+Size the worker pool for the expected concurrency or adapt the bridge to an
+asynchronous response API if the service holds many simultaneous requests.
+
+### GNU libmicrohttpd
+
+**Model.** `libmicrohttpd.c` runs MHD in external-`select` mode. It suspends an
+HTTP connection during the asynchronous check, resumes it from the callback,
+and merges MHD's timeout with the client request deadline.
+
+```sh
+cc -I../include -Icommon libmicrohttpd.c common/rl_example.c \
+  ../librclient.a $(pkg-config --cflags --libs libmicrohttpd) \
+  -lcrypto -lresolv -pthread -o libmicrohttpd-example
+./libmicrohttpd-example
+curl -i http://127.0.0.1:8000/limited
+```
+
+**Production note.** Always call the MHD timeout API again after processing
+activity; both MHD and the client can move their nearest deadline.
+
+### H2O
+
+**Model.** `h2o.c` wraps duplicate UDP descriptors with
+`H2O_SOCKET_FLAG_DONT_READ`, so H2O reports readiness while the common adapter
+consumes datagrams from the original sockets. Request-pool destructors cancel
+abandoned checks, and one-shot H2O timers enforce deadlines.
 
 ```sh
 cc -I../include -Icommon h2o.c common/rl_example.c ../librclient.a \
   $(pkg-config --cflags --libs libh2o-evloop) \
   -lcrypto -lresolv -pthread -o h2o-example
+./h2o-example
+curl -i http://127.0.0.1:8000/limited
 ```
 
-Send `GET /limited` to port 8000.
+**Production note.** The duplicate descriptors transfer readiness observation,
+not datagram ownership. Only the adapter should read the original client
+sockets, and its state must outlive every H2O watcher.
 
-## Lwan
+### Lwan
 
-`lwan.c` keeps client state off Lwan's small coroutine stacks. A dedicated
-thread owns rl-c-client and its UDP sockets; handlers enqueue checks and yield
-with `lwan_request_sleep()` until completion. Reference-counted jobs remain safe
-when an HTTP peer disconnects while a check is active.
-Lwan's built-in status table omits 429, so a denied check returns 403 instead;
-returning an unknown numeric status would trip Lwan's status-table assertion.
+**Model.** `lwan.c` keeps client state off Lwan's small coroutine stacks. A
+dedicated thread owns the client and UDP sockets; handlers enqueue checks and
+yield with `lwan_request_sleep()` until completion. Reference-counted jobs
+remain valid if an HTTP peer disconnects during a check.
 
-Build Lwan, then compile against its public headers and library:
+Build Lwan, then compile against its generated configuration and static library:
 
 ```sh
 LWAN=/path/to/lwan
@@ -171,37 +290,43 @@ cc -I../include -Icommon -I"$LWAN/src/lib" \
   -Wl,--whole-archive "$LWAN_BUILD/src/lib/liblwan.a" \
   -Wl,--no-whole-archive -lcrypto -lresolv -lz -lzstd -ldl -lm -pthread \
   -o lwan-example
+./lwan-example
+curl -i http://127.0.0.1:8080/limited
 ```
 
-The whole-archive flags retain Lwan's linker-discovered module table when using
-its static library. A shared-library installation can use its generated
-`lwan.pc` file instead.
+The whole-archive flags retain Lwan's linker-discovered module table. A shared
+installation can instead use its generated `lwan.pc`. Lwan listens on port
+8080 by default; change its normal configuration if that port is unsuitable.
 
-Set Lwan's listener in `lwan.conf`, then send `GET /limited`.
+**Production note.** Lwan's public status table omits 429, so this example
+returns 403 for a denied check. Using an unknown numeric status triggers an
+assertion in supported Lwan versions.
 
-## libreactor
+### libreactor
 
-`libreactor.c` runs HTTP, UDP readiness, and per-request deadlines on one
-libreactor thread. Duplicate UDP descriptors transfer only readiness ownership;
-the common adapter still consumes datagrams from its original sockets. The
-example also defers synchronous completions to avoid freeing callback state
-while an rl-c-client operation remains on the stack.
+**Model.** `libreactor.c` runs HTTP, UDP readiness, and deadlines on one reactor
+thread. Duplicate descriptors observe readiness while the common adapter owns
+datagram reads. Synchronous completions are deferred so callback state is not
+freed while a client operation remains on the stack.
 
 ```sh
 cc -I../include -Icommon $(pkg-config --cflags libreactor) libreactor.c \
   common/rl_example.c ../librclient.a $(pkg-config --libs libreactor) \
   -lssl -lcrypto -lresolv -pthread -o libreactor-example
+./libreactor-example
+curl -i http://127.0.0.1:8000/limited
 ```
 
-Send `GET /limited` to port 8000.
+**Production note.** Preserve deferred completion if surrounding code can
+complete a request synchronously; immediate destruction would make reentrant
+callbacks unsafe.
 
-## facil.io
+### facil.io
 
-`facil_io.c` attaches duplicate UDP descriptors as facil.io protocols and uses
-the framework's HTTP pause/resume API for asynchronous checks. One-shot timer
-callbacks retain request state until `on_finish`, preventing use-after-free when
-a UDP response beats its deadline. The example uses one event-loop thread to
-keep all rl-c-client access serialized.
+**Model.** `facil_io.c` attaches duplicate UDP descriptors as facil.io
+protocols and uses HTTP pause/resume for asynchronous checks. Timer callbacks
+retain request state through `on_finish`, preventing a use-after-free when a
+UDP response races its deadline. One event-loop thread serializes client calls.
 
 ```sh
 FACIL=/path/to/facil.io
@@ -213,35 +338,40 @@ cc -I../include -Icommon -I"$FACIL/lib" -I"$FACIL/lib/facil" \
   facil_io.c common/rl_example.c ../librclient.a \
   "$FACIL_BUILD/libfacil.io.a" -lcrypto -lssl -lresolv -ldl -lm -pthread \
   -o facil-io-example
+./facil-io-example
+curl -i http://127.0.0.1:8000/limited
 ```
 
-Send `GET /limited` to port 8000.
+**Production note.** Keep the explicit retain/release pairs around scheduled
+timers. A failed schedule must release the timer's reference immediately.
 
-## Onion
+### Onion
 
-`onion.c` returns `OCS_YIELD` so Onion's worker pool never blocks on a
-rate-limit check. A dedicated client thread owns rl-c-client and completes the
-yielded response using Onion's documented long-poll lifecycle. Shutdown cancels
-active checks and releases every yielded request exactly once.
+**Model.** `onion.c` returns `OCS_YIELD`, so Onion workers do not synchronously
+poll client sockets. A dedicated thread owns the client and completes each
+yielded response through Onion's long-poll lifecycle. Shutdown cancels active
+checks and releases every yielded request exactly once.
 
 ```sh
 cc -I../include -Icommon $(pkg-config --cflags onion) onion.c \
   common/rl_example.c ../librclient.a $(pkg-config --libs onion) \
   -lcrypto -lresolv -pthread -o onion-example
+./onion-example
+curl -i http://127.0.0.1:8000/limited
 ```
 
-Send `GET /limited` to port 8000.
+**Production note.** Keep response writes in the completion path documented by
+the Onion version being used. A bridge failure must wake all yielded requests
+with an error rather than leaving them suspended.
 
-## Kore
+### Kore
 
-`kore.c` runs each exchange as a `kore_task`, putting the HTTP request to sleep
-until the task channel reports a result. Task-local client ownership keeps Kore
-workers nonblocking and avoids cross-thread client access. The Linux build also
-declares the minimal extra socket syscalls required by Kore's seccomp filter.
-`kore.conf` provides a plain-HTTP route on port 8000.
+**Model.** `kore.c` runs each exchange as a `kore_task`, putting the HTTP
+request to sleep until the task channel reports a result. Task-local client
+ownership avoids cross-thread access. The Linux module also declares the extra
+socket syscalls required by Kore's seccomp filter.
 
-Build Kore with task support and its no-TLS backend, then build the example as
-a module:
+Build Kore with task support and its no-TLS backend, then build the module:
 
 ```sh
 make -C /path/to/kore TASKS=1 TLS_BACKEND=none
@@ -249,68 +379,59 @@ cc -fPIC -shared -DKORE_USE_TASKS -I/path/to/kore/include \
   -I../include -Icommon kore.c common/rl_example.c ../librclient.a \
   -lcrypto -lresolv -pthread -o kore-example.so
 kore -fnc kore.conf
+curl -i http://127.0.0.1:8000/limited
 ```
 
-Send `GET /limited` to port 8000.
+**Production note.** `kore.conf` grants the module's plain-HTTP route and task
+thread count. Reconcile the syscall declarations with a hardened deployment's
+own Kore build and sandbox policy.
 
-## Ulfius
+### Ulfius
 
-`ulfius.c` gives each endpoint callback a private client and polls its UDP
-sockets on the libmicrohttpd connection thread. This straightforward ownership
-model avoids shared mutable state and does not block Ulfius's listener. The
-source points high-volume services to the dedicated-thread pattern used by the
-Onion and CivetWeb examples.
+**Model.** `ulfius.c` gives each endpoint callback a private client and polls
+its UDP sockets on that callback's libmicrohttpd worker. This avoids shared
+mutable client state and does not block the listener thread.
 
 ```sh
 cc -I../include -Icommon $(pkg-config --cflags libulfius) ulfius.c \
   common/rl_example.c ../librclient.a $(pkg-config --libs libulfius) \
   -lcrypto -lresolv -pthread -o ulfius-example
+./ulfius-example
+curl -i http://127.0.0.1:8000/limited
 ```
 
-Send `GET /limited` to port 8000.
+**Production note.** One worker remains occupied and one client is initialized
+per request. For high concurrency, prefer a shared dedicated-thread bridge such
+as the CivetWeb or Onion pattern.
 
-## llhttp (parser only)
+## llhttp parser adapter
 
-`llhttp.c` is intentionally not an event loop. It incrementally collects URL
-fragments, strips query data from the bucket key, and starts a check when
-llhttp reports a complete request. The host owns UDP readiness and deadlines;
-pair this adapter with any loop example above. A second pipelined request is
-backpressured with `HPE_USER` until the first check completes.
+`llhttp` parses HTTP but does not provide an event loop. `llhttp.c` collects URL
+fragments, removes query data from the bucket key, and starts a check when a
+request completes. The companion `llhttp_adapter.h` is the host-facing API.
 
-Compile it as part of the host that already embeds llhttp:
+Compile both into a host that already builds llhttp:
 
 ```sh
-cc -I/path/to/llhttp/include -I../include -Icommon -c llhttp.c
+cc -I. -I/path/to/llhttp/include -I../include -Icommon -c llhttp.c
 ```
 
-Call `rl_llhttp_adapter_init()` once per connection,
-`rl_llhttp_adapter_feed()` for each received byte span, and
-`rl_llhttp_adapter_dispose()` when the connection closes.
+The host lifecycle is:
 
-## GNU libmicrohttpd
+1. Call `rl_llhttp_adapter_init()` once per accepted connection and check its
+   return status.
+2. Pass every TCP fragment to `rl_llhttp_adapter_feed()`.
+3. If it returns `HPE_PAUSED`, keep the unconsumed bytes beginning at
+   `llhttp_get_error_pos()`. One check is already active.
+4. Drive the shared client's UDP descriptors and the adapter request's deadline
+   using one of the loop patterns above.
+5. The result callback runs after the adapter calls `llhttp_resume()`. Feed the
+   retained bytes only after that callback begins.
+6. Call `rl_llhttp_adapter_finish()` on clean TCP EOF, then
+   `rl_llhttp_adapter_dispose()` before releasing connection state.
 
-`libmicrohttpd.c` runs MHD in external-select mode. It suspends each HTTP
-connection while its asynchronous check is active, resumes it from the
-Ratelimitly callback, and merges MHD plus request deadlines into one `select`.
-
-```sh
-cc -I../include -Icommon libmicrohttpd.c common/rl_example.c \
-  ../librclient.a $(pkg-config --cflags --libs libmicrohttpd) \
-  -lcrypto -lresolv -pthread -o libmicrohttpd-example
-```
-
-Send `GET /limited` to port 8000.
-
-## CivetWeb
-
-`civetweb.c` keeps `r_client_t` on one dedicated poll thread. CivetWeb worker
-threads enqueue checks and wait on per-request condition variables, so no two
-threads enter the client concurrently.
-
-```sh
-cc -I../include -Icommon $(pkg-config --cflags civetweb) civetweb.c \
-  common/rl_example.c ../librclient.a $(pkg-config --libs civetweb) \
-  -lcrypto -lresolv -pthread -o civetweb-example
-```
-
-Send `GET /limited` to port 8000.
+The pause is resumable backpressure for a pipelined next request; validation
+failures use `HPE_USER` and are terminal parser errors. The host owns TCP I/O,
+UDP readiness, deadlines, and the adapter allocation. The shared client may be
+used by multiple adapters only when the host serializes all access on one event
+loop thread.

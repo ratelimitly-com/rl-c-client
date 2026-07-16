@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MANIFEST="$ROOT/examples/manifest.txt"
+README="${R_EXAMPLE_README_PATH:-$ROOT/examples/README.md}"
 
 fail() {
   echo "test_examples: $*" >&2
@@ -25,6 +26,10 @@ while IFS='|' read -r name kind marker; do
     || fail "$name does not submit rate-limit checks"
   grep -Fq -- "$marker" "$source_file" \
     || fail "$name does not use expected $marker API"
+  grep -Fq -- ' * Flow' "$source_file" \
+    || fail "$name does not explain its control flow"
+  grep -Fq -- ' * Ownership:' "$source_file" \
+    || fail "$name does not explain resource ownership"
 
   case "$kind" in
     loop|framework)
@@ -57,3 +62,12 @@ bridge_stop_line="$(grep -nF -- 'bridge_stop(&bridge);' "$civet_source" | tail -
   || fail "llhttp adapter has no host-facing header"
 grep -Fq -- '#include "llhttp_adapter.h"' "$ROOT/examples/llhttp.c" \
   || fail "llhttp source does not use its host-facing header"
+
+# Keep the adoption guide aligned with the supported inventory and present the
+# examples in the same progression: loops, frameworks, then parser-only code.
+expected_headings=$'libuv\nlibevent\nlibhv\nliburing (Linux)\nepoll (Linux)\nio_uring without liburing (Linux)\nMongoose\nCivetWeb\nGNU libmicrohttpd\nH2O\nLwan\nlibreactor\nfacil.io\nOnion\nKore\nUlfius'
+actual_headings="$(sed -n 's/^### //p' "$README")"
+[[ "$actual_headings" == "$expected_headings" ]] \
+  || fail "README example headings are missing or out of order"
+grep -Fq -- 'If it returns `HPE_PAUSED`' "$README" \
+  || fail "README does not explain resumable llhttp backpressure"
