@@ -106,6 +106,20 @@ cc -I../include -Icommon -I/path/to/mongoose mongoose.c \
 
 Send `GET /limited` to port 8000.
 
+## H2O
+
+`h2o.c` wraps duplicate UDP descriptors with `H2O_SOCKET_FLAG_DONT_READ`, so
+H2O reports readiness while `rl-c-client` consumes each datagram. Request-pool
+destructors cancel abandoned checks; one-shot H2O timers enforce deadlines.
+
+```sh
+cc -I../include -Icommon h2o.c common/rl_example.c ../librclient.a \
+  $(pkg-config --cflags --libs libh2o-evloop) \
+  -lcrypto -lresolv -pthread -o h2o-example
+```
+
+Send `GET /limited` to port 8000.
+
 ## GNU libmicrohttpd
 
 `libmicrohttpd.c` runs MHD in external-select mode. It suspends each HTTP
