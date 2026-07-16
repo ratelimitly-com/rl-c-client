@@ -13,15 +13,17 @@
 #include "common/rl_example.h"
 
 /*
- * GNU libmicrohttpd external-loop integration
- * -------------------------------------------
- * MHD contributes its read/write/error descriptor sets; the adapter adds its
- * UDP descriptors. One select() then waits on both systems using the earliest
- * MHD or rl-c-client deadline.
+ * Flow
+ * ----
+ * 1. MHD contributes HTTP fd_sets; the adapter adds client UDP descriptors.
+ * 2. One select() waits using the earliest MHD or rl-c-client deadline.
+ * 3. GET /limited starts a check and suspends its HTTP connection.
+ * 4. Completion records the result and resumes the connection.
+ * 5. MHD invokes the handler again, which sends HTTP 200, 429, or 503.
  *
- * An HTTP connection is suspended while its asynchronous check is pending.
- * The completion callback records the result and resumes the connection; MHD
- * invokes the access handler again, where the stored result becomes a response.
+ * Ownership: MHD owns connections and per-connection request_context pointers.
+ * The app owns rl-c-client and the pending list. MHD completion notification
+ * cancels abandoned work before freeing request state.
  */
 typedef struct microhttpd_app microhttpd_app_t;
 
@@ -90,6 +92,29 @@ static enum MHD_Result queue_text(
     return result;
 }
 
+static enum MHD_Result queue_method_not_allowed(
+    struct MHD_Connection *connection
+) {
+    static const char body[] = "method not allowed\n";
+    struct MHD_Response *response = MHD_create_response_from_buffer(
+        sizeof(body) - 1,
+        (void *)body,
+        MHD_RESPMEM_PERSISTENT
+    );
+    if (!response) {
+        return MHD_NO;
+    }
+    MHD_add_response_header(response, MHD_HTTP_HEADER_CONTENT_TYPE, "text/plain");
+    MHD_add_response_header(response, MHD_HTTP_HEADER_ALLOW, MHD_HTTP_METHOD_GET);
+    enum MHD_Result result = MHD_queue_response(
+        connection,
+        MHD_HTTP_METHOD_NOT_ALLOWED,
+        response
+    );
+    MHD_destroy_response(response);
+    return result;
+}
+
 static enum MHD_Result handle_request(
     void *user,
     struct MHD_Connection *connection,
@@ -119,8 +144,11 @@ static enum MHD_Result handle_request(
         *upload_data_size = 0;
         return MHD_YES;
     }
-    if (strcmp(method, MHD_HTTP_METHOD_GET) != 0 || strcmp(url, "/limited") != 0) {
+    if (strcmp(url, "/limited") != 0) {
         return queue_text(connection, MHD_HTTP_NOT_FOUND, "not found\n");
+    }
+    if (strcmp(method, MHD_HTTP_METHOD_GET) != 0) {
+        return queue_method_not_allowed(connection);
     }
     if (pending->done) {
         if (pending->status != RCLIENT_OK) {
@@ -286,7 +314,10 @@ int main(void) {
     }
 
     microhttpd_app_t app = {0};
-    if (rl_example_client_init(&app.client, &options) != RCLIENT_OK) {
+    int status = rl_example_client_init(&app.client, &options);
+    if (status != RCLIENT_OK) {
+        fprintf(stderr, "client initialization failed: %s (%d)\n",
+            rl_example_status_name(status), status);
         return EXIT_FAILURE;
     }
     app.daemon = MHD_start_daemon(
@@ -302,17 +333,19 @@ int main(void) {
         MHD_OPTION_END
     );
     if (!app.daemon) {
+        fprintf(stderr, "failed to start libmicrohttpd on port 8000\n");
         rl_example_client_destroy(&app.client);
         return EXIT_FAILURE;
     }
 
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
-    int status = run_loop(&app);
+    status = run_loop(&app);
     MHD_stop_daemon(app.daemon);
     rl_example_client_destroy(&app.client);
     if (status != RCLIENT_OK) {
-        fprintf(stderr, "event loop failed: %d\n", status);
+        fprintf(stderr, "event loop failed: %s (%d)\n",
+            rl_example_status_name(status), status);
         return EXIT_FAILURE;
     }
     return EXIT_SUCCESS;
