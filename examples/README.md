@@ -172,6 +172,21 @@ cc -I../include -Icommon -I/path/to/facil.io/lib/facil \
 
 Send `GET /limited` to port 8000.
 
+## Onion
+
+`onion.c` returns `OCS_YIELD` so Onion's worker pool never blocks on a
+rate-limit check. A dedicated client thread owns rl-c-client and completes the
+yielded response using Onion's documented long-poll lifecycle. Shutdown cancels
+active checks and releases every yielded request exactly once.
+
+```sh
+cc -I../include -Icommon $(pkg-config --cflags onion) onion.c \
+  common/rl_example.c ../librclient.a $(pkg-config --libs onion) \
+  -lcrypto -lresolv -pthread -o onion-example
+```
+
+Send `GET /limited` to port 8000.
+
 ## GNU libmicrohttpd
 
 `libmicrohttpd.c` runs MHD in external-select mode. It suspends each HTTP
