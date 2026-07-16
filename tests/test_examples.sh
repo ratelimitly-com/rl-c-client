@@ -7,6 +7,7 @@ README="${R_EXAMPLE_README_PATH:-$ROOT/examples/README.md}"
 ROOT_README="$ROOT/README.md"
 API_GUIDE="$ROOT/docs/api.md"
 IO_GUIDE="$ROOT/IO_ABSTRACTION.md"
+COMMON_ADAPTER="$ROOT/examples/common/rl_example.c"
 
 fail() {
   echo "test_examples: $*" >&2
@@ -105,3 +106,9 @@ grep -Fq -- '## Clock domains' "$IO_GUIDE" \
   || fail "I/O guide does not distinguish client and measurement clocks"
 grep -Fq -- '`CLOCK_MONOTONIC`' "$IO_GUIDE" \
   || fail "I/O guide does not specify monotonic latency measurement"
+
+grep -Fq -- 'clock_gettime(CLOCK_REALTIME' "$COMMON_ADAPTER" \
+  || fail "shared adapter does not provide Unix-epoch client time"
+grep -Fq -- 'clock_gettime(CLOCK_MONOTONIC' \
+  "$ROOT/examples/latency_tracker.c" \
+  || fail "latency workflow does not use monotonic duration time"

@@ -21,12 +21,13 @@
 #define RL_EXAMPLE_DNS_PACKET_SIZE 65536
 #define RL_EXAMPLE_FIXED_TARGET "s-1.ratelimitly-example.invalid"
 
-/* rl-c-client deadlines use milliseconds on the same clock supplied here. */
+/* Public r_io_ops_t time uses Unix-epoch milliseconds. Client deadlines are
+ * absolute values in this same domain. Measured operation durations should use
+ * CLOCK_MONOTONIC separately, as examples/latency_tracker.c demonstrates. */
 static uint64_t example_now_ms(void *context) {
     (void)context;
     struct timespec now;
-    /* Monotonic time cannot jump when wall-clock time is corrected. */
-    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+    if (clock_gettime(CLOCK_REALTIME, &now) != 0) {
         return 0;
     }
     return (uint64_t)now.tv_sec * 1000u + (uint64_t)now.tv_nsec / 1000000u;
