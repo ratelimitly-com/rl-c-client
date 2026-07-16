@@ -59,3 +59,14 @@ cc -I../include -Icommon libhv.c common/rl_example.c ../librclient.a \
   $(pkg-config --cflags --libs libhv) -lcrypto -lresolv -pthread \
   -o libhv-example
 ```
+
+## liburing (Linux)
+
+`liburing.c` submits one `IORING_OP_POLL_ADD` per UDP socket and uses
+`io_uring_wait_cqe_timeout` to bound each wait by the Ratelimitly deadline.
+
+```sh
+cc -I../include -Icommon liburing.c common/rl_example.c ../librclient.a \
+  $(pkg-config --cflags --libs liburing) -lcrypto -lresolv -pthread \
+  -o liburing-example
+```
