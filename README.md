@@ -64,7 +64,7 @@ Run local tests:
 make test
 ```
 
-Build the optional loopback-only protocol fixture used by downstream
+Build the optional deterministic protocol fixture used by downstream
 integration tests:
 
 ```sh

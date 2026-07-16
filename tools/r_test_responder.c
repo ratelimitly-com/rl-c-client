@@ -48,7 +48,7 @@ static void request_shutdown(int signal_number) {
 
 static void usage(FILE *stream) {
     fprintf(stream,
-        "Usage: r_test_responder --listen=<loopback:port> [options]\n"
+        "Usage: r_test_responder --listen=<IPv4:port|[IPv6]:port> [options]\n"
         "\n"
         "Options:\n"
         "  --scenario=<name>       allow, deny, guard-pass, guard-deny, quota,\n"
@@ -156,7 +156,7 @@ static int parse_options(int argc, char **argv, responder_options_t *options) {
         }
     }
 
-    if (!options->print_nginx_config && !options->listen) {
+    if (!options->listen) {
         fprintf(stderr, "--listen is required\n");
         return -1;
     }
@@ -200,18 +200,13 @@ static int parse_listen_address(const char *text, listen_address_t *address) {
     memset(address, 0, sizeof(*address));
     struct sockaddr_in *ipv4 = (struct sockaddr_in *)&address->storage;
     if (inet_pton(AF_INET, host, &ipv4->sin_addr) == 1) {
-        uint32_t value = ntohl(ipv4->sin_addr.s_addr);
-        if ((value >> 24) != 127u) {
-            return -1;
-        }
         ipv4->sin_family = AF_INET;
         ipv4->sin_port = htons((uint16_t)port);
         address->family = AF_INET;
         address->len = sizeof(*ipv4);
     } else {
         struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)&address->storage;
-        if (inet_pton(AF_INET6, host, &ipv6->sin6_addr) != 1
-            || !IN6_IS_ADDR_LOOPBACK(&ipv6->sin6_addr)) {
+        if (inet_pton(AF_INET6, host, &ipv6->sin6_addr) != 1) {
             return -1;
         }
         ipv6->sin6_family = AF_INET6;
@@ -313,10 +308,10 @@ int main(int argc, char **argv) {
         usage(stderr);
         return 2;
     }
-    const char *listen = options.listen ? options.listen : "127.0.0.1:39080";
+    const char *listen = options.listen;
     listen_address_t address;
     if (parse_listen_address(listen, &address) != 0) {
-        fprintf(stderr, "listen address must be an explicit loopback IP and nonzero port\n");
+        fprintf(stderr, "listen address must be an explicit numeric IP and nonzero port\n");
         return 2;
     }
     if (options.print_nginx_config) {

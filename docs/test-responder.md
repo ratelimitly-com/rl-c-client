@@ -1,8 +1,8 @@
 # Test responder contract
 
-`r_test_responder` is a deterministic, loopback-only UDP fixture for testing
-applications that embed `rl-c-client`. It is test support, not a RateLimitly
-server and not part of the production C library API.
+`r_test_responder` is a deterministic UDP fixture for testing applications that
+embed `rl-c-client`. It is test support, not a RateLimitly server and not part
+of the production C library API.
 
 The responder lives in this repository so packet encoding, authentication, and
 protocol changes remain next to their source of truth. Downstream tests invoke
@@ -17,7 +17,7 @@ Build the fixture explicitly:
 make test-responder
 ```
 
-Start one deterministic scenario on an explicit loopback address:
+Start one deterministic scenario on an explicit address and port:
 
 ```sh
 ./bin/r_test_responder \
@@ -25,8 +25,20 @@ Start one deterministic scenario on an explicit loopback address:
   --scenario=allow
 ```
 
-The process must reject wildcard and non-loopback listen addresses. It must not
-open a socket unless `--listen` is present.
+`--listen` is process control for the test fixture, not a RateLimitly server
+command-line option or a protocol-level address restriction. A production
+RateLimitly server does not expose this fixture flag; endpoint selection belongs
+to the server deployment and runtime. The fixture is instead launched directly
+by a test harness, so the harness must supply its numeric IPv4 or bracketed IPv6
+bind address and nonzero UDP port, then direct its DNS/SRV setup and client to a
+reachable endpoint. This avoids a hidden endpoint or port default and lets tests
+choose their own network topology.
+
+All explicitly supplied numeric bind addresses, including wildcard addresses,
+are valid. The example and automated suite choose `127.0.0.1` only to keep
+routine test traffic on the same host; that choice states no requirement about
+a RateLimitly server. The responder must not open a socket unless `--listen` is
+present.
 
 On startup it writes exactly one readiness record to standard output:
 

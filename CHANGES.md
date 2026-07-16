@@ -5,8 +5,10 @@ release tag, use git history as the detailed changelog.
 
 ## Unreleased
 
-- Specified a versioned, loopback-only test responder contract for downstream
-  integration suites without expanding the production C API.
+- Specified a versioned test responder contract for downstream integration
+  suites without expanding the production C API. Its required `--listen`
+  endpoint is test-harness process control, not a RateLimitly server option or
+  address restriction.
 - Added the responder executable with synthetic AES/cookie authentication,
   deterministic allow/deny/guard/quota/malformed scenarios, JSONL observations,
   latency-report capture, steering feedback, and clean signal shutdown.

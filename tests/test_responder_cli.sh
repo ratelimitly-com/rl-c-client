@@ -24,11 +24,13 @@ fail() {
 expect_start_and_stop() {
   local scenario="$1"
   local auth="$2"
-  local output="$TMP_DIR/${scenario}-${auth}.out"
-  local error="$TMP_DIR/${scenario}-${auth}.err"
+  local host="${3:-127.0.0.1}"
+  local case_name="${scenario}-${auth}-${host//:/_}"
+  local output="$TMP_DIR/${case_name}.out"
+  local error="$TMP_DIR/${case_name}.err"
 
   "$RESPONDER" \
-    "--listen=127.0.0.1:$PORT" \
+    "--listen=$host:$PORT" \
     "--scenario=$scenario" \
     "--auth=$auth" \
     --delay-ms=1 \
@@ -50,6 +52,8 @@ expect_start_and_stop() {
     sed -n '1,40p' "$error" >&2
     fail "$scenario/$auth did not become ready"
   fi
+  grep -Fq "\"address\":\"$host\"" "$output" \
+    || fail "$scenario/$auth reported the wrong bind address"
 
   if [[ "$scenario" == "allow" && "$auth" == "aes" ]]; then
     printf 'invalid' >"/dev/udp/127.0.0.1/$PORT"
@@ -76,25 +80,42 @@ expect_start_and_stop() {
 grep -q -- '--scenario=<name>' "$TMP_DIR/help" \
   || fail "help does not document scenarios"
 
-"$RESPONDER" --print-nginx-config >"$TMP_DIR/config"
+"$RESPONDER" --print-nginx-config --listen=127.0.0.1:"$PORT" \
+  >"$TMP_DIR/config"
 grep -q 'Synthetic rl-c-client test responder' "$TMP_DIR/config" \
   || fail "generated config is not marked synthetic"
 grep -q '^ratelimitly_auth_key rl-aes' "$TMP_DIR/config" \
   || fail "generated config does not contain the AES fixture"
 
-if "$RESPONDER" --print-nginx-config --listen=0.0.0.0:"$PORT" \
-    >"$TMP_DIR/wildcard-config.out" 2>"$TMP_DIR/wildcard-config.err"; then
-  fail "config generation accepted a wildcard listen address"
+if "$RESPONDER" --print-nginx-config \
+    >"$TMP_DIR/missing-listen.out" 2>"$TMP_DIR/missing-listen.err"; then
+  fail "config generation accepted a missing listen address"
 fi
-if [[ -s "$TMP_DIR/wildcard-config.out" ]]; then
-  fail "invalid config generation emitted nginx configuration"
+if [[ -s "$TMP_DIR/missing-listen.out" ]]; then
+  fail "missing listen address emitted nginx configuration"
 fi
 
-if "$RESPONDER" --listen=0.0.0.0:"$PORT" >"$TMP_DIR/wildcard.out" 2>"$TMP_DIR/wildcard.err"; then
-  fail "wildcard listen address was accepted"
+"$RESPONDER" --print-nginx-config --listen=0.0.0.0:"$PORT" \
+  >"$TMP_DIR/wildcard-config.out"
+grep -Fq "# responder=0.0.0.0:$PORT" "$TMP_DIR/wildcard-config.out" \
+  || fail "config generation did not preserve the explicit wildcard address"
+
+"$RESPONDER" --print-nginx-config --listen=192.0.2.1:"$PORT" \
+  >"$TMP_DIR/nonlocal-config.out"
+grep -Fq "# responder=192.0.2.1:$PORT" "$TMP_DIR/nonlocal-config.out" \
+  || fail "config generation rejected an explicit nonlocal address"
+
+"$RESPONDER" --print-nginx-config "--listen=[::]:$PORT" \
+  >"$TMP_DIR/ipv6-wildcard-config.out"
+grep -Fq "# responder=[::]:$PORT" "$TMP_DIR/ipv6-wildcard-config.out" \
+  || fail "config generation rejected an explicit IPv6 wildcard address"
+
+if "$RESPONDER" --print-nginx-config --listen=not-an-ip:"$PORT" \
+    >"$TMP_DIR/invalid-config.out" 2>"$TMP_DIR/invalid-config.err"; then
+  fail "config generation accepted a non-numeric listen address"
 fi
-if grep -q '"event":"ready"' "$TMP_DIR/wildcard.out"; then
-  fail "invalid configuration emitted a readiness record"
+if [[ -s "$TMP_DIR/invalid-config.out" ]]; then
+  fail "invalid config generation emitted nginx configuration"
 fi
 
 scenarios=(
@@ -116,3 +137,4 @@ for scenario in "${scenarios[@]}"; do
   expect_start_and_stop "$scenario" aes
 done
 expect_start_and_stop allow cookie
+expect_start_and_stop allow aes 0.0.0.0
