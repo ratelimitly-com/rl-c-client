@@ -68,6 +68,7 @@ test: tests/test_protocol tests/test_client_quota tests/test_public_api tests/te
 	./tests/test_responder
 	bash ./tests/test_responder_cli.sh
 	bash ./tests/test_example_common.sh
+	bash ./tests/test_examples.sh
 
 tests/test_protocol: tests/test_protocol.c src/r_protocol.o src/r_crypto.o
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $^ -o $@ -lcrypto
