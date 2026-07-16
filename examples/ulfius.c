@@ -15,15 +15,16 @@
 #include "common/rl_example.h"
 
 /*
- * Ulfius executes endpoint callbacks on GNU libmicrohttpd connection threads.
- * This example gives each callback a private rl-c-client instance and drives
- * its UDP sockets with poll(2).  No client state is shared between callbacks,
- * and blocking one connection thread does not block Ulfius's listener.
+ * Flow
+ * ----
+ * 1. Ulfius dispatches GET /limited on a libmicrohttpd connection thread.
+ * 2. The callback creates a private client and starts one check.
+ * 3. poll(2) waits for UDP readiness or the current request deadline.
+ * 4. The callback maps the completed decision to HTTP 200, 429, or 503.
  *
- * Per-request clients make ownership and cleanup especially easy to audit.
- * Applications with heavier traffic should use a long-lived dedicated client
- * thread and submit checks from callbacks, as demonstrated by onion.c and
- * civetweb.c in this directory.
+ * Ownership: one connection callback owns one client, its sockets, and request;
+ * no client state is shared. This blocks only that connection thread. Higher
+ * volume services should use the dedicated bridge pattern in Onion/CivetWeb.
  */
 
 typedef struct check_result {
@@ -145,6 +146,8 @@ static int limited(
     bool allowed = false;
     int status = run_check(user_data, &allowed);
     if (status != RCLIENT_OK) {
+        fprintf(stderr, "rate-limit check failed: %s (%d)\n",
+            rl_example_status_name(status), status);
         ulfius_set_string_body_response(response, 503,
             "rate-limit service unavailable\n");
     } else if (!allowed) {

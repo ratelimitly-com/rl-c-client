@@ -29,15 +29,16 @@ KORE_SECCOMP_FILTER("ratelimitly",
 #include "common/rl_example.h"
 
 /*
- * Kore request handlers must never block a worker.  A kore_task performs one
- * complete rate-limit exchange on Kore's task pool while the HTTP request is
- * asleep.  The task owns its rl-c-client instance, UDP sockets, request, and
- * poll loop, so no mutable client state crosses task threads.
+ * Flow
+ * ----
+ * 1. GET /limited creates a kore_task and returns KORE_RESULT_RETRY.
+ * 2. The task creates a private client and polls its UDP sockets to completion.
+ * 3. The task writes a fixed-size result to its channel.
+ * 4. Kore wakes the sleeping HTTP request; the handler reads and maps the result.
  *
- * This per-request ownership model favors clarity and safe integration.  A
- * service with very high request volume can replace run_rate_limit_task() with
- * one long-lived task and a channel-fed queue while keeping the same handler
- * retry state machine.
+ * Ownership: the task owns its client, sockets, and check. Kore owns hdlr_extra
+ * and frees it with the request. This per-request model favors clarity; a
+ * high-volume service can instead use one long-lived task and channel-fed queue.
  */
 
 typedef struct handler_state {
@@ -158,6 +159,10 @@ int run_rate_limit_task(struct kore_task *task) {
 }
 
 int limited(struct http_request *request) {
+    static const char task_failed[] = "rate-limit task failed\n";
+    static const char unavailable[] = "rate-limit service unavailable\n";
+    static const char denied[] = "denied\n";
+    static const char allowed[] = "allowed\n";
     handler_state_t *state;
     task_result_t result;
     u_int32_t length;
@@ -184,19 +189,18 @@ int limited(struct http_request *request) {
 
     if (kore_task_result(&state->task) != KORE_RESULT_OK) {
         kore_task_destroy(&state->task);
-        http_response(request, 503, "rate-limit task failed\n", 23);
+        http_response(request, 503, task_failed, sizeof(task_failed) - 1);
         return KORE_RESULT_OK;
     }
     length = kore_task_channel_read(&state->task, &result, sizeof(result));
     kore_task_destroy(&state->task);
     http_response_header(request, "content-type", "text/plain");
     if (length != sizeof(result) || result.status != RCLIENT_OK) {
-        http_response(request, 503,
-            "rate-limit service unavailable\n", 31);
+        http_response(request, 503, unavailable, sizeof(unavailable) - 1);
     } else if (!result.allowed) {
-        http_response(request, 429, "denied\n", 7);
+        http_response(request, 429, denied, sizeof(denied) - 1);
     } else {
-        http_response(request, 200, "allowed\n", 8);
+        http_response(request, 200, allowed, sizeof(allowed) - 1);
     }
     return KORE_RESULT_OK;
 }
