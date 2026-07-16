@@ -52,3 +52,8 @@ bridge_stop_line="$(grep -nF -- 'bridge_stop(&bridge);' "$civet_source" | tail -
 [[ -n "$server_stop_line" && -n "$bridge_stop_line" \
   && "$server_stop_line" -lt "$bridge_stop_line" ]] \
   || fail "CivetWeb bridge is destroyed before server workers stop"
+
+[[ -f "$ROOT/examples/llhttp_adapter.h" ]] \
+  || fail "llhttp adapter has no host-facing header"
+grep -Fq -- '#include "llhttp_adapter.h"' "$ROOT/examples/llhttp.c" \
+  || fail "llhttp source does not use its host-facing header"

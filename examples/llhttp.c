@@ -6,53 +6,21 @@
 #include <llhttp.h>
 
 #include "common/rl_example.h"
+#include "llhttp_adapter.h"
 
 /*
- * llhttp is a parser, not an event loop.  This adapter deliberately does not
- * poll sockets or schedule deadlines.  It turns one completed HTTP request
- * into rl_example_check(); the surrounding host must drive the returned
- * rl_example_request_t using any loop example in this directory.
+ * Flow
+ * ----
+ * 1. The host feeds arbitrary TCP fragments into llhttp_execute().
+ * 2. URL callbacks append fragments to a bounded connection-owned buffer.
+ * 3. A complete request starts a check; the next pipelined message pauses.
+ * 4. The host retains paused bytes while driving client UDP and deadlines.
+ * 5. Completion resumes llhttp, then tells the host it can feed retained bytes.
  *
- * Parser input may arrive in arbitrary fragments.  on_url appends each span to
- * a bounded buffer, and on_message_complete derives a stable bucket from the
- * method and path (the query string is intentionally excluded).  While a check
- * is active, parsing a pipelined second request stops with HPE_USER.  That is
- * explicit backpressure: resume feeding only after the result callback.
+ * Ownership: the host owns TCP, UDP readiness, deadlines, and one adapter per
+ * connection. The adapter owns parser/check state but only borrows the shared
+ * client. Query data is excluded from bucket keys to bound cardinality.
  */
-
-#define RL_LLHTTP_URL_CAPACITY 512
-#define RL_LLHTTP_BUCKET_CAPACITY 640
-
-typedef void (*rl_llhttp_result_cb)(
-    void *user,
-    int status,
-    bool allowed
-);
-
-typedef struct rl_llhttp_adapter {
-    llhttp_t parser;
-    llhttp_settings_t settings;
-    rl_example_client_t *client;
-    rl_example_request_t request;
-    rl_llhttp_result_cb callback;
-    void *user;
-    char url[RL_LLHTTP_URL_CAPACITY];
-    size_t url_length;
-    int last_client_status;
-} rl_llhttp_adapter_t;
-
-void rl_llhttp_adapter_init(
-    rl_llhttp_adapter_t *adapter,
-    rl_example_client_t *client,
-    rl_llhttp_result_cb callback,
-    void *user
-);
-llhttp_errno_t rl_llhttp_adapter_feed(
-    rl_llhttp_adapter_t *adapter,
-    const char *data,
-    size_t length
-);
-void rl_llhttp_adapter_dispose(rl_llhttp_adapter_t *adapter);
 
 static rl_llhttp_adapter_t *adapter_from_parser(llhttp_t *parser) {
     return parser->data;
@@ -61,8 +29,8 @@ static rl_llhttp_adapter_t *adapter_from_parser(llhttp_t *parser) {
 static int on_message_begin(llhttp_t *parser) {
     rl_llhttp_adapter_t *adapter = adapter_from_parser(parser);
     if (adapter->request.active) {
-        /* A nonzero callback return makes llhttp_execute() return HPE_USER. */
-        return -1;
+        /* Pausing is resumable; HPE_USER would permanently poison the parser. */
+        return HPE_PAUSED;
     }
     adapter->url_length = 0;
     adapter->url[0] = '\0';
@@ -73,7 +41,8 @@ static int on_message_begin(llhttp_t *parser) {
 static int on_url(llhttp_t *parser, const char *data, size_t length) {
     rl_llhttp_adapter_t *adapter = adapter_from_parser(parser);
     if (length > sizeof(adapter->url) - adapter->url_length - 1) {
-        return -1; /* Reject instead of silently truncating a bucket key. */
+        llhttp_set_error_reason(parser, "request URL exceeds adapter capacity");
+        return HPE_USER; /* Reject instead of silently truncating a bucket key. */
     }
     memcpy(adapter->url + adapter->url_length, data, length);
     adapter->url_length += length;
@@ -84,6 +53,9 @@ static int on_url(llhttp_t *parser, const char *data, size_t length) {
 static void on_rate_limit(void *user, int status, bool allowed) {
     rl_llhttp_adapter_t *adapter = user;
     adapter->last_client_status = status;
+    if (llhttp_get_errno(&adapter->parser) == HPE_PAUSED) {
+        llhttp_resume(&adapter->parser);
+    }
     adapter->callback(adapter->user, status, allowed);
 }
 
@@ -91,7 +63,8 @@ static int on_message_complete(llhttp_t *parser) {
     rl_llhttp_adapter_t *adapter = adapter_from_parser(parser);
     const char *method = llhttp_method_name((llhttp_method_t)parser->method);
     if (!method || adapter->url_length == 0) {
-        return -1;
+        llhttp_set_error_reason(parser, "request has no method or URL");
+        return HPE_USER;
     }
 
     /* Query values often contain user input or secrets and should not create
@@ -101,7 +74,8 @@ static int on_message_complete(llhttp_t *parser) {
     int length = snprintf(bucket, sizeof(bucket),
         "llhttp:%s:%.*s", method, (int)path_length, adapter->url);
     if (length < 0 || (size_t)length >= sizeof(bucket)) {
-        return -1;
+        llhttp_set_error_reason(parser, "derived bucket exceeds adapter capacity");
+        return HPE_USER;
     }
 
     adapter->last_client_status = rl_example_check(
@@ -111,17 +85,24 @@ static int on_message_complete(llhttp_t *parser) {
         on_rate_limit,
         adapter
     );
-    return adapter->last_client_status == RCLIENT_OK ? 0 : -1;
+    if (adapter->last_client_status != RCLIENT_OK) {
+        llhttp_set_error_reason(parser, "rate-limit check submission failed");
+        return HPE_USER;
+    }
+    return 0;
 }
 
 /* Initialize one adapter per HTTP connection.  The client may be shared only
  * when the host serializes all access on its event-loop thread. */
-void rl_llhttp_adapter_init(
+int rl_llhttp_adapter_init(
     rl_llhttp_adapter_t *adapter,
     rl_example_client_t *client,
     rl_llhttp_result_cb callback,
     void *user
 ) {
+    if (!adapter || !client || !callback) {
+        return RCLIENT_ERR_CONFIG;
+    }
     memset(adapter, 0, sizeof(*adapter));
     adapter->client = client;
     adapter->callback = callback;
@@ -132,6 +113,7 @@ void rl_llhttp_adapter_init(
     adapter->settings.on_message_complete = on_message_complete;
     llhttp_init(&adapter->parser, HTTP_REQUEST, &adapter->settings);
     adapter->parser.data = adapter;
+    return RCLIENT_OK;
 }
 
 /* Feed exactly the bytes received by the host.  HPE_OK means parsing and check
@@ -143,6 +125,14 @@ llhttp_errno_t rl_llhttp_adapter_feed(
     size_t length
 ) {
     return llhttp_execute(&adapter->parser, data, length);
+}
+
+llhttp_errno_t rl_llhttp_adapter_finish(rl_llhttp_adapter_t *adapter) {
+    return llhttp_finish(&adapter->parser);
+}
+
+int rl_llhttp_adapter_last_client_status(const rl_llhttp_adapter_t *adapter) {
+    return adapter ? adapter->last_client_status : RCLIENT_ERR_CONFIG;
 }
 
 /* Cancel before destroying a connection-owned adapter. */
