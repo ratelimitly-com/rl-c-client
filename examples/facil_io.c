@@ -11,16 +11,17 @@
 #include "common/rl_example.h"
 
 /*
- * facil.io provides exactly the two primitives needed by an asynchronous
- * integration: arbitrary descriptor protocols and pause/resume HTTP handles.
- * Duplicate UDP descriptors are attached to the reactor; their on_data
- * callbacks ask the common adapter to consume datagrams from the originals.
+ * Flow
+ * ----
+ * 1. facil.io watches duplicates of the rl-c-client UDP descriptors.
+ * 2. GET /limited pauses its HTTP handle and starts an asynchronous check.
+ * 3. A one-shot fio_run_every() callback advances the request deadline.
+ * 4. UDP readiness lets the adapter drain the original socket.
+ * 5. Completion resumes HTTP and sends status 200, 429, or 503.
  *
- * fio_run_every() has no cancellation handle.  Each one-shot deadline thus
- * owns a reference to pending_request_t until its on_finish callback.  A fast
- * UDP response can resume HTTP immediately without leaving a timer holding a
- * dangling pointer.  This example intentionally starts one facil.io thread so
- * all rl-c-client calls remain serialized on one event-loop thread.
+ * Ownership: facil.io owns attached duplicate descriptors; the adapter owns
+ * originals. Each timer and paused HTTP handle retains pending_request_t until
+ * its finish callback. One facil.io thread serializes all rl-c-client access.
  */
 
 typedef struct facil_app facil_app_t;
@@ -29,6 +30,7 @@ typedef struct udp_watcher {
     fio_protocol_s protocol; /* First member: safe protocol-to-watcher cast. */
     facil_app_t *app;
     int client_fd;
+    intptr_t uuid;
 } udp_watcher_t;
 
 typedef struct pending_request {
@@ -161,10 +163,13 @@ static int arm_timer(pending_request_t *pending) {
     retain_pending(pending);
     /* facil.io rejects a zero-millisecond timer. */
     size_t interval = delay_ms == 0 ? 1 : (size_t)delay_ms;
-    return fio_run_every(interval, 1,
-        on_timer, pending, on_timer_finished) == 0
-        ? RCLIENT_OK
-        : RCLIENT_ERR_IO;
+    if (fio_run_every(interval, 1,
+            on_timer, pending, on_timer_finished) != 0) {
+        /* No on_finish callback exists when scheduling itself fails. */
+        release_pending(pending);
+        return RCLIENT_ERR_IO;
+    }
+    return RCLIENT_OK;
 }
 
 static void on_http_paused(http_pause_handle_s *http) {
@@ -218,7 +223,8 @@ static void on_udp_readable(intptr_t uuid, fio_protocol_s *protocol) {
         watcher->client_fd
     );
     if (status != RCLIENT_OK) {
-        fprintf(stderr, "Ratelimitly UDP ingress failed: %d\n", status);
+        fprintf(stderr, "Ratelimitly UDP ingress failed: %s (%d)\n",
+            rl_example_status_name(status), status);
     }
 }
 
@@ -228,6 +234,7 @@ static int attach_udp_watchers(facil_app_t *application) {
         udp_watcher_t *watcher = &application->watchers[i];
         watcher->app = application;
         watcher->client_fd = rl_example_socket_at(&application->client, i);
+        watcher->uuid = -1;
         watcher->protocol.on_data = on_udp_readable;
         int duplicate_fd = dup(watcher->client_fd);
         if (duplicate_fd < 0 || fio_set_non_block(duplicate_fd) != 0) {
@@ -237,9 +244,24 @@ static int attach_udp_watchers(facil_app_t *application) {
             return -1;
         }
         fio_attach_fd(duplicate_fd, &watcher->protocol);
+        watcher->uuid = fio_fd2uuid(duplicate_fd);
+        if (watcher->uuid == -1) {
+            close(duplicate_fd);
+            return -1;
+        }
         application->watcher_count++;
     }
     return 0;
+}
+
+static void detach_udp_watchers(facil_app_t *application) {
+    for (size_t i = 0; i < application->watcher_count; i++) {
+        if (application->watchers[i].uuid != -1) {
+            fio_force_close(application->watchers[i].uuid);
+            application->watchers[i].uuid = -1;
+        }
+    }
+    application->watcher_count = 0;
 }
 
 int main(void) {
@@ -248,17 +270,27 @@ int main(void) {
         fprintf(stderr, "set RATELIMITLY_TENANT and RATELIMITLY_AUTH_KEY\n");
         return EXIT_FAILURE;
     }
-    if (rl_example_client_init(&app.client, &options) != RCLIENT_OK
-        || attach_udp_watchers(&app) != 0) {
+    int status = rl_example_client_init(&app.client, &options);
+    if (status != RCLIENT_OK) {
+        fprintf(stderr, "client initialization failed: %s (%d)\n",
+            rl_example_status_name(status), status);
+        return EXIT_FAILURE;
+    }
+    if (attach_udp_watchers(&app) != 0) {
         fprintf(stderr, "failed to initialize rate-limit UDP watchers\n");
+        detach_udp_watchers(&app);
+        rl_example_client_destroy(&app.client);
         return EXIT_FAILURE;
     }
     if (http_listen("8000", NULL, .on_request = on_http_request) == -1) {
         fprintf(stderr, "failed to listen on port 8000\n");
+        detach_udp_watchers(&app);
+        rl_example_client_destroy(&app.client);
         return EXIT_FAILURE;
     }
 
     fio_start(.threads = 1, .workers = 1);
+    detach_udp_watchers(&app);
     rl_example_client_destroy(&app.client);
     return EXIT_SUCCESS;
 }
