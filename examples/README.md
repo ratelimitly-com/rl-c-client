@@ -27,3 +27,13 @@ export RATELIMITLY_EXAMPLE_SERVER_PORT=39082
 The fixed endpoint variables are development-only. Normal deployments should
 leave them unset so the adapter discovers `_ratelimitly._udp.<tenant>` SRV
 records.
+
+## libuv
+
+`libuv.c` registers both UDP sockets with `uv_poll_t` and maps each request
+deadline to a one-shot `uv_timer_t`.
+
+```sh
+cc -I../include -Icommon libuv.c common/rl_example.c ../librclient.a \
+  $(pkg-config --cflags --libs libuv) -lcrypto -lresolv -pthread -o libuv-example
+```
