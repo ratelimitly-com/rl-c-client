@@ -70,3 +70,13 @@ cc -I../include -Icommon liburing.c common/rl_example.c ../librclient.a \
   $(pkg-config --cflags --libs liburing) -lcrypto -lresolv -pthread \
   -o liburing-example
 ```
+
+## epoll (Linux)
+
+`epoll.c` registers the nonblocking UDP descriptors directly and passes the
+current Ratelimitly deadline to `epoll_wait`.
+
+```sh
+cc -I../include -Icommon epoll.c common/rl_example.c ../librclient.a \
+  -lcrypto -lresolv -pthread -o epoll-example
+```
