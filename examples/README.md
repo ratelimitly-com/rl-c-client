@@ -155,6 +155,23 @@ cc -I../include -Icommon $(pkg-config --cflags libreactor) libreactor.c \
 
 Send `GET /limited` to port 8000.
 
+## facil.io
+
+`facil_io.c` attaches duplicate UDP descriptors as facil.io protocols and uses
+the framework's HTTP pause/resume API for asynchronous checks. One-shot timer
+callbacks retain request state until `on_finish`, preventing use-after-free when
+a UDP response beats its deadline. The example uses one event-loop thread to
+keep all rl-c-client access serialized.
+
+```sh
+cc -I../include -Icommon -I/path/to/facil.io/lib/facil \
+  -I/path/to/facil.io/lib/facil/http facil_io.c common/rl_example.c \
+  ../librclient.a /path/to/libfacil.a -lcrypto -lresolv -pthread \
+  -o facil-io-example
+```
+
+Send `GET /limited` to port 8000.
+
 ## GNU libmicrohttpd
 
 `libmicrohttpd.c` runs MHD in external-select mode. It suspends each HTTP
