@@ -175,6 +175,12 @@ static bool bridge_should_stop(civetweb_bridge_t *bridge) {
     return stop;
 }
 
+static void mark_bridge_stopped(civetweb_bridge_t *bridge) {
+    pthread_mutex_lock(&bridge->queue_mutex);
+    bridge->stop = true;
+    pthread_mutex_unlock(&bridge->queue_mutex);
+}
+
 static void fail_all_jobs(civetweb_bridge_t *bridge, int status) {
     /* Shutdown/error paths wake every waiting CivetWeb worker exactly once. */
     bridge_job_t *job = take_queue(bridge);
@@ -235,6 +241,8 @@ static void *bridge_loop(void *user) {
             break;
         }
     }
+    /* Future handlers must fail fast instead of queueing to a dead thread. */
+    mark_bridge_stopped(bridge);
     fail_all_jobs(bridge, loop_status == RCLIENT_OK ? RCLIENT_ERR_IO : loop_status);
     return NULL;
 }
@@ -277,9 +285,7 @@ static int bridge_start(
 }
 
 static void bridge_stop(civetweb_bridge_t *bridge) {
-    pthread_mutex_lock(&bridge->queue_mutex);
-    bridge->stop = true;
-    pthread_mutex_unlock(&bridge->queue_mutex);
+    mark_bridge_stopped(bridge);
     wake_bridge(bridge);
     pthread_join(bridge->thread, NULL);
     close(bridge->wake_pipe[0]);

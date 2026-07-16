@@ -18,15 +18,16 @@
 #include "common/rl_example.h"
 
 /*
- * Onion's OCS_YIELD contract transfers request/response ownership to the
- * application.  This makes a clean asynchronous bridge possible without
- * blocking Onion's worker pool: handlers enqueue a yielded request, and one
- * client thread owns every rl-c-client operation plus its UDP poll loop.
+ * Flow
+ * ----
+ * 1. The handler queues request/response state and returns OCS_YIELD.
+ * 2. A dedicated thread starts the check and polls client UDP sockets.
+ * 3. Completion writes and flushes HTTP status 200, 429, or 503.
+ * 4. The bridge thread releases the yielded request and response exactly once.
  *
- * The official Onion long-poll example also writes and frees yielded requests
- * from a background thread.  We follow that lifecycle here.  Even if the HTTP
- * peer disconnects, response_flush() merely fails and the yielded objects are
- * still released exactly once.
+ * Ownership: OCS_YIELD transfers request/response ownership to the bridge job;
+ * only its dedicated thread touches rl-c-client. If the peer disconnects,
+ * response_flush() fails but the yielded objects are still safely released.
  */
 
 typedef struct onion_bridge onion_bridge_t;
@@ -162,6 +163,12 @@ static bool bridge_should_stop(onion_bridge_t *bridge) {
     return stop;
 }
 
+static void mark_bridge_stopped(onion_bridge_t *bridge) {
+    pthread_mutex_lock(&bridge->queue_mutex);
+    bridge->stop = true;
+    pthread_mutex_unlock(&bridge->queue_mutex);
+}
+
 static void fail_all_jobs(onion_bridge_t *bridge, int status) {
     bridge_job_t *job = take_queue(bridge);
     while (job) {
@@ -219,6 +226,8 @@ static void *bridge_loop(void *user) {
             break;
         }
     }
+    /* Future handlers must fail fast instead of queueing to a dead thread. */
+    mark_bridge_stopped(bridge);
     fail_all_jobs(bridge,
         loop_status == RCLIENT_OK ? RCLIENT_ERR_IO : loop_status);
     return NULL;
@@ -263,9 +272,7 @@ static int bridge_start(
 }
 
 static void bridge_stop(onion_bridge_t *bridge) {
-    pthread_mutex_lock(&bridge->queue_mutex);
-    bridge->stop = true;
-    pthread_mutex_unlock(&bridge->queue_mutex);
+    mark_bridge_stopped(bridge);
     char byte = 0;
     (void)write(bridge->wake_pipe[1], &byte, 1);
     pthread_join(bridge->thread, NULL);
@@ -320,8 +327,10 @@ int main(void) {
     }
 
     onion_bridge_t bridge;
-    if (bridge_start(&bridge, &options) != RCLIENT_OK) {
-        fprintf(stderr, "failed to start rate-limit client thread\n");
+    int bridge_status = bridge_start(&bridge, &options);
+    if (bridge_status != RCLIENT_OK) {
+        fprintf(stderr, "bridge initialization failed: %s (%d)\n",
+            rl_example_status_name(bridge_status), bridge_status);
         return EXIT_FAILURE;
     }
     onion *server = onion_new(O_POOL);

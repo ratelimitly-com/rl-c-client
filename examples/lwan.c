@@ -17,17 +17,16 @@
 #include "common/rl_example.h"
 
 /*
- * Lwan handlers execute as coroutines on small stacks.  Running rl-c-client
- * directly in a handler would both block a Lwan worker and put too much state
- * on that coroutine stack.  This adapter instead gives one ordinary pthread
- * exclusive ownership of the client and its UDP sockets.
+ * Flow
+ * ----
+ * 1. A Lwan coroutine queues a reference-counted job, then yields.
+ * 2. A dedicated thread starts the check and polls client UDP sockets.
+ * 3. Completion publishes status with release ordering and drops its reference.
+ * 4. The coroutine observes completion, resumes, and sends the HTTP response.
  *
- * Handler coroutines enqueue jobs, then yield with lwan_request_sleep().  The
- * client thread performs every rl-c-client call, polls UDP, and publishes the
- * result through C11 atomics.  Two references protect each job: one belongs to
- * Lwan's coroutine cleanup hook, the other to the client thread.  Therefore a
- * disconnected HTTP client cannot leave the background thread with a dangling
- * pointer.
+ * Ownership: only the dedicated thread touches rl-c-client. Two references
+ * protect each job—one owned by coroutine cleanup, one by the client thread.
+ * A disconnected peer therefore cannot leave the thread a dangling pointer.
  */
 
 typedef struct lwan_bridge lwan_bridge_t;
@@ -166,6 +165,12 @@ static bool bridge_should_stop(lwan_bridge_t *bridge) {
     return stop;
 }
 
+static void mark_bridge_stopped(lwan_bridge_t *bridge) {
+    pthread_mutex_lock(&bridge->queue_mutex);
+    bridge->stop = true;
+    pthread_mutex_unlock(&bridge->queue_mutex);
+}
+
 static void fail_all_jobs(lwan_bridge_t *bridge, int status) {
     bridge_job_t *job = take_queue(bridge);
     while (job) {
@@ -228,6 +233,8 @@ static void *bridge_loop(void *user) {
             break;
         }
     }
+    /* Future handlers must fail fast instead of queueing to a dead thread. */
+    mark_bridge_stopped(bridge);
     fail_all_jobs(bridge,
         loop_status == RCLIENT_OK ? RCLIENT_ERR_IO : loop_status);
     return NULL;
@@ -272,9 +279,7 @@ static int bridge_start(
 }
 
 static void bridge_stop(lwan_bridge_t *bridge) {
-    pthread_mutex_lock(&bridge->queue_mutex);
-    bridge->stop = true;
-    pthread_mutex_unlock(&bridge->queue_mutex);
+    mark_bridge_stopped(bridge);
     char byte = 0;
     (void)write(bridge->wake_pipe[1], &byte, 1);
     pthread_join(bridge->thread, NULL);
@@ -360,8 +365,10 @@ int main(void) {
     }
 
     lwan_bridge_t bridge;
-    if (bridge_start(&bridge, &options) != RCLIENT_OK) {
-        fprintf(stderr, "failed to start rate-limit client thread\n");
+    int status = bridge_start(&bridge, &options);
+    if (status != RCLIENT_OK) {
+        fprintf(stderr, "bridge initialization failed: %s (%d)\n",
+            rl_example_status_name(status), status);
         return EXIT_FAILURE;
     }
     const struct lwan_url_map routes[] = {
