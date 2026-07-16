@@ -7,13 +7,17 @@
 #include "common/rl_example.h"
 
 /*
- * Mongoose runs networking callbacks on the thread calling mg_mgr_poll().
- * The same loop therefore owns the HTTP connections, rl-c-client, its UDP
- * sockets, and every pending request—no locks or worker handoff are needed.
+ * Flow
+ * ----
+ * 1. MG_EV_HTTP_MSG validates GET /limited and starts an asynchronous check.
+ * 2. The connection stays open while pending state links it to that check.
+ * 3. Each short mg_mgr_poll() tick is followed by UDP and deadline processing.
+ * 4. Completion replies with 200, 429, or 503; MG_EV_CLOSE cancels abandoned work.
  *
- * Mongoose has no separate watcher object for an arbitrary descriptor in this
- * compact example. Each short mg_mgr_poll() tick is followed by a nonblocking
- * drain of the client sockets and advancement of every expired deadline.
+ * Ownership: the thread calling mg_mgr_poll() owns HTTP connections, the
+ * rl-c-client instance, UDP sockets, and pending requests. No locks or worker
+ * handoff are needed. Mongoose has no arbitrary-fd watcher in this compact
+ * pattern, so a 10 ms poll interval bounds UDP response latency.
  */
 typedef struct mongoose_app mongoose_app_t;
 
@@ -134,11 +138,15 @@ static void on_http_event(
     mongoose_app_t *app = connection->fn_data;
     if (event == MG_EV_HTTP_MSG) {
         struct mg_http_message *message = event_data;
-        if (mg_match(message->uri, mg_str("/limited"), NULL)) {
-            begin_rate_limit(app, connection);
-        } else {
+        if (!mg_match(message->uri, mg_str("/limited"), NULL)) {
             mg_http_reply(connection, 404, "Content-Type: text/plain\r\n",
                 "not found\n");
+        } else if (mg_strcmp(message->method, mg_str("GET")) != 0) {
+            mg_http_reply(connection, 405,
+                "Allow: GET\r\nContent-Type: text/plain\r\n",
+                "method not allowed\n");
+        } else {
+            begin_rate_limit(app, connection);
         }
     } else if (event == MG_EV_CLOSE) {
         cancel_connection_request(app, connection);
@@ -195,11 +203,15 @@ int main(void) {
     }
 
     mongoose_app_t app = {0};
-    if (rl_example_client_init(&app.client, &options) != RCLIENT_OK) {
+    int loop_status = rl_example_client_init(&app.client, &options);
+    if (loop_status != RCLIENT_OK) {
+        fprintf(stderr, "client initialization failed: %s (%d)\n",
+            rl_example_status_name(loop_status), loop_status);
         return EXIT_FAILURE;
     }
     mg_mgr_init(&app.manager);
     if (!mg_http_listen(&app.manager, "http://0.0.0.0:8000", on_http_event, &app)) {
+        fprintf(stderr, "failed to listen on port 8000\n");
         mg_mgr_free(&app.manager);
         rl_example_client_destroy(&app.client);
         return EXIT_FAILURE;
@@ -210,9 +222,10 @@ int main(void) {
     while (!stop_requested) {
         /* Ten milliseconds bounds latency because UDP fds are polled after it. */
         mg_mgr_poll(&app.manager, 10);
-        int status = drive_rate_limits(&app);
-        if (status != RCLIENT_OK) {
-            fprintf(stderr, "rate-limit event loop failed: %d\n", status);
+        loop_status = drive_rate_limits(&app);
+        if (loop_status != RCLIENT_OK) {
+            fprintf(stderr, "rate-limit event loop failed: %s (%d)\n",
+                rl_example_status_name(loop_status), loop_status);
             break;
         }
     }
@@ -220,5 +233,5 @@ int main(void) {
     cancel_all(&app);
     mg_mgr_free(&app.manager);
     rl_example_client_destroy(&app.client);
-    return EXIT_SUCCESS;
+    return loop_status == RCLIENT_OK ? EXIT_SUCCESS : EXIT_FAILURE;
 }
