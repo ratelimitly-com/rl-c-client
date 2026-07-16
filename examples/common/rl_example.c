@@ -25,10 +25,34 @@
 static uint64_t example_now_ms(void *context) {
     (void)context;
     struct timespec now;
-    if (clock_gettime(CLOCK_REALTIME, &now) != 0) {
+    /* Monotonic time cannot jump when wall-clock time is corrected. */
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
         return 0;
     }
     return (uint64_t)now.tv_sec * 1000u + (uint64_t)now.tv_nsec / 1000000u;
+}
+
+const char *rl_example_status_name(int status) {
+    switch (status) {
+        case RCLIENT_OK:
+            return "ok";
+        case RCLIENT_ERR_IO:
+            return "I/O error";
+        case RCLIENT_ERR_TIMEOUT:
+            return "timeout";
+        case RCLIENT_ERR_PROTOCOL:
+            return "protocol error";
+        case RCLIENT_ERR_AUTH:
+            return "authentication error";
+        case RCLIENT_ERR_DNS:
+            return "DNS error";
+        case RCLIENT_ERR_CONFIG:
+            return "configuration error";
+        case RCLIENT_ERR_NOMEM:
+            return "out of memory";
+        default:
+            return "unknown error";
+    }
 }
 
 static void example_log(void *context, r_log_level_t level, const char *message) {

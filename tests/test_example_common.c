@@ -2,6 +2,7 @@
 #include <poll.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "rl_example.h"
 
@@ -22,6 +23,16 @@ static void on_result(void *user, int status, bool allowed) {
 }
 
 int main(int argc, char **argv) {
+    assert(strcmp(rl_example_status_name(RCLIENT_OK), "ok") == 0);
+    assert(strcmp(rl_example_status_name(RCLIENT_ERR_IO), "I/O error") == 0);
+    assert(strcmp(rl_example_status_name(RCLIENT_ERR_TIMEOUT), "timeout") == 0);
+    assert(strcmp(rl_example_status_name(RCLIENT_ERR_PROTOCOL), "protocol error") == 0);
+    assert(strcmp(rl_example_status_name(RCLIENT_ERR_AUTH), "authentication error") == 0);
+    assert(strcmp(rl_example_status_name(RCLIENT_ERR_DNS), "DNS error") == 0);
+    assert(strcmp(rl_example_status_name(RCLIENT_ERR_CONFIG), "configuration error") == 0);
+    assert(strcmp(rl_example_status_name(RCLIENT_ERR_NOMEM), "out of memory") == 0);
+    assert(strcmp(rl_example_status_name(-999), "unknown error") == 0);
+
     assert(argc == 2);
     long port = strtol(argv[1], NULL, 10);
     assert(port > 0 && port <= UINT16_MAX);

@@ -44,6 +44,9 @@ typedef struct rl_example_request {
     bool active;
 } rl_example_request_t;
 
+/* Human-readable text for every public rl-c-client status code. */
+const char *rl_example_status_name(int status);
+
 /* Read credentials and the optional development endpoint override. */
 int rl_example_options_from_env(rl_example_options_t *options);
 
