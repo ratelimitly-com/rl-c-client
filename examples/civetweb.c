@@ -16,14 +16,16 @@
 #include "common/rl_example.h"
 
 /*
- * CivetWeb invokes handlers concurrently on its worker pool. rl-c-client state
- * is intentionally kept on one dedicated bridge thread instead: workers queue
- * jobs, wake the bridge through a nonblocking pipe, and wait on a per-job
- * condition variable for the decision.
+ * Flow
+ * ----
+ * 1. A CivetWeb worker queues one stack-owned job and writes to a wake pipe.
+ * 2. A dedicated bridge thread starts the check and polls client UDP sockets.
+ * 3. The result callback signals the job's condition variable.
+ * 4. The worker maps the decision to HTTP 200, 429, or 503.
  *
- * Only the bridge thread touches the client, its UDP sockets, active requests,
- * and request deadlines. A worker owns its bridge_job_t until completion, so
- * the callback can safely signal it without sharing allocation ownership.
+ * Ownership: only the bridge thread touches rl-c-client, its sockets, active
+ * requests, and deadlines. The waiting worker owns its bridge_job_t. CivetWeb
+ * must stop and join all workers before the bridge is destroyed.
  */
 typedef struct civetweb_bridge civetweb_bridge_t;
 
@@ -211,8 +213,9 @@ static void *bridge_loop(void *user) {
         }
         if ((poll_fds[0].revents & POLLIN) != 0) {
             drain_wake_pipe(bridge);
-            start_queued_jobs(bridge);
         }
+        /* Also inspect the queue after timeout, making wake-pipe saturation safe. */
+        start_queued_jobs(bridge);
         for (size_t i = 0; i < socket_count; i++) {
             if ((poll_fds[i + 1].revents & POLLIN) != 0) {
                 loop_status = rl_example_client_on_readable(
@@ -348,7 +351,10 @@ int main(void) {
     }
 
     civetweb_bridge_t bridge;
-    if (bridge_start(&bridge, &options) != RCLIENT_OK) {
+    int status = bridge_start(&bridge, &options);
+    if (status != RCLIENT_OK) {
+        fprintf(stderr, "bridge initialization failed: %s (%d)\n",
+            rl_example_status_name(status), status);
         return EXIT_FAILURE;
     }
     mg_init_library(0);
@@ -371,8 +377,9 @@ int main(void) {
         sleep(1);
     }
 
-    bridge_stop(&bridge);
+    /* mg_stop joins workers; they may still need the bridge while draining. */
     mg_stop(server);
+    bridge_stop(&bridge);
     mg_exit_library();
     return EXIT_SUCCESS;
 }

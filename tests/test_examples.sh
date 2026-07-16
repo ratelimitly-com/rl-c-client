@@ -43,3 +43,12 @@ while IFS='|' read -r name kind marker; do
       ;;
   esac
 done <"$MANIFEST"
+
+# CivetWeb may still enter request handlers until mg_stop() joins its workers.
+# The shared bridge must therefore outlive the server worker pool.
+civet_source="$ROOT/examples/civetweb.c"
+server_stop_line="$(grep -nF -- 'mg_stop(server);' "$civet_source" | cut -d: -f1)"
+bridge_stop_line="$(grep -nF -- 'bridge_stop(&bridge);' "$civet_source" | tail -1 | cut -d: -f1)"
+[[ -n "$server_stop_line" && -n "$bridge_stop_line" \
+  && "$server_stop_line" -lt "$bridge_stop_line" ]] \
+  || fail "CivetWeb bridge is destroyed before server workers stop"
