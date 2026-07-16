@@ -114,6 +114,24 @@ Core operations:
 See [docs/api.md](docs/api.md) for the API contract and
 [IO_ABSTRACTION.md](IO_ABSTRACTION.md) for event-loop integration.
 
+## Integration Examples
+
+[examples/README.md](examples/README.md) contains buildable, commented
+integrations using only public headers. Start with the example matching the
+host application's ownership model:
+
+- latency tracker: guard admission, protected-work timing, and reporting;
+- event loops: libuv, libevent, libhv, liburing, direct epoll, and raw
+  io_uring;
+- HTTP servers: Mongoose, CivetWeb, GNU libmicrohttpd, H2O, Lwan, libreactor,
+  facil.io, Onion, Kore, and Ulfius; and
+- parser only: llhttp fragmented input and pipelining backpressure.
+
+Each source begins with numbered control flow and explicit ownership rules.
+The integration guide adds dependency-specific build commands, run commands,
+shutdown behavior, limitations, and production notes. Repository tests verify
+the inventory, public-header boundary, and standalone latency workflow.
+
 ## API Key Credentials
 
 Ratelimitly API key credentials are Bech32 strings:

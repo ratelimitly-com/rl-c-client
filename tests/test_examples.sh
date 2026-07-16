@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MANIFEST="$ROOT/examples/manifest.txt"
 README="${R_EXAMPLE_README_PATH:-$ROOT/examples/README.md}"
+ROOT_README="$ROOT/README.md"
+API_GUIDE="$ROOT/docs/api.md"
+IO_GUIDE="$ROOT/IO_ABSTRACTION.md"
 
 fail() {
   echo "test_examples: $*" >&2
@@ -88,3 +91,17 @@ grep -Fq -- '## Latency tracking workflow' "$README" \
   || fail "README does not document latency tracking"
 grep -Fq -- 'Never report latency for work rejected by the guard.' "$README" \
   || fail "README does not explain denied latency-guard behavior"
+
+grep -Fq -- '[examples/README.md](examples/README.md)' "$ROOT_README" \
+  || fail "root README does not link the integration guide"
+grep -Fq -- '`result->success` combines resource and latency-guard decisions' \
+  "$API_GUIDE" \
+  || fail "API guide does not explain combined admission results"
+grep -Fq -- 'Never report latency for work rejected by its guard.' "$API_GUIDE" \
+  || fail "API guide does not explain denied latency-guard behavior"
+grep -Fq -- 'The report must repeat the guard' "$API_GUIDE" \
+  || fail "API guide does not explain tracker identity"
+grep -Fq -- '## Clock domains' "$IO_GUIDE" \
+  || fail "I/O guide does not distinguish client and measurement clocks"
+grep -Fq -- '`CLOCK_MONOTONIC`' "$IO_GUIDE" \
+  || fail "I/O guide does not specify monotonic latency measurement"
