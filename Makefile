@@ -32,6 +32,14 @@ LIB_OBJS = \
 	src/r_crypto.o \
 	src/r_policy.o
 
+TEST_BINS = \
+	tests/test_protocol \
+	tests/test_client_quota \
+	tests/test_public_api \
+	tests/test_responder \
+	tests/test_example_common \
+	tests/test_latency_tracker
+
 .PHONY: all clean test perf_client test-responder
 
 all: librclient.a librclient.so
@@ -61,13 +69,14 @@ src/%.o: src/%.c
 tools/%.o: tools/%.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-test: tests/test_protocol tests/test_client_quota tests/test_public_api tests/test_responder tests/test_example_common $(TEST_RESPONDER_BIN)
+test: $(TEST_BINS) $(TEST_RESPONDER_BIN)
 	./tests/test_protocol
 	./tests/test_client_quota
 	./tests/test_public_api
 	./tests/test_responder
 	bash ./tests/test_responder_cli.sh
 	bash ./tests/test_example_common.sh
+	bash ./tests/test_latency_tracker.sh
 	bash ./tests/test_examples.sh
 
 tests/test_protocol: tests/test_protocol.c src/r_protocol.o src/r_crypto.o
@@ -85,5 +94,8 @@ tests/test_responder: tests/test_responder.c tools/r_test_responder_protocol.o l
 tests/test_example_common: tests/test_example_common.c examples/common/rl_example.c librclient.a
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -Iexamples/common $^ -o $@ -lcrypto -lresolv -pthread
 
+tests/test_latency_tracker: examples/latency_tracker.c examples/common/rl_example.c librclient.a
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -Iexamples/common $^ -o $@ -lcrypto -lresolv -pthread
+
 clean:
-	rm -f $(LIB_OBJS) $(TEST_RESPONDER_OBJS) librclient.a librclient.so tests/test_protocol tests/test_client_quota tests/test_public_api tests/test_responder tests/test_example_common $(PERF_BIN) $(TEST_RESPONDER_BIN)
+	rm -f $(LIB_OBJS) $(TEST_RESPONDER_OBJS) $(TEST_BINS) librclient.a librclient.so $(PERF_BIN) $(TEST_RESPONDER_BIN)

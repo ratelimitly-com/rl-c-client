@@ -1,4 +1,5 @@
 # name|kind|framework API marker
+latency_tracker|workflow|r_client_report_latency(
 libuv|loop|uv_run(
 libevent|loop|event_base_dispatch(
 libhv|loop|hloop_run(
