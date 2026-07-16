@@ -14,16 +14,17 @@
 #include "common/rl_example.h"
 
 /*
- * Raw io_uring integration (no liburing)
- * --------------------------------------
- * This sample spells out what liburing normally hides: io_uring_setup(), the
- * three shared mappings, SQE publication, io_uring_enter(), and CQE retirement.
- * It uses IORING_OP_POLL_ADD only; rl-c-client still performs recvfrom() on its
- * own nonblocking UDP descriptors when a poll completion arrives.
+ * Flow (without liburing)
+ * -----------------------
+ * 1. io_uring_setup() creates a ring; mmap() exposes SQ, CQ, and SQEs.
+ * 2. Publish one IORING_OP_POLL_ADD for each rl-c-client UDP descriptor.
+ * 3. io_uring_enter() waits for a CQE or the current request deadline.
+ * 4. Drain a ready socket, re-arm its one-shot poll, and retire its CQE.
+ * 5. Stop when the rl-c-client result callback records a decision.
  *
- * Ring head/tail fields are shared with the kernel. Acquire/release atomics
- * ensure an SQE is fully initialized before its tail is published and a CQE is
- * fully observed before its head is advanced.
+ * Ownership: the adapter owns sockets and the app owns all ring mappings. Ring
+ * head/tail fields are shared with the kernel; acquire/release atomics publish
+ * complete SQEs and retire fully observed CQEs.
  */
 typedef struct raw_ring {
     int fd;
@@ -293,6 +294,10 @@ int main(void) {
         return EXIT_FAILURE;
     }
     int status = rl_example_client_init(&app.client, &options);
+    if (status != RCLIENT_OK) {
+        fprintf(stderr, "client initialization failed: %s (%d)\n",
+            rl_example_status_name(status), status);
+    }
     if (status == RCLIENT_OK) {
         status = rl_example_check(
             &app.client,
@@ -312,11 +317,13 @@ int main(void) {
     if (app.request.active) {
         rl_example_request_cancel(&app.client, &app.request);
     }
-    rl_example_client_destroy(&app.client);
+    /* Tear down kernel poll requests before closing their target sockets. */
     raw_ring_destroy(&app.ring);
+    rl_example_client_destroy(&app.client);
 
     if (app.status != RCLIENT_OK) {
-        fprintf(stderr, "rate-limit check failed: %d\n", app.status);
+        fprintf(stderr, "rate-limit check failed: %s (%d)\n",
+            rl_example_status_name(app.status), app.status);
         return EXIT_FAILURE;
     }
     puts(app.allowed ? "allowed" : "denied");

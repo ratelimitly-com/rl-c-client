@@ -10,12 +10,15 @@
 #include "common/rl_example.h"
 
 /*
- * liburing integration map
- * ------------------------
- * Each adapter-owned UDP descriptor has one IORING_OP_POLL_ADD in flight.
- * user_data stores index + 1 (zero is reserved), so a completion maps back to
- * the socket without heap allocation. Poll requests are one-shot and therefore
- * re-submitted after the socket has been drained.
+ * Flow
+ * ----
+ * 1. Submit one IORING_OP_POLL_ADD for each rl-c-client UDP descriptor.
+ * 2. Wait for a poll CQE or the current request deadline, whichever comes first.
+ * 3. Drain a ready socket, then re-submit its one-shot poll request.
+ * 4. Stop when the rl-c-client result callback records a decision.
+ *
+ * Ownership: the adapter owns sockets and the app owns the ring. user_data
+ * stores socket index + 1, avoiding heap-allocated completion context.
  */
 typedef struct liburing_app {
     struct io_uring ring;
@@ -123,6 +126,10 @@ int main(void) {
         return EXIT_FAILURE;
     }
     int status = rl_example_client_init(&app.client, &options);
+    if (status != RCLIENT_OK) {
+        fprintf(stderr, "client initialization failed: %s (%d)\n",
+            rl_example_status_name(status), status);
+    }
     if (status == RCLIENT_OK) {
         status = rl_example_check(
             &app.client,
@@ -142,11 +149,13 @@ int main(void) {
     if (app.request.active) {
         rl_example_request_cancel(&app.client, &app.request);
     }
-    rl_example_client_destroy(&app.client);
+    /* Cancel kernel poll requests before closing their target descriptors. */
     io_uring_queue_exit(&app.ring);
+    rl_example_client_destroy(&app.client);
 
     if (app.status != RCLIENT_OK) {
-        fprintf(stderr, "rate-limit check failed: %d\n", app.status);
+        fprintf(stderr, "rate-limit check failed: %s (%d)\n",
+            rl_example_status_name(app.status), app.status);
         return EXIT_FAILURE;
     }
     puts(app.allowed ? "allowed" : "denied");

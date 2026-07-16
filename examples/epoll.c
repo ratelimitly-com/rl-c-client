@@ -10,12 +10,15 @@
 #include "common/rl_example.h"
 
 /*
- * Direct epoll integration
- * ------------------------
- * The epoll set watches the common adapter's original UDP descriptors. Each
- * iteration derives epoll_wait()'s timeout from rl-c-client's current deadline,
- * drains every ready socket, then advances timeout state if the deadline passed.
- * No framework-specific wrapper owns or closes the descriptors.
+ * Flow
+ * ----
+ * 1. Register each rl-c-client UDP descriptor for EPOLLIN.
+ * 2. Derive epoll_wait()'s timeout from the current request deadline.
+ * 3. Drain ready sockets, or advance timeout state when the wait expires.
+ * 4. Stop when the rl-c-client result callback records a decision.
+ *
+ * Ownership: the adapter owns sockets; epoll only references them. The epoll
+ * instance is closed before the adapter closes its descriptors.
  */
 typedef struct epoll_app {
     rl_example_client_t client;
@@ -81,6 +84,8 @@ int main(void) {
     app.status = RCLIENT_ERR_IO;
     int status = rl_example_client_init(&app.client, &options);
     if (status != RCLIENT_OK) {
+        fprintf(stderr, "client initialization failed: %s (%d)\n",
+            rl_example_status_name(status), status);
         return EXIT_FAILURE;
     }
 
@@ -125,7 +130,8 @@ int main(void) {
     rl_example_client_destroy(&app.client);
 
     if (app.status != RCLIENT_OK) {
-        fprintf(stderr, "rate-limit check failed: %d\n", app.status);
+        fprintf(stderr, "rate-limit check failed: %s (%d)\n",
+            rl_example_status_name(app.status), app.status);
         return EXIT_FAILURE;
     }
     puts(app.allowed ? "allowed" : "denied");

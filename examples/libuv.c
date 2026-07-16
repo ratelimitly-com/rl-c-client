@@ -6,14 +6,15 @@
 #include "common/rl_example.h"
 
 /*
- * libuv integration map
- * ---------------------
- *   uv_poll_t  -> reports readable rl-c-client UDP sockets
- *   uv_timer_t -> wakes at the current request deadline
- *   callback   -> records the decision and stops uv_run()
+ * Flow
+ * ----
+ * 1. uv_poll_t reports readability on each rl-c-client UDP socket.
+ * 2. The adapter drains that socket and passes datagrams to rl-c-client.
+ * 3. A one-shot uv_timer_t advances the current request deadline.
+ * 4. The result callback records the decision and stops uv_run().
  *
- * The common adapter owns the descriptors. uv_poll_t only observes them, so
- * cleanup stops the watchers before the adapter closes the sockets.
+ * Ownership: the common adapter owns every descriptor. uv_poll_t only observes
+ * them, so cleanup stops and closes watchers before closing adapter sockets.
  */
 typedef struct libuv_app libuv_app_t;
 
@@ -106,15 +107,22 @@ int main(void) {
 
     libuv_app_t app = {0};
     app.status = RCLIENT_ERR_IO;
-    if (uv_loop_init(&app.loop) != 0) {
+    int uv_status = uv_loop_init(&app.loop);
+    if (uv_status != 0) {
+        fprintf(stderr, "uv_loop_init failed: %s\n", uv_strerror(uv_status));
         return EXIT_FAILURE;
     }
-    if (rl_example_client_init(&app.client, &options) != RCLIENT_OK) {
+    int status = rl_example_client_init(&app.client, &options);
+    if (status != RCLIENT_OK) {
+        fprintf(stderr, "client initialization failed: %s (%d)\n",
+            rl_example_status_name(status), status);
         uv_loop_close(&app.loop);
         return EXIT_FAILURE;
     }
 
-    if (uv_timer_init(&app.loop, &app.timer) != 0) {
+    uv_status = uv_timer_init(&app.loop, &app.timer);
+    if (uv_status != 0) {
+        fprintf(stderr, "uv_timer_init failed: %s\n", uv_strerror(uv_status));
         rl_example_client_destroy(&app.client);
         uv_loop_close(&app.loop);
         return EXIT_FAILURE;
@@ -139,7 +147,7 @@ int main(void) {
     }
 
     if (!app.done) {
-        int status = rl_example_check(
+        status = rl_example_check(
             &app.client,
             &app.request,
             "libuv-example",
@@ -162,7 +170,8 @@ int main(void) {
     uv_loop_close(&app.loop);
 
     if (app.status != RCLIENT_OK) {
-        fprintf(stderr, "rate-limit check failed: %d\n", app.status);
+        fprintf(stderr, "rate-limit check failed: %s (%d)\n",
+            rl_example_status_name(app.status), app.status);
         return EXIT_FAILURE;
     }
     puts(app.allowed ? "allowed" : "denied");

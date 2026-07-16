@@ -6,11 +6,15 @@
 #include "common/rl_example.h"
 
 /*
- * libevent integration map
- * ------------------------
- * Persistent EV_READ events watch the adapter-owned UDP descriptors. A
- * one-shot evtimer represents the request deadline. The result callback calls
- * event_base_loopbreak(), making this a minimal one-check command-line sample.
+ * Flow
+ * ----
+ * 1. Persistent EV_READ events watch the rl-c-client UDP descriptors.
+ * 2. The adapter drains each ready socket and handles received datagrams.
+ * 3. A one-shot evtimer advances the current request deadline.
+ * 4. The result callback records the decision and breaks event_base_dispatch().
+ *
+ * Ownership: the adapter owns sockets; libevent owns event objects. Every event
+ * is freed before the adapter closes its descriptors.
  */
 typedef struct libevent_app {
     struct event_base *base;
@@ -94,7 +98,10 @@ int main(void) {
     if (!app.base) {
         return EXIT_FAILURE;
     }
-    if (rl_example_client_init(&app.client, &options) != RCLIENT_OK) {
+    int status = rl_example_client_init(&app.client, &options);
+    if (status != RCLIENT_OK) {
+        fprintf(stderr, "client initialization failed: %s (%d)\n",
+            rl_example_status_name(status), status);
         event_base_free(app.base);
         return EXIT_FAILURE;
     }
@@ -113,7 +120,13 @@ int main(void) {
             on_udp_readable,
             &app
         );
-        if (!app.socket_events[i] || event_add(app.socket_events[i], NULL) != 0) {
+        if (!app.socket_events[i]) {
+            stop_with_error(&app, RCLIENT_ERR_NOMEM);
+            break;
+        }
+        if (event_add(app.socket_events[i], NULL) != 0) {
+            event_free(app.socket_events[i]);
+            app.socket_events[i] = NULL;
             stop_with_error(&app, RCLIENT_ERR_IO);
             break;
         }
@@ -121,7 +134,7 @@ int main(void) {
     }
 
     if (!app.done) {
-        int status = rl_example_check(
+        status = rl_example_check(
             &app.client,
             &app.request,
             "libevent-example",
@@ -149,7 +162,8 @@ int main(void) {
     event_base_free(app.base);
 
     if (app.status != RCLIENT_OK) {
-        fprintf(stderr, "rate-limit check failed: %d\n", app.status);
+        fprintf(stderr, "rate-limit check failed: %s (%d)\n",
+            rl_example_status_name(app.status), app.status);
         return EXIT_FAILURE;
     }
     puts(app.allowed ? "allowed" : "denied");

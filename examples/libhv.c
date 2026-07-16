@@ -6,11 +6,15 @@
 #include "common/rl_example.h"
 
 /*
- * libhv integration map
- * ---------------------
- * hio_get() attaches libhv watchers to the adapter-owned UDP descriptors.
- * htimer_add() schedules the current request deadline as a one-shot timer.
- * The decision callback stops the loop after this demonstration check.
+ * Flow
+ * ----
+ * 1. hio_get() attaches readiness watchers to rl-c-client UDP descriptors.
+ * 2. The adapter drains readable sockets and handles received datagrams.
+ * 3. A one-shot htimer_t advances the current request deadline.
+ * 4. The result callback records the decision and stops hloop_run().
+ *
+ * Ownership: the adapter owns sockets; the hloop owns hio_t and htimer_t
+ * objects. Watchers are detached before the adapter closes its descriptors.
  */
 typedef struct libhv_app {
     hloop_t *loop;
@@ -93,7 +97,10 @@ int main(void) {
     if (!app.loop) {
         return EXIT_FAILURE;
     }
-    if (rl_example_client_init(&app.client, &options) != RCLIENT_OK) {
+    int status = rl_example_client_init(&app.client, &options);
+    if (status != RCLIENT_OK) {
+        fprintf(stderr, "client initialization failed: %s (%d)\n",
+            rl_example_status_name(status), status);
         hloop_free(&app.loop);
         return EXIT_FAILURE;
     }
@@ -111,7 +118,7 @@ int main(void) {
     }
 
     if (!app.done) {
-        int status = rl_example_check(
+        status = rl_example_check(
             &app.client,
             &app.request,
             "libhv-example",
@@ -139,7 +146,8 @@ int main(void) {
     hloop_free(&app.loop);
 
     if (app.status != RCLIENT_OK) {
-        fprintf(stderr, "rate-limit check failed: %d\n", app.status);
+        fprintf(stderr, "rate-limit check failed: %s (%d)\n",
+            rl_example_status_name(app.status), app.status);
         return EXIT_FAILURE;
     }
     puts(app.allowed ? "allowed" : "denied");
