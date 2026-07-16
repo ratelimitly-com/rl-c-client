@@ -1,9 +1,8 @@
 # Changes
 
-This repository has not published a versioned release yet. Until the first
-release tag, use git history as the detailed changelog.
-
 ## Unreleased
+
+## 0.2.0 - 2026-07-15
 
 - Specified a versioned test responder contract for downstream integration
   suites without expanding the production C API. Its required `--listen`
@@ -12,6 +11,9 @@ release tag, use git history as the detailed changelog.
 - Added the responder executable with synthetic AES/cookie authentication,
   deterministic allow/deny/guard/quota/malformed scenarios, JSONL observations,
   latency-report capture, steering feedback, and clean signal shutdown.
+
+## 0.1.0 - 2026-07-15
+
 - Added `r_client_parse_auth_key` as the public API key credential parser.
 - Kept low-level packet and crypto helpers private.
 - Added a public-header-only API test.
