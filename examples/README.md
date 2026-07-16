@@ -208,6 +208,22 @@ kore -fnc kore.conf
 
 Send `GET /limited` to port 8000.
 
+## Ulfius
+
+`ulfius.c` gives each endpoint callback a private client and polls its UDP
+sockets on the libmicrohttpd connection thread. This straightforward ownership
+model avoids shared mutable state and does not block Ulfius's listener. The
+source points high-volume services to the dedicated-thread pattern used by the
+Onion and CivetWeb examples.
+
+```sh
+cc -I../include -Icommon $(pkg-config --cflags libulfius) ulfius.c \
+  common/rl_example.c ../librclient.a $(pkg-config --libs libulfius) \
+  -lcrypto -lresolv -pthread -o ulfius-example
+```
+
+Send `GET /limited` to port 8000.
+
 ## GNU libmicrohttpd
 
 `libmicrohttpd.c` runs MHD in external-select mode. It suspends each HTTP
