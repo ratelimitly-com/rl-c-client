@@ -80,3 +80,14 @@ current Ratelimitly deadline to `epoll_wait`.
 cc -I../include -Icommon epoll.c common/rl_example.c ../librclient.a \
   -lcrypto -lresolv -pthread -o epoll-example
 ```
+
+## io_uring without liburing (Linux)
+
+`io_uring.c` uses only Linux UAPI headers and syscalls. It maps submission and
+completion rings directly, submits `IORING_OP_POLL_ADD`, and supplies the
+request deadline through `IORING_ENTER_EXT_ARG`.
+
+```sh
+cc -I../include -Icommon io_uring.c common/rl_example.c ../librclient.a \
+  -lcrypto -lresolv -pthread -o io-uring-example
+```
