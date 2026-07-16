@@ -10,3 +10,4 @@ civetweb|framework|mg_set_request_handler(
 libmicrohttpd|framework|MHD_suspend_connection(
 h2o|framework|h2o_create_handler(
 lwan|framework|lwan_set_url_map(
+libreactor|framework|reactor_loop(

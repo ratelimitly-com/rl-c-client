@@ -139,6 +139,22 @@ cc -I../include -Icommon -I/path/to/lwan/src/lib lwan.c \
 
 Set Lwan's listener in `lwan.conf`, then send `GET /limited`.
 
+## libreactor
+
+`libreactor.c` runs HTTP, UDP readiness, and per-request deadlines on one
+libreactor thread. Duplicate UDP descriptors transfer only readiness ownership;
+the common adapter still consumes datagrams from its original sockets. The
+example also defers synchronous completions to avoid freeing callback state
+while an rl-c-client operation remains on the stack.
+
+```sh
+cc -I../include -Icommon $(pkg-config --cflags libreactor) libreactor.c \
+  common/rl_example.c ../librclient.a $(pkg-config --libs libreactor) \
+  -lcrypto -lresolv -o libreactor-example
+```
+
+Send `GET /limited` to port 8000.
+
 ## GNU libmicrohttpd
 
 `libmicrohttpd.c` runs MHD in external-select mode. It suspends each HTTP

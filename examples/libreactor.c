@@ -1,0 +1,226 @@
+#define _GNU_SOURCE
+#define _POSIX_C_SOURCE 200809L
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#include <reactor.h>
+
+#include "common/rl_example.h"
+
+/*
+ * libreactor exposes both descriptor and timer objects, so rl-c-client can run
+ * entirely on its event-loop thread.  Duplicate descriptors are registered
+ * with libreactor: they share readiness with the UDP sockets, while the common
+ * adapter retains ownership and performs recvfrom() on the originals.
+ *
+ * Each HTTP request owns one timer and one rl_example_request_t.  libreactor's
+ * server keeps a handling reference until server_respond(), including after a
+ * peer disconnects, so asynchronous completion cannot dereference a released
+ * server_request.
+ */
+
+typedef struct reactor_app reactor_app_t;
+
+typedef struct udp_watcher {
+    descriptor descriptor;
+    reactor_app_t *app;
+    int client_fd;
+} udp_watcher_t;
+
+typedef struct pending_request {
+    reactor_app_t *app;
+    server_request *http_request;
+    rl_example_request_t request;
+    timer timer;
+    bool defer_completion;
+    bool completion_ready;
+    int completion_status;
+    bool completion_allowed;
+} pending_request_t;
+
+struct reactor_app {
+    rl_example_client_t client;
+    server http_server;
+    udp_watcher_t watchers[2];
+    size_t watcher_count;
+};
+
+static void finish_request(
+    pending_request_t *pending,
+    int status,
+    bool allowed
+) {
+    /* Stop all loop callbacks before releasing request-owned state. */
+    timer_destruct(&pending->timer);
+    if (pending->request.active) {
+        rl_example_request_cancel(&pending->app->client, &pending->request);
+    }
+
+    if (status != RCLIENT_OK) {
+        server_respond(pending->http_request,
+            data_string("503 Service Unavailable"),
+            data_string("text/plain"),
+            data_string("rate-limit service unavailable\n"));
+    } else if (!allowed) {
+        server_respond(pending->http_request,
+            data_string("429 Too Many Requests"),
+            data_string("text/plain"),
+            data_string("denied\n"));
+    } else {
+        server_ok(pending->http_request,
+            data_string("text/plain"), data_string("allowed\n"));
+    }
+    free(pending);
+}
+
+static void on_rate_limit(void *user, int status, bool allowed) {
+    pending_request_t *pending = user;
+    /* Some rl-c-client operations may complete synchronously.  Defer freeing
+     * the object until the operation that owns the current stack returns. */
+    if (pending->defer_completion) {
+        pending->completion_ready = true;
+        pending->completion_status = status;
+        pending->completion_allowed = allowed;
+        return;
+    }
+    finish_request(pending, status, allowed);
+}
+
+static int arm_timer(pending_request_t *pending) {
+    uint64_t delay_ms = 0;
+    int status = rl_example_request_delay_ms(&pending->request, &delay_ms);
+    if (status != RCLIENT_OK) {
+        return status;
+    }
+    /* timer_set() uses nanoseconds; zero is reserved for immediate startup in
+     * some libreactor versions, so use one nanosecond for an expired deadline. */
+    uint64_t delay_ns = delay_ms == 0 ? 1 : delay_ms * 1000000u;
+    timer_set(&pending->timer, delay_ns, 0);
+    return RCLIENT_OK;
+}
+
+static void on_timeout(reactor_event *event) {
+    pending_request_t *pending = event->state;
+    pending->defer_completion = true;
+    int status = rl_example_request_on_timeout(
+        &pending->app->client,
+        &pending->request
+    );
+    pending->defer_completion = false;
+
+    if (pending->completion_ready) {
+        finish_request(pending,
+            pending->completion_status, pending->completion_allowed);
+        return;
+    }
+    if (status != RCLIENT_OK || arm_timer(pending) != RCLIENT_OK) {
+        finish_request(pending,
+            status != RCLIENT_OK ? status : RCLIENT_ERR_IO, false);
+    }
+}
+
+static void on_udp_readable(reactor_event *event) {
+    udp_watcher_t *watcher = event->state;
+    if (event->type != DESCRIPTOR_READ) {
+        fprintf(stderr, "libreactor UDP watcher closed unexpectedly\n");
+        return;
+    }
+    int status = rl_example_client_on_readable(
+        &watcher->app->client,
+        watcher->client_fd
+    );
+    if (status != RCLIENT_OK) {
+        fprintf(stderr, "Ratelimitly UDP ingress failed: %d\n", status);
+    }
+}
+
+static void on_http_request(reactor_event *event) {
+    reactor_app_t *app = event->state;
+    server_request *request = (server_request *)event->data;
+    if (event->type != SERVER_REQUEST
+        || !data_equal(request->method, data_string("GET"))
+        || !data_equal(request->target, data_string("/limited"))) {
+        server_not_found(request);
+        return;
+    }
+
+    pending_request_t *pending = calloc(1, sizeof(*pending));
+    if (!pending) {
+        server_respond(request,
+            data_string("503 Service Unavailable"),
+            data_string("text/plain"),
+            data_string("allocation failed\n"));
+        return;
+    }
+    pending->app = app;
+    pending->http_request = request;
+    timer_construct(&pending->timer, on_timeout, pending);
+
+    pending->defer_completion = true;
+    int status = rl_example_check(
+        &app->client,
+        &pending->request,
+        "libreactor-example",
+        on_rate_limit,
+        pending
+    );
+    pending->defer_completion = false;
+    if (pending->completion_ready) {
+        finish_request(pending,
+            pending->completion_status, pending->completion_allowed);
+    } else if (status != RCLIENT_OK || arm_timer(pending) != RCLIENT_OK) {
+        finish_request(pending,
+            status != RCLIENT_OK ? status : RCLIENT_ERR_IO, false);
+    }
+}
+
+static int open_udp_watchers(reactor_app_t *app) {
+    size_t socket_count = rl_example_socket_count(&app->client);
+    for (size_t i = 0; i < socket_count; i++) {
+        udp_watcher_t *watcher = &app->watchers[i];
+        watcher->app = app;
+        watcher->client_fd = rl_example_socket_at(&app->client, i);
+        int duplicate_fd = dup(watcher->client_fd);
+        if (duplicate_fd < 0) {
+            return -1;
+        }
+        descriptor_construct(&watcher->descriptor, on_udp_readable, watcher);
+        descriptor_open(&watcher->descriptor, duplicate_fd, DESCRIPTOR_READ);
+        app->watcher_count++;
+    }
+    return 0;
+}
+
+int main(void) {
+    rl_example_options_t options;
+    if (rl_example_options_from_env(&options) != RCLIENT_OK) {
+        fprintf(stderr, "set RATELIMITLY_TENANT and RATELIMITLY_AUTH_KEY\n");
+        return EXIT_FAILURE;
+    }
+
+    reactor_app_t app = {0};
+    if (rl_example_client_init(&app.client, &options) != RCLIENT_OK) {
+        return EXIT_FAILURE;
+    }
+    reactor_construct();
+    server_construct(&app.http_server, on_http_request, &app);
+    int listener = net_socket(net_resolve(
+        "0.0.0.0", "8000", AF_INET, SOCK_STREAM, AI_PASSIVE));
+    if (listener < 0 || open_udp_watchers(&app) != 0) {
+        fprintf(stderr, "failed to initialize libreactor descriptors\n");
+        return EXIT_FAILURE;
+    }
+    server_open(&app.http_server, listener, NULL);
+    reactor_loop();
+
+    server_destruct(&app.http_server);
+    for (size_t i = 0; i < app.watcher_count; i++) {
+        descriptor_destruct(&app.watchers[i].descriptor);
+    }
+    reactor_destruct();
+    rl_example_client_destroy(&app.client);
+    return EXIT_SUCCESS;
+}
