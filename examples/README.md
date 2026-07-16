@@ -224,6 +224,24 @@ cc -I../include -Icommon $(pkg-config --cflags libulfius) ulfius.c \
 
 Send `GET /limited` to port 8000.
 
+## llhttp (parser only)
+
+`llhttp.c` is intentionally not an event loop. It incrementally collects URL
+fragments, strips query data from the bucket key, and starts a check when
+llhttp reports a complete request. The host owns UDP readiness and deadlines;
+pair this adapter with any loop example above. A second pipelined request is
+backpressured with `HPE_USER` until the first check completes.
+
+Compile it as part of the host that already embeds llhttp:
+
+```sh
+cc -I/path/to/llhttp/include -I../include -Icommon -c llhttp.c
+```
+
+Call `rl_llhttp_adapter_init()` once per connection,
+`rl_llhttp_adapter_feed()` for each received byte span, and
+`rl_llhttp_adapter_dispose()` when the connection closes.
+
 ## GNU libmicrohttpd
 
 `libmicrohttpd.c` runs MHD in external-select mode. It suspends each HTTP

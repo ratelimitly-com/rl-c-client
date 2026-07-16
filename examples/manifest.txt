@@ -15,3 +15,4 @@ facil_io|framework|http_listen(
 onion|framework|onion_url_add_with_data(
 kore|framework|kore_task_create(
 ulfius|framework|ulfius_add_endpoint_by_val(
+llhttp|parser|llhttp_execute(
