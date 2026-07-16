@@ -206,11 +206,20 @@ static void *bridge_loop(void *user) {
             loop_status = RCLIENT_ERR_IO;
             break;
         }
+        if ((poll_fds[0].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+            loop_status = RCLIENT_ERR_IO;
+            break;
+        }
         if ((poll_fds[0].revents & POLLIN) != 0) {
             drain_wake_pipe(bridge);
             start_queued_jobs(bridge);
         }
         for (size_t i = 0; i < socket_count; i++) {
+            if ((poll_fds[i + 1].revents
+                    & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+                loop_status = RCLIENT_ERR_IO;
+                break;
+            }
             if ((poll_fds[i + 1].revents & POLLIN) != 0) {
                 loop_status = rl_example_client_on_readable(
                     &bridge->client, poll_fds[i + 1].fd);

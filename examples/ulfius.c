@@ -84,6 +84,9 @@ static int wait_for_result(
             continue;
         }
         for (size_t i = 0; i < socket_count; i++) {
+            if ((sockets[i].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+                return RCLIENT_ERR_IO;
+            }
             if ((sockets[i].revents & POLLIN) != 0) {
                 status = rl_example_client_on_readable(client, sockets[i].fd);
                 if (status != RCLIENT_OK) {
