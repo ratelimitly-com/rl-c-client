@@ -7,6 +7,7 @@ those comments before transplanting the integration into an application.
 
 | Example | Integration model | Main technique |
 | --- | --- | --- |
+| Latency tracker | Guard and reporting workflow | Gate work, measure it, then report one sample |
 | libuv | Native event loop | `uv_poll_t` plus a one-shot `uv_timer_t` |
 | libevent | Native event loop | Persistent `EV_READ` plus `evtimer` |
 | libhv | Native event loop | `hio_t` readiness plus `htimer_t` |
@@ -32,6 +33,7 @@ concurrency model already used by the host application.
 
 | Host architecture | Start with | Trade-off |
 | --- | --- | --- |
+| Any host using latency load shedding | Latency tracker, then the matching loop or framework | Shows policy and measurement lifecycle separately from framework plumbing. |
 | One event-loop thread | libuv, libevent, libhv, epoll, io_uring, Mongoose, H2O, libreactor, or facil.io | No client lock is needed when all calls stay on the loop thread. |
 | Worker-thread HTTP server | CivetWeb, Lwan, or Onion | A dedicated bridge thread serializes client access; queue and shutdown ownership need care. |
 | Isolated request tasks | Kore | Each task owns its client and reports through the framework's task channel. |
@@ -90,6 +92,63 @@ tests, from the repository root:
 ```sh
 make test
 ```
+
+## Latency tracking workflow
+
+`latency_tracker.c` demonstrates both halves of latency-based load shedding:
+
+1. Hash a stable service name into `r_latency_guard_t.service_id`.
+2. Include that guard in the rate-limit request.
+3. Copy the guard decision during the completion callback; result arrays are
+   owned by `rl-c-client` and expire when the callback returns.
+4. Perform protected work only when the combined resource and guard result
+   passes.
+5. Measure only that work with `CLOCK_MONOTONIC`.
+6. Send the observation with `r_client_report_latency()` using the same service
+   id and tracker configuration.
+
+Never report latency for work rejected by the guard. No operation occurred, so
+a zero or synthetic sample would corrupt the service tracker. Likewise, do not
+measure the RateLimitly request round trip unless that round trip is itself the
+service whose latency should control admission.
+
+The guard's policy fields have distinct purposes:
+
+| Field | Meaning |
+| --- | --- |
+| `threshold_ms` | Reject protected work when tracked service latency reaches this value. |
+| `ttl_ms` | Maximum age of samples retained for this tracker. |
+| `max_samples` | Maximum sample count considered by the tracker. |
+| `buffer_size` | Tracker storage request; must fit the credential quota. |
+| `min_sample_threshold` | Samples required before the tracker estimate controls admission. |
+
+The report repeats `service_id`, `ttl_ms`, `max_samples`, `buffer_size`, and
+`min_sample_threshold` so it updates the same tracker. `threshold_ms` belongs
+only to the guard decision.
+
+Build and run the standalone workflow:
+
+```sh
+cc -I../include -Icommon latency_tracker.c common/rl_example.c \
+  ../librclient.a -lcrypto -lresolv -pthread -o latency-tracker-example
+
+# Optional: simulated protected-work duration; default is 25 ms.
+export RATELIMITLY_EXAMPLE_WORK_MS=25
+./latency-tracker-example
+```
+
+Passing output resembles:
+
+```text
+guard passed: current=20 ms threshold=100 ms
+latency reported: service=example-inventory-backend observed=25 ms
+```
+
+The sleep represents a backend call only in this command-line demonstration.
+Production event loops should start the real asynchronous operation after the
+guard passes, record its monotonic start time, and report from its completion
+callback. `r_client_report_latency()` is fire-and-forget: it uses the client's
+UDP send hook immediately and creates no request deadline or response watcher.
 
 ## Event-loop examples
 

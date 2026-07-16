@@ -84,3 +84,7 @@ actual_headings="$(sed -n 's/^### //p' "$README")"
   || fail "README example headings are missing or out of order"
 grep -Fq -- 'If it returns `HPE_PAUSED`' "$README" \
   || fail "README does not explain resumable llhttp backpressure"
+grep -Fq -- '## Latency tracking workflow' "$README" \
+  || fail "README does not document latency tracking"
+grep -Fq -- 'Never report latency for work rejected by the guard.' "$README" \
+  || fail "README does not explain denied latency-guard behavior"
