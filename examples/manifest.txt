@@ -7,3 +7,4 @@ epoll|loop|epoll_wait(
 io_uring|loop|__NR_io_uring_setup
 mongoose|framework|mg_http_listen(
 civetweb|framework|mg_set_request_handler(
+libmicrohttpd|framework|MHD_suspend_connection(

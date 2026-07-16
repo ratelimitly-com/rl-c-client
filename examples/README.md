@@ -106,6 +106,20 @@ cc -I../include -Icommon -I/path/to/mongoose mongoose.c \
 
 Send `GET /limited` to port 8000.
 
+## GNU libmicrohttpd
+
+`libmicrohttpd.c` runs MHD in external-select mode. It suspends each HTTP
+connection while its asynchronous check is active, resumes it from the
+Ratelimitly callback, and merges MHD plus request deadlines into one `select`.
+
+```sh
+cc -I../include -Icommon libmicrohttpd.c common/rl_example.c \
+  ../librclient.a $(pkg-config --cflags --libs libmicrohttpd) \
+  -lcrypto -lresolv -pthread -o libmicrohttpd-example
+```
+
+Send `GET /limited` to port 8000.
+
 ## CivetWeb
 
 `civetweb.c` keeps `r_client_t` on one dedicated poll thread. CivetWeb worker
