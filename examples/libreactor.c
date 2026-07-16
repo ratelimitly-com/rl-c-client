@@ -11,15 +11,17 @@
 #include "common/rl_example.h"
 
 /*
- * libreactor exposes both descriptor and timer objects, so rl-c-client can run
- * entirely on its event-loop thread.  Duplicate descriptors are registered
- * with libreactor: they share readiness with the UDP sockets, while the common
- * adapter retains ownership and performs recvfrom() on the originals.
+ * Flow
+ * ----
+ * 1. libreactor watches duplicates of the rl-c-client UDP descriptors.
+ * 2. GET /limited allocates pending state and starts an asynchronous check.
+ * 3. A reactor timer advances that request's current deadline.
+ * 4. UDP readiness lets the adapter drain the original socket.
+ * 5. Completion calls server_respond() with HTTP 200, 429, or 503.
  *
- * Each HTTP request owns one timer and one rl_example_request_t.  libreactor's
- * server keeps a handling reference until server_respond(), including after a
- * peer disconnects, so asynchronous completion cannot dereference a released
- * server_request.
+ * Ownership: the adapter owns original sockets; descriptor objects own their
+ * duplicates. Each HTTP request owns one timer and check. libreactor keeps a
+ * handling reference until server_respond(), including after peer disconnect.
  */
 
 typedef struct reactor_app reactor_app_t;
@@ -133,7 +135,8 @@ static void on_udp_readable(reactor_event *event) {
         watcher->client_fd
     );
     if (status != RCLIENT_OK) {
-        fprintf(stderr, "Ratelimitly UDP ingress failed: %d\n", status);
+        fprintf(stderr, "Ratelimitly UDP ingress failed: %s (%d)\n",
+            rl_example_status_name(status), status);
     }
 }
 
@@ -202,25 +205,37 @@ int main(void) {
     }
 
     reactor_app_t app = {0};
-    if (rl_example_client_init(&app.client, &options) != RCLIENT_OK) {
+    int status = rl_example_client_init(&app.client, &options);
+    if (status != RCLIENT_OK) {
+        fprintf(stderr, "client initialization failed: %s (%d)\n",
+            rl_example_status_name(status), status);
         return EXIT_FAILURE;
     }
+
+    int exit_status = EXIT_FAILURE;
+    int listener = -1;
     reactor_construct();
     server_construct(&app.http_server, on_http_request, &app);
-    int listener = net_socket(net_resolve(
+    listener = net_socket(net_resolve(
         "0.0.0.0", "8000", AF_INET, SOCK_STREAM, AI_PASSIVE));
     if (listener < 0 || open_udp_watchers(&app) != 0) {
         fprintf(stderr, "failed to initialize libreactor descriptors\n");
-        return EXIT_FAILURE;
+        goto cleanup;
     }
     server_open(&app.http_server, listener, NULL);
+    listener = -1; /* server now owns the listening descriptor. */
     reactor_loop();
+    exit_status = EXIT_SUCCESS;
 
+cleanup:
+    if (listener >= 0) {
+        close(listener);
+    }
     server_destruct(&app.http_server);
     for (size_t i = 0; i < app.watcher_count; i++) {
         descriptor_destruct(&app.watchers[i].descriptor);
     }
     reactor_destruct();
     rl_example_client_destroy(&app.client);
-    return EXIT_SUCCESS;
+    return exit_status;
 }
