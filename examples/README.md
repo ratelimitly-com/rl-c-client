@@ -120,6 +120,25 @@ cc -I../include -Icommon h2o.c common/rl_example.c ../librclient.a \
 
 Send `GET /limited` to port 8000.
 
+## Lwan
+
+`lwan.c` keeps client state off Lwan's small coroutine stacks. A dedicated
+thread owns rl-c-client and its UDP sockets; handlers enqueue checks and yield
+with `lwan_request_sleep()` until completion. Reference-counted jobs remain safe
+when an HTTP peer disconnects while a check is active.
+Lwan's built-in status table omits 429, so a denied check returns 403 instead;
+returning an unknown numeric status would trip Lwan's status-table assertion.
+
+Build Lwan, then compile against its public headers and library:
+
+```sh
+cc -I../include -Icommon -I/path/to/lwan/src/lib lwan.c \
+  common/rl_example.c ../librclient.a /path/to/liblwan.a \
+  -lcrypto -lresolv -pthread -o lwan-example
+```
+
+Set Lwan's listener in `lwan.conf`, then send `GET /limited`.
+
 ## GNU libmicrohttpd
 
 `libmicrohttpd.c` runs MHD in external-select mode. It suspends each HTTP
