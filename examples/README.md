@@ -48,3 +48,14 @@ cc -I../include -Icommon libevent.c common/rl_example.c ../librclient.a \
   $(pkg-config --cflags --libs libevent) -lcrypto -lresolv -pthread \
   -o libevent-example
 ```
+
+## libhv
+
+`libhv.c` attaches each client UDP descriptor with `hio_add(..., HV_READ)` and
+uses a one-shot `htimer_t` for request deadlines.
+
+```sh
+cc -I../include -Icommon libhv.c common/rl_example.c ../librclient.a \
+  $(pkg-config --cflags --libs libhv) -lcrypto -lresolv -pthread \
+  -o libhv-example
+```
