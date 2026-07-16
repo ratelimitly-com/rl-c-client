@@ -91,3 +91,17 @@ request deadline through `IORING_ENTER_EXT_ARG`.
 cc -I../include -Icommon io_uring.c common/rl_example.c ../librclient.a \
   -lcrypto -lresolv -pthread -o io-uring-example
 ```
+
+## Mongoose
+
+`mongoose.c` keeps HTTP connections pending while checks run. The Mongoose
+poll loop drains Ratelimitly UDP sockets, advances per-request deadlines, and
+cancels a check if its HTTP connection closes.
+
+```sh
+cc -I../include -Icommon -I/path/to/mongoose mongoose.c \
+  common/rl_example.c /path/to/mongoose/mongoose.c ../librclient.a \
+  -lcrypto -lresolv -pthread -o mongoose-example
+```
+
+Send `GET /limited` to port 8000.
