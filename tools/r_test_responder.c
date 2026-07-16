@@ -224,14 +224,17 @@ static int parse_listen_address(const char *text, listen_address_t *address) {
     return 0;
 }
 
-static void print_nginx_config(const responder_options_t *options) {
-    const char *listen = options->listen ? options->listen : "127.0.0.1:39080";
+static void print_nginx_config(
+    const responder_options_t *options,
+    const char *listen,
+    uint16_t port
+) {
     printf("# Synthetic rl-c-client test responder configuration; never use in production.\n");
     printf("ratelimitly_tenant rn-test.local;\n");
     printf("ratelimitly_auth_key %s;\n", options->auth_key);
     printf("# responder=%s\n", listen);
-    printf("# SRV _ratelimitly._udp.rn-test.local 0 0 %s s-%" PRIu64 ".localhost.\n",
-        strrchr(listen, ':') ? strrchr(listen, ':') + 1 : "39080",
+    printf("# SRV _ratelimitly._udp.rn-test.local 0 0 %u s-%" PRIu64 ".localhost.\n",
+        (unsigned int)port,
         options->server_id);
 }
 
@@ -310,15 +313,15 @@ int main(int argc, char **argv) {
         usage(stderr);
         return 2;
     }
-    if (options.print_nginx_config) {
-        print_nginx_config(&options);
-        return 0;
-    }
-
+    const char *listen = options.listen ? options.listen : "127.0.0.1:39080";
     listen_address_t address;
-    if (parse_listen_address(options.listen, &address) != 0) {
+    if (parse_listen_address(listen, &address) != 0) {
         fprintf(stderr, "listen address must be an explicit loopback IP and nonzero port\n");
         return 2;
+    }
+    if (options.print_nginx_config) {
+        print_nginx_config(&options, listen, address.port);
+        return 0;
     }
     r_test_responder_state_t state;
     int rc = r_test_responder_init(

@@ -82,6 +82,14 @@ grep -q 'Synthetic rl-c-client test responder' "$TMP_DIR/config" \
 grep -q '^ratelimitly_auth_key rl-aes' "$TMP_DIR/config" \
   || fail "generated config does not contain the AES fixture"
 
+if "$RESPONDER" --print-nginx-config --listen=0.0.0.0:"$PORT" \
+    >"$TMP_DIR/wildcard-config.out" 2>"$TMP_DIR/wildcard-config.err"; then
+  fail "config generation accepted a wildcard listen address"
+fi
+if [[ -s "$TMP_DIR/wildcard-config.out" ]]; then
+  fail "invalid config generation emitted nginx configuration"
+fi
+
 if "$RESPONDER" --listen=0.0.0.0:"$PORT" >"$TMP_DIR/wildcard.out" 2>"$TMP_DIR/wildcard.err"; then
   fail "wildcard listen address was accepted"
 fi
