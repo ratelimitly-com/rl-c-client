@@ -61,12 +61,13 @@ src/%.o: src/%.c
 tools/%.o: tools/%.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-test: tests/test_protocol tests/test_client_quota tests/test_public_api tests/test_responder $(TEST_RESPONDER_BIN)
+test: tests/test_protocol tests/test_client_quota tests/test_public_api tests/test_responder tests/test_example_common $(TEST_RESPONDER_BIN)
 	./tests/test_protocol
 	./tests/test_client_quota
 	./tests/test_public_api
 	./tests/test_responder
 	bash ./tests/test_responder_cli.sh
+	bash ./tests/test_example_common.sh
 
 tests/test_protocol: tests/test_protocol.c src/r_protocol.o src/r_crypto.o
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $^ -o $@ -lcrypto
@@ -80,5 +81,8 @@ tests/test_public_api: tests/test_public_api.c librclient.a
 tests/test_responder: tests/test_responder.c tools/r_test_responder_protocol.o librclient.a
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $^ -o $@ -lcrypto -lresolv -pthread
 
+tests/test_example_common: tests/test_example_common.c examples/common/rl_example.c librclient.a
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -Iexamples/common $^ -o $@ -lcrypto -lresolv -pthread
+
 clean:
-	rm -f $(LIB_OBJS) $(TEST_RESPONDER_OBJS) librclient.a librclient.so tests/test_protocol tests/test_client_quota tests/test_public_api tests/test_responder $(PERF_BIN) $(TEST_RESPONDER_BIN)
+	rm -f $(LIB_OBJS) $(TEST_RESPONDER_OBJS) librclient.a librclient.so tests/test_protocol tests/test_client_quota tests/test_public_api tests/test_responder tests/test_example_common $(PERF_BIN) $(TEST_RESPONDER_BIN)
