@@ -9,6 +9,14 @@
 
 #include "common/rl_example.h"
 
+/*
+ * Direct epoll integration
+ * ------------------------
+ * The epoll set watches the common adapter's original UDP descriptors. Each
+ * iteration derives epoll_wait()'s timeout from rl-c-client's current deadline,
+ * drains every ready socket, then advances timeout state if the deadline passed.
+ * No framework-specific wrapper owns or closes the descriptors.
+ */
 typedef struct epoll_app {
     rl_example_client_t client;
     rl_example_request_t request;
@@ -33,6 +41,7 @@ static int run_loop(epoll_app_t *app, int epoll_fd) {
         }
         int timeout = delay_ms > INT_MAX ? INT_MAX : (int)delay_ms;
         struct epoll_event events[2];
+        /* Readiness and the deadline share one blocking kernel call. */
         int count = epoll_wait(epoll_fd, events, 2, timeout);
         if (count < 0 && errno == EINTR) {
             continue;
@@ -51,6 +60,7 @@ static int run_loop(epoll_app_t *app, int epoll_fd) {
             if ((events[i].events & EPOLLIN) == 0) {
                 return RCLIENT_ERR_IO;
             }
+            /* data.fd is safe because every registration is a client fd. */
             status = rl_example_client_on_readable(&app->client, events[i].data.fd);
             if (status != RCLIENT_OK) {
                 return status;

@@ -13,6 +13,18 @@
 
 #include "common/rl_example.h"
 
+/*
+ * Raw io_uring integration (no liburing)
+ * --------------------------------------
+ * This sample spells out what liburing normally hides: io_uring_setup(), the
+ * three shared mappings, SQE publication, io_uring_enter(), and CQE retirement.
+ * It uses IORING_OP_POLL_ADD only; rl-c-client still performs recvfrom() on its
+ * own nonblocking UDP descriptors when a poll completion arrives.
+ *
+ * Ring head/tail fields are shared with the kernel. Acquire/release atomics
+ * ensure an SQE is fully initialized before its tail is published and a CQE is
+ * fully observed before its head is advanced.
+ */
 typedef struct raw_ring {
     int fd;
     void *sq_mapping;
@@ -67,10 +79,12 @@ static int raw_ring_init(raw_ring_t *ring, unsigned entries) {
         return -1;
     }
 
+    /* Offset metadata, rather than local struct layouts, defines each mapping. */
     ring->sq_mapping_size = parameters.sq_off.array
         + parameters.sq_entries * sizeof(unsigned);
     ring->cq_mapping_size = parameters.cq_off.cqes
         + parameters.cq_entries * sizeof(struct io_uring_cqe);
+    /* Newer kernels may expose SQ and CQ through one shared mapping. */
     if ((parameters.features & IORING_FEAT_SINGLE_MMAP) != 0) {
         if (ring->cq_mapping_size > ring->sq_mapping_size) {
             ring->sq_mapping_size = ring->cq_mapping_size;
@@ -130,6 +144,7 @@ static int raw_ring_prep_poll(raw_ring_t *ring, int socket_fd, uint64_t user_dat
     if (tail - head >= *ring->sq_entries) {
         return -1;
     }
+    /* Monotonic counters wrap into the fixed-size array through ring_mask. */
     unsigned index = tail & *ring->sq_mask;
     struct io_uring_sqe *submission = &ring->submissions[index];
     memset(submission, 0, sizeof(*submission));
@@ -138,6 +153,7 @@ static int raw_ring_prep_poll(raw_ring_t *ring, int socket_fd, uint64_t user_dat
     submission->poll32_events = POLLIN;
     submission->user_data = user_data;
     ring->sq_array[index] = index;
+    /* Publish only after the SQE and its array entry are completely written. */
     __atomic_store_n(ring->sq_tail, tail + 1u, __ATOMIC_RELEASE);
     return 0;
 }
@@ -161,6 +177,7 @@ static int raw_ring_wait(raw_ring_t *ring, uint64_t delay_ms) {
     struct io_uring_getevents_arg arguments = {
         .ts = (uint64_t)(uintptr_t)&timeout,
     };
+    /* EXT_ARG lets one syscall wait for either a CQE or the client deadline. */
     return (int)syscall(
         __NR_io_uring_enter,
         ring->fd,
@@ -179,6 +196,7 @@ static int raw_ring_pop(raw_ring_t *ring, struct io_uring_cqe *completion) {
         return 0;
     }
     *completion = ring->completions[head & *ring->cq_mask];
+    /* Release tells the kernel this CQ slot can be reused. */
     __atomic_store_n(ring->cq_head, head + 1u, __ATOMIC_RELEASE);
     return 1;
 }
@@ -191,6 +209,7 @@ static void on_rate_limit(void *user, int status, bool allowed) {
 }
 
 static int arm_socket(io_uring_app_t *app, size_t index) {
+    /* user_data is index + 1 because zero is reserved as an invalid tag. */
     return raw_ring_prep_poll(
         &app->ring,
         rl_example_socket_at(&app->client, index),
@@ -247,6 +266,7 @@ static int run_loop(io_uring_app_t *app) {
             if (status != RCLIENT_OK) {
                 return status;
             }
+            /* POLL_ADD is one-shot; re-arm after draining this descriptor. */
             if (!app->done && arm_socket(app, index) != 0) {
                 return RCLIENT_ERR_IO;
             }

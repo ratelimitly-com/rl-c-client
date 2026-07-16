@@ -15,6 +15,16 @@
 
 #include "common/rl_example.h"
 
+/*
+ * CivetWeb invokes handlers concurrently on its worker pool. rl-c-client state
+ * is intentionally kept on one dedicated bridge thread instead: workers queue
+ * jobs, wake the bridge through a nonblocking pipe, and wait on a per-job
+ * condition variable for the decision.
+ *
+ * Only the bridge thread touches the client, its UDP sockets, active requests,
+ * and request deadlines. A worker owns its bridge_job_t until completion, so
+ * the callback can safely signal it without sharing allocation ownership.
+ */
 typedef struct civetweb_bridge civetweb_bridge_t;
 
 typedef struct bridge_job {
@@ -49,6 +59,7 @@ static void on_signal(int signal_number) {
 static void wake_bridge(civetweb_bridge_t *bridge) {
     char byte = 0;
     ssize_t written;
+    /* One byte is enough; EAGAIN only means a wakeup is already pending. */
     do {
         written = write(bridge->wake_pipe[1], &byte, 1);
     } while (written < 0 && errno == EINTR);
@@ -81,6 +92,7 @@ static void on_rate_limit(void *user, int status, bool allowed) {
 }
 
 static bridge_job_t *take_queue(civetweb_bridge_t *bridge) {
+    /* Detach the whole FIFO quickly so workers spend minimal time on the lock. */
     pthread_mutex_lock(&bridge->queue_mutex);
     bridge_job_t *jobs = bridge->queue_head;
     bridge->queue_head = NULL;
@@ -118,6 +130,7 @@ static void drain_wake_pipe(civetweb_bridge_t *bridge) {
 }
 
 static int next_timeout(civetweb_bridge_t *bridge) {
+    /* poll() must wake for the earliest active rl-c-client request. */
     int timeout = 1000;
     for (bridge_job_t *job = bridge->active; job; job = job->next) {
         uint64_t delay_ms = 0;
@@ -161,6 +174,7 @@ static bool bridge_should_stop(civetweb_bridge_t *bridge) {
 }
 
 static void fail_all_jobs(civetweb_bridge_t *bridge, int status) {
+    /* Shutdown/error paths wake every waiting CivetWeb worker exactly once. */
     bridge_job_t *job = take_queue(bridge);
     while (job) {
         bridge_job_t *next = job->next;

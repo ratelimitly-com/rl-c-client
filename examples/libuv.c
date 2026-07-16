@@ -5,6 +5,16 @@
 
 #include "common/rl_example.h"
 
+/*
+ * libuv integration map
+ * ---------------------
+ *   uv_poll_t  -> reports readable rl-c-client UDP sockets
+ *   uv_timer_t -> wakes at the current request deadline
+ *   callback   -> records the decision and stops uv_run()
+ *
+ * The common adapter owns the descriptors. uv_poll_t only observes them, so
+ * cleanup stops the watchers before the adapter closes the sockets.
+ */
 typedef struct libuv_app libuv_app_t;
 
 typedef struct socket_watcher {
@@ -44,6 +54,7 @@ static int arm_timer(libuv_app_t *app);
 
 static void on_timeout(uv_timer_t *timer) {
     libuv_app_t *app = timer->data;
+    /* This can synchronously complete the request, hence the active check. */
     int status = rl_example_request_on_timeout(&app->client, &app->request);
     if (status != RCLIENT_OK) {
         stop_with_error(app, status);
@@ -58,6 +69,7 @@ static int arm_timer(libuv_app_t *app) {
     if (status != RCLIENT_OK) {
         return -1;
     }
+    /* repeat=0: each client transition may publish a different deadline. */
     return uv_timer_start(&app->timer, on_timeout, delay_ms, 0);
 }
 
@@ -68,6 +80,7 @@ static void on_udp_readable(uv_poll_t *poll, int status, int events) {
         stop_with_error(app, RCLIENT_ERR_IO);
         return;
     }
+    /* The adapter drains the original nonblocking descriptor to EAGAIN. */
     int client_status = rl_example_client_on_readable(&app->client, watcher->socket_fd);
     if (client_status != RCLIENT_OK) {
         stop_with_error(app, client_status);

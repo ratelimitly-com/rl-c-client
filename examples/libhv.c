@@ -5,6 +5,13 @@
 
 #include "common/rl_example.h"
 
+/*
+ * libhv integration map
+ * ---------------------
+ * hio_get() attaches libhv watchers to the adapter-owned UDP descriptors.
+ * htimer_add() schedules the current request deadline as a one-shot timer.
+ * The decision callback stops the loop after this demonstration check.
+ */
 typedef struct libhv_app {
     hloop_t *loop;
     hio_t *socket_events[2];
@@ -40,6 +47,7 @@ static int arm_timer(libhv_app_t *app);
 static void on_timeout(htimer_t *timer) {
     libhv_app_t *app = hevent_userdata(timer);
     app->timer = NULL;
+    /* Timeout processing can complete inline; only re-arm an active request. */
     int status = rl_example_request_on_timeout(&app->client, &app->request);
     if (status != RCLIENT_OK) {
         stop_with_error(app, status);
@@ -54,6 +62,7 @@ static int arm_timer(libhv_app_t *app) {
     if (status != RCLIENT_OK || delay_ms > UINT32_MAX) {
         return -1;
     }
+    /* repeat=1 in libhv means run once, not a repeating interval. */
     app->timer = htimer_add(app->loop, on_timeout, (uint32_t)delay_ms, 1);
     if (!app->timer) {
         return -1;
@@ -64,6 +73,7 @@ static int arm_timer(libhv_app_t *app) {
 
 static void on_udp_readable(hio_t *io) {
     libhv_app_t *app = hio_context(io);
+    /* hio owns readiness; the adapter performs the actual recvfrom(). */
     int status = rl_example_client_on_readable(&app->client, hio_fd(io));
     if (status != RCLIENT_OK) {
         stop_with_error(app, status);

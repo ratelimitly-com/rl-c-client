@@ -21,6 +21,7 @@
 #define RL_EXAMPLE_DNS_PACKET_SIZE 65536
 #define RL_EXAMPLE_FIXED_TARGET "s-1.ratelimitly-example.invalid"
 
+/* rl-c-client deadlines use milliseconds on the same clock supplied here. */
 static uint64_t example_now_ms(void *context) {
     (void)context;
     struct timespec now;
@@ -80,6 +81,11 @@ static int open_udp_socket(int family) {
     return socket_fd;
 }
 
+/*
+ * rl-c-client gives the application a destination address, but never sends on
+ * its behalf. Choose the socket with the matching address family and preserve
+ * datagram boundaries by requiring sendto() to accept the complete payload.
+ */
 static int example_udp_send(
     void *context,
     const r_addr_t *to,
@@ -132,6 +138,12 @@ static int copy_fixed_host(
     return RCLIENT_OK;
 }
 
+/*
+ * These resolver callbacks complete synchronously. That is legal in the
+ * public API and useful for readable examples, but it can re-enter client code
+ * before the initiating call returns. Production loops will usually replace
+ * this section with their asynchronous DNS integration.
+ */
 static int resolve_addresses(
     const char *host,
     r_dns_addr_cb callback,
@@ -347,6 +359,7 @@ int rl_example_client_init(
         return status;
     }
 
+    /* One short attempt keeps failures and demonstrations deterministic. */
     r_request_policy_t policy;
     r_client_default_request_policy(&policy);
     policy.attempt_timeout_ms = 1000;
@@ -407,6 +420,7 @@ int rl_example_client_on_readable(rl_example_client_t *client, int socket_fd) {
     if (!client || !client->handle || socket_fd < 0) {
         return RCLIENT_ERR_CONFIG;
     }
+    /* Read until EAGAIN: readiness APIs are edge-safe only when fully drained. */
     for (;;) {
         uint8_t buffer[65536];
         r_addr_t from = {0};
@@ -439,6 +453,7 @@ int rl_example_check(
     if (!client || !client->handle || !request || !bucket || !callback) {
         return RCLIENT_ERR_CONFIG;
     }
+    /* The borrowed resource storage lives inside request for the whole check. */
     memset(request, 0, sizeof(*request));
     r_client_hash_id(bucket, request->resource.bucket_id);
     request->resource.window_size_ms = 1000;

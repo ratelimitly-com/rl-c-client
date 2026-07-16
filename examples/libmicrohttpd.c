@@ -12,6 +12,17 @@
 
 #include "common/rl_example.h"
 
+/*
+ * GNU libmicrohttpd external-loop integration
+ * -------------------------------------------
+ * MHD contributes its read/write/error descriptor sets; the adapter adds its
+ * UDP descriptors. One select() then waits on both systems using the earliest
+ * MHD or rl-c-client deadline.
+ *
+ * An HTTP connection is suspended while its asynchronous check is pending.
+ * The completion callback records the result and resumes the connection; MHD
+ * invokes the access handler again, where the stored result becomes a response.
+ */
 typedef struct microhttpd_app microhttpd_app_t;
 
 typedef struct pending_request {
@@ -55,6 +66,7 @@ static void on_rate_limit(void *user, int status, bool allowed) {
     pending->status = status;
     pending->allowed = allowed;
     pending->done = true;
+    /* Remove before resume because the handler may run again immediately. */
     remove_pending(pending->app, pending);
     MHD_resume_connection(pending->connection);
 }
@@ -93,6 +105,7 @@ static enum MHD_Result handle_request(
     microhttpd_app_t *app = user;
     pending_request_t *pending = *request_context;
     if (!pending) {
+        /* MHD's first call establishes per-connection state only. */
         pending = calloc(1, sizeof(*pending));
         if (!pending) {
             return MHD_NO;
@@ -135,6 +148,7 @@ static enum MHD_Result handle_request(
             return queue_text(connection, MHD_HTTP_SERVICE_UNAVAILABLE,
                 "rate-limit check failed\n");
         }
+        /* Suspension releases the daemon from repeatedly calling this handler. */
         MHD_suspend_connection(connection);
     }
     return MHD_YES;
@@ -154,6 +168,7 @@ static void request_completed(
         return;
     }
     if (pending->request.active) {
+        /* Completion notification also covers disconnects and daemon shutdown. */
         remove_pending(app, pending);
         rl_example_request_cancel(&app->client, &pending->request);
     }
@@ -182,6 +197,7 @@ static int expire_requests(microhttpd_app_t *app) {
 }
 
 static uint64_t next_timeout_ms(microhttpd_app_t *app) {
+    /* Start with a housekeeping bound, then take the minimum of both systems. */
     uint64_t timeout_ms = 1000;
     uint64_t mhd_timeout = 0;
     if (MHD_get_timeout64(app->daemon, &mhd_timeout) == MHD_YES
@@ -231,6 +247,7 @@ static int run_loop(microhttpd_app_t *app) {
             .tv_sec = (time_t)(timeout_ms / 1000u),
             .tv_usec = (suseconds_t)((timeout_ms % 1000u) * 1000u),
         };
+        /* This is the only blocking call in the external event loop. */
         int ready = select((int)max_socket + 1, &read_set, &write_set,
             &except_set, &timeout);
         if (ready < 0 && errno == EINTR) {
@@ -253,6 +270,7 @@ static int run_loop(microhttpd_app_t *app) {
         if (status != RCLIENT_OK) {
             return status;
         }
+        /* Let MHD consume the readiness already captured in its fd_sets. */
         if (MHD_run(app->daemon) != MHD_YES) {
             return RCLIENT_ERR_IO;
         }

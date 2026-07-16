@@ -6,6 +6,15 @@
 
 #include "common/rl_example.h"
 
+/*
+ * Mongoose runs networking callbacks on the thread calling mg_mgr_poll().
+ * The same loop therefore owns the HTTP connections, rl-c-client, its UDP
+ * sockets, and every pending request—no locks or worker handoff are needed.
+ *
+ * Mongoose has no separate watcher object for an arbitrary descriptor in this
+ * compact example. Each short mg_mgr_poll() tick is followed by a nonblocking
+ * drain of the client sockets and advancement of every expired deadline.
+ */
 typedef struct mongoose_app mongoose_app_t;
 
 typedef struct pending_request {
@@ -54,6 +63,7 @@ static pending_request_t *find_pending(
 static void on_rate_limit(void *user, int status, bool allowed) {
     pending_request_t *pending = user;
     mongoose_app_t *app = pending->app;
+    /* Unlink before replying: mg_http_reply may schedule connection teardown. */
     remove_pending(app, pending);
     if (status != RCLIENT_OK) {
         mg_http_reply(pending->connection, 503, "Content-Type: text/plain\r\n",
@@ -77,6 +87,7 @@ static void cancel_connection_request(
         return;
     }
     remove_pending(app, pending);
+    /* MG_EV_CLOSE means the callback may no longer touch this connection. */
     rl_example_request_cancel(&app->client, &pending->request);
     free(pending);
 }
@@ -135,6 +146,7 @@ static void on_http_event(
 }
 
 static int drive_rate_limits(mongoose_app_t *app) {
+    /* Reads are nonblocking, so polling both possible UDP sockets is cheap. */
     size_t socket_count = rl_example_socket_count(&app->client);
     for (size_t i = 0; i < socket_count; i++) {
         int status = rl_example_client_on_readable(
@@ -146,6 +158,7 @@ static int drive_rate_limits(mongoose_app_t *app) {
         }
     }
 
+    /* Save next first: timeout processing may complete and free pending. */
     pending_request_t *pending = app->pending;
     while (pending) {
         pending_request_t *next = pending->next;
@@ -195,6 +208,7 @@ int main(void) {
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
     while (!stop_requested) {
+        /* Ten milliseconds bounds latency because UDP fds are polled after it. */
         mg_mgr_poll(&app.manager, 10);
         int status = drive_rate_limits(&app);
         if (status != RCLIENT_OK) {

@@ -9,6 +9,14 @@
 
 #include "common/rl_example.h"
 
+/*
+ * liburing integration map
+ * ------------------------
+ * Each adapter-owned UDP descriptor has one IORING_OP_POLL_ADD in flight.
+ * user_data stores index + 1 (zero is reserved), so a completion maps back to
+ * the socket without heap allocation. Poll requests are one-shot and therefore
+ * re-submitted after the socket has been drained.
+ */
 typedef struct liburing_app {
     struct io_uring ring;
     rl_example_client_t client;
@@ -30,6 +38,7 @@ static int arm_socket(liburing_app_t *app, size_t index) {
     if (!submission) {
         return -1;
     }
+    /* POLL_ADD completes once; run_loop() re-arms it after each CQE. */
     io_uring_prep_poll_add(
         submission,
         rl_example_socket_at(&app->client, index),
@@ -61,6 +70,7 @@ static int run_loop(liburing_app_t *app) {
             .tv_nsec = (long long)((delay_ms % 1000u) * 1000000u),
         };
         struct io_uring_cqe *completion = NULL;
+        /* One kernel wait covers both UDP readiness and the client deadline. */
         status = io_uring_wait_cqe_timeout(&app->ring, &completion, &timeout);
         if (status == -ETIME) {
             status = rl_example_request_on_timeout(&app->client, &app->request);
@@ -89,6 +99,7 @@ static int run_loop(liburing_app_t *app) {
         if (status != RCLIENT_OK) {
             return status;
         }
+        /* POLL_ADD is one-shot, even though the UDP socket remains readable. */
         if (!app->done) {
             if (arm_socket(app, index) != 0 || io_uring_submit(&app->ring) < 0) {
                 return RCLIENT_ERR_IO;

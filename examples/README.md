@@ -3,6 +3,26 @@
 These examples connect `rl-c-client` to popular C event loops, HTTP servers,
 and parsers. Every example includes only the public headers under `include/`.
 
+| Example | Integration model | Demonstrates |
+| --- | --- | --- |
+| libuv | Native event loop | `uv_poll_t` plus one-shot `uv_timer_t` |
+| libevent | Native event loop | Persistent `EV_READ` plus `evtimer` |
+| libhv | Native event loop | `hio_t` readiness plus `htimer_t` |
+| liburing | Linux completion ring | `IORING_OP_POLL_ADD` through liburing |
+| epoll | Linux readiness API | Direct `epoll_wait` deadline integration |
+| io_uring | Linux completion ring | Raw syscalls and shared ring mappings |
+| Mongoose | Single-thread HTTP loop | Pending HTTP connection on `mg_mgr_poll` |
+| CivetWeb | Worker-thread HTTP server | Queue and dedicated client thread |
+| GNU libmicrohttpd | External HTTP loop | Suspended connections and merged `select` |
+| H2O | Native HTTP event loop | Duplicate descriptor watchers and pool cleanup |
+| Lwan | Coroutine HTTP server | Yielding handlers and dedicated client thread |
+| libreactor | Native HTTP event loop | Descriptor and timer objects on one thread |
+| facil.io | Native HTTP event loop | Pause/resume handles with retained timers |
+| Onion | Worker-thread HTTP server | `OCS_YIELD` long-poll lifecycle |
+| Kore | Task-based HTTP server | Sleeping request and task-channel result |
+| Ulfius | Threaded HTTP server | Simple per-callback client ownership |
+| llhttp | Parser only | Fragmented parsing and explicit backpressure |
+
 `common/rl_example.c` keeps repeated setup out of each integration. It owns
 nonblocking IPv4 and IPv6 UDP sockets, provides synchronous SRV plus A/AAAA
 resolution, translates readable socket events into `r_client_on_datagram`, and
@@ -27,6 +47,17 @@ export RATELIMITLY_EXAMPLE_SERVER_PORT=39082
 The fixed endpoint variables are development-only. Normal deployments should
 leave them unset so the adapter discovers `_ratelimitly._udp.<tenant>` SRV
 records.
+
+The six loop examples perform one check, print `allowed` or `denied`, and exit.
+The HTTP examples listen on port 8000 unless their framework configuration says
+otherwise; send `GET /limited` to exercise them. Build commands below assume
+they are run from this directory after `make` has produced `../librclient.a`.
+
+Run the repository's common-adapter and example-contract tests with:
+
+```sh
+make test
+```
 
 ## libuv
 
@@ -132,10 +163,19 @@ returning an unknown numeric status would trip Lwan's status-table assertion.
 Build Lwan, then compile against its public headers and library:
 
 ```sh
-cc -I../include -Icommon -I/path/to/lwan/src/lib lwan.c \
-  common/rl_example.c ../librclient.a /path/to/liblwan.a \
-  -lcrypto -lresolv -pthread -o lwan-example
+LWAN=/path/to/lwan
+LWAN_BUILD=/path/to/lwan-build
+cc -I../include -Icommon -I"$LWAN/src/lib" \
+  -include "$LWAN_BUILD/lwan-build-config.h" \
+  lwan.c common/rl_example.c ../librclient.a \
+  -Wl,--whole-archive "$LWAN_BUILD/src/lib/liblwan.a" \
+  -Wl,--no-whole-archive -lcrypto -lresolv -lz -lzstd -ldl -lm -pthread \
+  -o lwan-example
 ```
+
+The whole-archive flags retain Lwan's linker-discovered module table when using
+its static library. A shared-library installation can use its generated
+`lwan.pc` file instead.
 
 Set Lwan's listener in `lwan.conf`, then send `GET /limited`.
 
@@ -150,7 +190,7 @@ while an rl-c-client operation remains on the stack.
 ```sh
 cc -I../include -Icommon $(pkg-config --cflags libreactor) libreactor.c \
   common/rl_example.c ../librclient.a $(pkg-config --libs libreactor) \
-  -lcrypto -lresolv -o libreactor-example
+  -lssl -lcrypto -lresolv -pthread -o libreactor-example
 ```
 
 Send `GET /limited` to port 8000.
@@ -164,9 +204,14 @@ a UDP response beats its deadline. The example uses one event-loop thread to
 keep all rl-c-client access serialized.
 
 ```sh
-cc -I../include -Icommon -I/path/to/facil.io/lib/facil \
-  -I/path/to/facil.io/lib/facil/http facil_io.c common/rl_example.c \
-  ../librclient.a /path/to/libfacil.a -lcrypto -lresolv -pthread \
+FACIL=/path/to/facil.io
+FACIL_BUILD=/path/to/facil.io-build
+cc -I../include -Icommon -I"$FACIL/lib" -I"$FACIL/lib/facil" \
+  -I"$FACIL/lib/facil/tls" -I"$FACIL/lib/facil/fiobj" \
+  -I"$FACIL/lib/facil/cli" -I"$FACIL/lib/facil/http" \
+  -I"$FACIL/lib/facil/http/parsers" -I"$FACIL/lib/facil/redis" \
+  facil_io.c common/rl_example.c ../librclient.a \
+  "$FACIL_BUILD/libfacil.io.a" -lcrypto -lssl -lresolv -ldl -lm -pthread \
   -o facil-io-example
 ```
 

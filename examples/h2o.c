@@ -22,6 +22,17 @@
 
 #include "common/rl_example.h"
 
+/*
+ * H2O evloop integration
+ * ----------------------
+ * H2O owns the HTTP listener and wraps duplicate rl-c-client UDP descriptors
+ * with H2O_SOCKET_FLAG_DONT_READ. The duplicates report readiness, while the
+ * common adapter remains the sole reader and owner of the original sockets.
+ *
+ * Each HTTP request allocates its check state from the H2O request pool. A pool
+ * disposer cancels abandoned checks, and a one-shot H2O timer tracks the exact
+ * client deadline. Compatibility branches cover H2O 2.2 and current 2.3 APIs.
+ */
 typedef struct h2o_app h2o_app_t;
 
 typedef struct h2o_rl_handler {
@@ -81,6 +92,7 @@ static void send_result(pending_request_t *pending, int status, bool allowed) {
     if (!request) {
         return;
     }
+    /* Stop timeout callbacks before H2O begins finalizing the request pool. */
     unlink_timer(pending);
     if (status != RCLIENT_OK) {
         h2o_send_error_503(request, "Service Unavailable",
@@ -126,6 +138,7 @@ static int arm_timer(pending_request_t *pending) {
         return -1;
     }
 #if H2O_VERSION_MAJOR == 2 && H2O_VERSION_MINOR < 3
+    /* H2O 2.2 uses a timeout wheel plus a separately linked entry. */
     if (!pending->timeout_initialized) {
         h2o_timeout_init(pending->http_request->conn->ctx->loop,
             &pending->timeout, delay_ms);
@@ -135,6 +148,7 @@ static int arm_timer(pending_request_t *pending) {
     h2o_timeout_link(pending->http_request->conn->ctx->loop,
         &pending->timeout, &pending->timer);
 #else
+    /* H2O 2.3 replaced the timeout pair with a direct timer object. */
     h2o_timer_link(pending->http_request->conn->ctx->loop, delay_ms, &pending->timer);
 #endif
     return 0;
@@ -148,6 +162,7 @@ static void dispose_pending(void *data) {
         h2o_timeout_dispose(pending->http_request->conn->ctx->loop, &pending->timeout);
     }
 #endif
+    /* The pool can disappear because of success, error, or peer disconnect. */
     if (pending->request.active) {
         rl_example_request_cancel(&pending->app->client, &pending->request);
     }
@@ -249,6 +264,7 @@ static int create_udp_watchers(h2o_app_t *app) {
         socket_watcher_t *watcher = &app->watchers[i];
         watcher->app = app;
         watcher->client_fd = rl_example_socket_at(&app->client, i);
+        /* H2O closes its wrapper; dup keeps adapter ownership independent. */
         int duplicate_fd = dup(watcher->client_fd);
         if (duplicate_fd < 0) {
             return -1;
@@ -314,6 +330,7 @@ int main(void) {
     for (size_t i = 0; i < app.watcher_count; i++) {
         h2o_socket_close(app.watchers[i].socket);
     }
+    /* Drain H2O's deferred connection cleanup before disposing the context. */
     h2o_context_request_shutdown(&app.context);
     for (size_t i = 0; i < 100; i++) {
         if (h2o_evloop_run(loop, 10) != 0) {

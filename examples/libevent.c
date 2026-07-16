@@ -5,6 +5,13 @@
 
 #include "common/rl_example.h"
 
+/*
+ * libevent integration map
+ * ------------------------
+ * Persistent EV_READ events watch the adapter-owned UDP descriptors. A
+ * one-shot evtimer represents the request deadline. The result callback calls
+ * event_base_loopbreak(), making this a minimal one-check command-line sample.
+ */
 typedef struct libevent_app {
     struct event_base *base;
     struct event *socket_events[2];
@@ -38,6 +45,7 @@ static void on_timeout(evutil_socket_t socket_fd, short events, void *user) {
     (void)socket_fd;
     (void)events;
     libevent_app_t *app = user;
+    /* A timeout transition may synchronously invoke on_rate_limit(). */
     int status = rl_example_request_on_timeout(&app->client, &app->request);
     if (status != RCLIENT_OK) {
         stop_with_error(app, status);
@@ -56,6 +64,7 @@ static int arm_timer(libevent_app_t *app) {
         .tv_sec = (time_t)(delay_ms / 1000u),
         .tv_usec = (suseconds_t)((delay_ms % 1000u) * 1000u),
     };
+    /* Re-add the one-shot event after every published client deadline. */
     return evtimer_add(app->timer, &delay);
 }
 
@@ -65,6 +74,7 @@ static void on_udp_readable(evutil_socket_t socket_fd, short events, void *user)
         stop_with_error(app, RCLIENT_ERR_IO);
         return;
     }
+    /* Persistent readiness is safe because the adapter drains to EAGAIN. */
     int status = rl_example_client_on_readable(&app->client, (int)socket_fd);
     if (status != RCLIENT_OK) {
         stop_with_error(app, status);
