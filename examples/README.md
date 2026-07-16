@@ -187,6 +187,27 @@ cc -I../include -Icommon $(pkg-config --cflags onion) onion.c \
 
 Send `GET /limited` to port 8000.
 
+## Kore
+
+`kore.c` runs each exchange as a `kore_task`, putting the HTTP request to sleep
+until the task channel reports a result. Task-local client ownership keeps Kore
+workers nonblocking and avoids cross-thread client access. The Linux build also
+declares the minimal extra socket syscalls required by Kore's seccomp filter.
+`kore.conf` provides a plain-HTTP route on port 8000.
+
+Build Kore with task support and its no-TLS backend, then build the example as
+a module:
+
+```sh
+make -C /path/to/kore TASKS=1 TLS_BACKEND=none
+cc -fPIC -shared -DKORE_USE_TASKS -I/path/to/kore/include \
+  -I../include -Icommon kore.c common/rl_example.c ../librclient.a \
+  -lcrypto -lresolv -pthread -o kore-example.so
+kore -fnc kore.conf
+```
+
+Send `GET /limited` to port 8000.
+
 ## GNU libmicrohttpd
 
 `libmicrohttpd.c` runs MHD in external-select mode. It suspends each HTTP

@@ -13,3 +13,4 @@ lwan|framework|lwan_set_url_map(
 libreactor|framework|reactor_loop(
 facil_io|framework|http_listen(
 onion|framework|onion_url_add_with_data(
+kore|framework|kore_task_create(
