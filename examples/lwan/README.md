@@ -51,6 +51,9 @@ cmake --build example-build
 ```
 
 The whole-archive link flags retain Lwan's linker-discovered module table.
+Both example build files also read the `lwan.pc` generated in `LWAN_BUILD`.
+That metadata supplies the optional dependencies selected by the exact Lwan
+configuration, such as Brotli and Zstd, instead of assuming a fixed feature set.
 
 ## Decisions and latency
 

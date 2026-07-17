@@ -11,6 +11,8 @@ CI_WORKFLOW="$ROOT/.github/workflows/ci.yml"
 WIN32_CMAKE="$ROOT/examples/win32/CMakeLists.txt"
 H2O_MAKEFILE="$ROOT/examples/h2o/Makefile"
 H2O_CMAKE="$ROOT/examples/h2o/CMakeLists.txt"
+LWAN_MAKEFILE="$ROOT/examples/lwan/Makefile"
+LWAN_CMAKE="$ROOT/examples/lwan/CMakeLists.txt"
 
 fail() {
   echo "test_examples: $*" >&2
@@ -39,6 +41,10 @@ grep -Fq -- 'OpenSSL::SSL' "$H2O_CMAKE" \
   || fail "H2O CMake omits libh2o's OpenSSL dependency"
 grep -Eq -- '(^|[[:space:]])m([[:space:]\)]|$)' "$H2O_CMAKE" \
   || fail "H2O CMake omits libh2o's math dependency"
+grep -Fq -- 'LWAN_DEP_LIBS' "$LWAN_MAKEFILE" \
+  || fail "Lwan Makefile ignores build-specific optional dependencies"
+grep -Fq -- 'pkg_check_modules(LWAN_BUILD_CONFIG' "$LWAN_CMAKE" \
+  || fail "Lwan CMake ignores build-specific optional dependencies"
 [[ ! -e "$ROOT/examples/common" ]] \
   || fail "legacy examples/common adapter still exists"
 [[ ! -e "$ROOT/tests/test_example_common.c" \
