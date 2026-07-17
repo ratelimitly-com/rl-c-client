@@ -44,16 +44,13 @@ static void drive_request(
             descriptors[i].events = POLLIN;
         }
 
-        uint64_t deadline_ms = 0u;
-        assert(r_client_admission_deadline_ms(request, &deadline_ms) == RCLIENT_OK);
-        uint64_t now_ms = r_runtime_wall_time_ms();
-        uint64_t delay_ms = deadline_ms > now_ms ? deadline_ms - now_ms : 0u;
+        uint64_t delay_ms = 0u;
+        assert(r_runtime_admission_delay_ms(request, &delay_ms) == RCLIENT_OK);
         int timeout_ms = delay_ms > INT_MAX ? INT_MAX : (int)delay_ms;
         int ready = poll(descriptors, (nfds_t)count, timeout_ms);
         assert(ready >= 0);
         if (ready == 0) {
-            assert(r_client_admission_on_timeout(runtime->handle, request,
-                r_runtime_wall_time_ms()) == RCLIENT_OK);
+            assert(r_runtime_admission_on_timeout(runtime, request) == RCLIENT_OK);
             continue;
         }
         for (size_t i = 0; i < count; i++) {
@@ -68,16 +65,12 @@ static void drive_request(
     }
 }
 
-static uint32_t perform_measured_work(void) {
-    uint64_t started_ms = 0u;
-    assert(r_runtime_monotonic_time_ms(&started_ms) == RCLIENT_OK);
+static int perform_protected_work(void *user) {
+    bool *called = user;
+    *called = true;
     struct timespec duration = {.tv_nsec = 1000000L};
     assert(nanosleep(&duration, NULL) == 0);
-    uint64_t finished_ms = 0u;
-    assert(r_runtime_monotonic_time_ms(&finished_ms) == RCLIENT_OK);
-    assert(finished_ms >= started_ms);
-    uint64_t elapsed_ms = finished_ms - started_ms;
-    return elapsed_ms > UINT32_MAX ? UINT32_MAX : (uint32_t)elapsed_ms;
+    return RCLIENT_OK;
 }
 
 int main(int argc, char **argv) {
@@ -114,12 +107,16 @@ int main(int argc, char **argv) {
 
     assert(completion.status == RCLIENT_OK);
     assert(completion.outcome.decision == R_ADMISSION_ALLOWED);
-    uint32_t observed_ms = perform_measured_work();
-    assert(r_client_admission_report_latency(
-        runtime.handle,
+    bool work_called = false;
+    uint32_t observed_ms = 0u;
+    assert(r_runtime_admission_run_and_report(
+        &runtime,
         &request,
-        observed_ms
+        perform_protected_work,
+        &work_called,
+        &observed_ms
     ) == RCLIENT_OK);
+    assert(work_called);
 
     r_runtime_client_destroy(&runtime);
     return 0;

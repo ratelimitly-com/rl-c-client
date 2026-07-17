@@ -1,7 +1,7 @@
 #ifndef R_CLIENT_RUNTIME_H
 #define R_CLIENT_RUNTIME_H
 
-#include "r_client.h"
+#include "r_client_workflow.h"
 
 #ifdef _WIN32
 typedef SOCKET r_runtime_socket_t;
@@ -68,6 +68,36 @@ uint64_t r_runtime_wall_time_ms(void);
 
 /* Monotonic time for measuring protected-operation latency. */
 int r_runtime_monotonic_time_ms(uint64_t *out_milliseconds);
+
+/* Convert a workflow's absolute client deadline into a relative loop delay. */
+int r_runtime_admission_delay_ms(
+    const r_admission_request_t *request,
+    uint64_t *out_delay_ms
+);
+
+int r_runtime_admission_on_timeout(
+    r_runtime_client_t *runtime,
+    r_admission_request_t *request
+);
+
+void r_runtime_admission_cancel(
+    r_runtime_client_t *runtime,
+    r_admission_request_t *request
+);
+
+typedef int (*r_runtime_protected_work_cb)(void *user);
+
+/*
+ * Run admitted work, measure it monotonically, and report one sample.
+ * Denied/cancelled requests and failed work never emit a latency report.
+ */
+int r_runtime_admission_run_and_report(
+    r_runtime_client_t *runtime,
+    r_admission_request_t *request,
+    r_runtime_protected_work_cb protected_work,
+    void *user,
+    uint32_t *out_observed_latency_ms
+);
 
 #ifdef __cplusplus
 }

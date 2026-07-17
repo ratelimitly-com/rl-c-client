@@ -631,3 +631,84 @@ int r_runtime_client_on_readable(
         }
     }
 }
+
+int r_runtime_admission_delay_ms(
+    const r_admission_request_t *request,
+    uint64_t *out_delay_ms
+) {
+    if (!out_delay_ms) {
+        return RCLIENT_ERR_CONFIG;
+    }
+    uint64_t deadline_ms = 0u;
+    int status = r_client_admission_deadline_ms(request, &deadline_ms);
+    if (status != RCLIENT_OK) {
+        return status;
+    }
+    uint64_t now_ms = r_runtime_wall_time_ms();
+    *out_delay_ms = deadline_ms > now_ms ? deadline_ms - now_ms : 0u;
+    return RCLIENT_OK;
+}
+
+int r_runtime_admission_on_timeout(
+    r_runtime_client_t *runtime,
+    r_admission_request_t *request
+) {
+    if (!runtime || !runtime->handle) {
+        return RCLIENT_ERR_CONFIG;
+    }
+    return r_client_admission_on_timeout(
+        runtime->handle,
+        request,
+        r_runtime_wall_time_ms()
+    );
+}
+
+void r_runtime_admission_cancel(
+    r_runtime_client_t *runtime,
+    r_admission_request_t *request
+) {
+    if (runtime) {
+        r_client_admission_cancel(runtime->handle, request);
+    }
+}
+
+int r_runtime_admission_run_and_report(
+    r_runtime_client_t *runtime,
+    r_admission_request_t *request,
+    r_runtime_protected_work_cb protected_work,
+    void *user,
+    uint32_t *out_observed_latency_ms
+) {
+    if (!runtime || !runtime->handle || !request || !request->admitted
+        || !protected_work) {
+        return RCLIENT_ERR_CONFIG;
+    }
+
+    uint64_t started_ms = 0u;
+    int status = r_runtime_monotonic_time_ms(&started_ms);
+    if (status != RCLIENT_OK) {
+        return status;
+    }
+    status = protected_work(user);
+    if (status != RCLIENT_OK) {
+        return status;
+    }
+    uint64_t finished_ms = 0u;
+    status = r_runtime_monotonic_time_ms(&finished_ms);
+    if (status != RCLIENT_OK || finished_ms < started_ms) {
+        return RCLIENT_ERR_IO;
+    }
+
+    uint64_t elapsed_ms = finished_ms - started_ms;
+    uint32_t observed_ms = elapsed_ms > UINT32_MAX
+        ? UINT32_MAX
+        : (uint32_t)elapsed_ms;
+    if (out_observed_latency_ms) {
+        *out_observed_latency_ms = observed_ms;
+    }
+    return r_client_admission_report_latency(
+        runtime->handle,
+        request,
+        observed_ms
+    );
+}
