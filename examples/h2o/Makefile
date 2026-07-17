@@ -24,6 +24,6 @@ all: $(TARGET)
 $(TARGET): main.c $(ROOT)/librclient.a
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $< -o $@ \
 		$(ROOT)/librclient.a $(shell pkg-config --libs libh2o-evloop) \
-		-lcrypto -lresolv -pthread
+		-lssl -lcrypto -lm -lresolv -pthread
 clean:
 	rm -f $(TARGET)

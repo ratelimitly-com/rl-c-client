@@ -50,6 +50,10 @@ cmake --build build
 ./build/h2o-example
 ```
 
+H2O's installed `libh2o-evloop.pc` does not list every dependency needed when
+the library is static. Both build files therefore link OpenSSL's SSL and Crypto
+libraries plus the system math library explicitly.
+
 ## Decision mapping
 
 - `200`: admitted; protected work completed and latency was reported.

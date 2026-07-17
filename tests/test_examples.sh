@@ -9,6 +9,8 @@ API_GUIDE="$ROOT/docs/api.md"
 IO_GUIDE="$ROOT/IO_ABSTRACTION.md"
 CI_WORKFLOW="$ROOT/.github/workflows/ci.yml"
 WIN32_CMAKE="$ROOT/examples/win32/CMakeLists.txt"
+H2O_MAKEFILE="$ROOT/examples/h2o/Makefile"
+H2O_CMAKE="$ROOT/examples/h2o/CMakeLists.txt"
 
 fail() {
   echo "test_examples: $*" >&2
@@ -29,6 +31,14 @@ grep -Fq -- 'add_library(rclient STATIC' "$WIN32_CMAKE" \
 if grep -Fq -- 'STATIC IMPORTED' "$WIN32_CMAKE"; then
   fail "Win32 CMake still imports a compiler-specific client archive"
 fi
+grep -Fq -- '-lssl' "$H2O_MAKEFILE" \
+  || fail "H2O Makefile omits libh2o's OpenSSL dependency"
+grep -Fq -- '-lm' "$H2O_MAKEFILE" \
+  || fail "H2O Makefile omits libh2o's math dependency"
+grep -Fq -- 'OpenSSL::SSL' "$H2O_CMAKE" \
+  || fail "H2O CMake omits libh2o's OpenSSL dependency"
+grep -Eq -- '(^|[[:space:]])m([[:space:]\)]|$)' "$H2O_CMAKE" \
+  || fail "H2O CMake omits libh2o's math dependency"
 [[ ! -e "$ROOT/examples/common" ]] \
   || fail "legacy examples/common adapter still exists"
 [[ ! -e "$ROOT/tests/test_example_common.c" \
