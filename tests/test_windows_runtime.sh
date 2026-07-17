@@ -9,8 +9,10 @@ if [[ -z "$MINGW_CC" ]]; then
   exit 0
 fi
 
-OBJECT="$(mktemp "${TMPDIR:-/tmp}/r-runtime-win32.XXXXXX.o")"
-trap 'rm -f "$OBJECT"' EXIT
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/r-runtime-win32.XXXXXX")"
+trap 'rm -rf "$TMP_DIR"' EXIT
 
 "$MINGW_CC" -std=c11 -Wall -Wextra -Werror -I"$ROOT/include" \
-  -c "$ROOT/src/r_client_runtime.c" -o "$OBJECT"
+  -c "$ROOT/src/r_client_runtime.c" -o "$TMP_DIR/runtime.o"
+"$MINGW_CC" -std=c11 -Wall -Wextra -Werror -I"$ROOT/include" \
+  -c "$ROOT/examples/win32/main.c" -o "$TMP_DIR/example.o"

@@ -15,6 +15,7 @@ those comments before transplanting the integration into an application.
 | sd-event | systemd event loop | `sd_event_add_io` plus monotonic time source |
 | kqueue | Native macOS/BSD readiness | Direct `kevent` wait plus request deadline |
 | libdispatch | Serial dispatch queue | Read sources plus a one-shot timer source |
+| Win32 | Native WinSock wait loop | `WSAEVENT` readiness plus deadline timeout |
 | libhv | Native event loop | `hio_t` readiness plus `htimer_t` |
 | liburing | Linux completion ring | `IORING_OP_POLL_ADD` through liburing |
 | epoll | Linux readiness API | Direct `epoll_wait` with a request deadline |
@@ -262,6 +263,19 @@ make
 
 **Production note.** Cancel sources and serialize runtime teardown on the same
 queue. A semaphore gives this teaching program a finite shutdown path.
+
+### Win32
+
+**Model.** `win32/main.c` associates each native `SOCKET` with a `WSAEVENT` and
+passes the admission delay to `WSAWaitForMultipleEvents`.
+
+```sh
+cd win32
+make CC=x86_64-w64-mingw32-gcc OPENSSL_PREFIX=/path/to/mingw/openssl
+```
+
+**Production note.** Preserve pointer-width `SOCKET` values. Clear event
+associations before closing events or destroying runtime-owned sockets.
 
 ### libhv
 

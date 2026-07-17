@@ -7,6 +7,7 @@ libev|loop|ev_run(
 sd_event|loop|sd_event_loop(
 kqueue|loop|kevent(
 libdispatch|loop|dispatch_source_create(
+win32|loop|WSAWaitForMultipleEvents(
 libhv|loop|hloop_run(
 liburing|loop|io_uring_queue_init(
 epoll|loop|epoll_wait(
