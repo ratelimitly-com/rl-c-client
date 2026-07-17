@@ -15,7 +15,7 @@ fail() {
 }
 
 [[ -f "$MANIFEST" ]] || fail "missing examples/manifest.txt"
-for migrated in latency_tracker libuv libevent glib libev sd_event kqueue libdispatch win32 libhv epoll liburing io_uring mongoose; do
+for migrated in latency_tracker libuv libevent glib libev sd_event kqueue libdispatch win32 libhv epoll liburing io_uring mongoose civetweb; do
   [[ -d "$ROOT/examples/$migrated" ]] \
     || fail "$migrated does not have its own directory"
 done
@@ -109,7 +109,7 @@ done <"$MANIFEST"
 
 # CivetWeb may still enter request handlers until mg_stop() joins its workers.
 # The shared bridge must therefore outlive the server worker pool.
-civet_source="$ROOT/examples/civetweb.c"
+civet_source="$ROOT/examples/civetweb/main.c"
 server_stop_line="$(grep -nF -- 'mg_stop(server);' "$civet_source" | cut -d: -f1)"
 bridge_stop_line="$(grep -nF -- 'bridge_stop(&bridge);' "$civet_source" | tail -1 | cut -d: -f1)"
 [[ -n "$server_stop_line" && -n "$bridge_stop_line" \

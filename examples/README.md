@@ -368,15 +368,15 @@ Mongoose work and the nearest client deadline.
 
 ### CivetWeb
 
-**Model.** `civetweb.c` keeps the client on one dedicated poll thread. CivetWeb
-worker threads enqueue jobs and wait on per-request condition variables, so no
-two threads enter the client concurrently. Server workers stop before bridge
-state is destroyed.
+**Model.** [`civetweb/main.c`](civetweb/main.c) keeps the client on one dedicated
+poll thread. CivetWeb workers enqueue jobs and wait on per-request condition
+variables, so no two threads enter the client concurrently. An admitted request
+runs measured protected work on the bridge and reports it to the latency tracker.
+Server workers stop before bridge state is destroyed.
 
 ```sh
-cc -I../include -Icommon $(pkg-config --cflags civetweb) civetweb.c \
-  common/rl_example.c ../librclient.a $(pkg-config --libs civetweb) \
-  -lcrypto -lresolv -pthread -o civetweb-example
+cd civetweb
+make CIVETWEB_ROOT=/path/to/civetweb
 ./civetweb-example
 curl -i http://127.0.0.1:8000/limited
 ```
