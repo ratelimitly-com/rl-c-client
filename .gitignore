@@ -11,3 +11,4 @@ compile_commands.json
 /bin/perf_client
 /bin/r_test_responder
 /examples/*/*-example
+/examples/*/*-example.exe

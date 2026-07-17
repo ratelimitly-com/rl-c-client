@@ -22,6 +22,22 @@ Run `win32-example.exe` directly on Windows, through Wine on Linux, or through
 CrossOver on macOS. Set `RATELIMITLY_TENANT`, `RATELIMITLY_AUTH_KEY`, and the
 optional fixed responder variables in that environment.
 
+The repository test can cross-compile the complete client and exercise both
+allowed/reporting and denied/no-report paths under Wine:
+
+```sh
+MINGW_OPENSSL_PREFIX=/path/to/mingw/openssl \
+WINDOWS_RUNNER=/usr/lib/wine/wine64 \
+  bash ../../tests/test_windows_example.sh
+```
+
+The OpenSSL prefix may use either `lib` or `lib64`. `WINDOWS_RUNNER` is optional;
+without it the test still performs a strict compile and link check. CrossOver's
+`wine --bottle <64-bit-bottle> win32-example.exe` can run the same binary on
+macOS. To run the full responder assertions there without installing MinGW, set
+`WINDOWS_EXAMPLE_BINARY` to a PE built on Linux or Windows and set
+`WINDOWS_RUNNER_ARGS='--bottle <64-bit-bottle> --no-gui'`.
+
 ## Build with CMake/MSVC
 
 ```powershell

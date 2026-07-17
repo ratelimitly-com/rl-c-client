@@ -1,15 +1,16 @@
 ROOT ?= ../..
 CC ?= x86_64-w64-mingw32-gcc
 OPENSSL_PREFIX ?=
+OPENSSL_LIBDIR ?= $(if $(wildcard $(OPENSSL_PREFIX)/lib64/libcrypto.a),$(OPENSSL_PREFIX)/lib64,$(OPENSSL_PREFIX)/lib)
 RL_CLIENT_LIBRARY ?=
 CFLAGS ?= -O2 -Wall -Wextra -Werror -std=c11
 CPPFLAGS ?= -I$(ROOT)/include
 LDFLAGS ?=
 ifneq ($(OPENSSL_PREFIX),)
   CPPFLAGS += -I$(OPENSSL_PREFIX)/include
-  LDFLAGS += -L$(OPENSSL_PREFIX)/lib
+  LDFLAGS += -L$(OPENSSL_LIBDIR)
 endif
-LDLIBS ?= $(RL_CLIENT_LIBRARY) -lcrypto -lws2_32 -ldnsapi
+LDLIBS ?= $(RL_CLIENT_LIBRARY) -lcrypto -lws2_32 -lgdi32 -lcrypt32 -ldnsapi
 TARGET := win32-example.exe
 
 .PHONY: all clean
