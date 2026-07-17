@@ -1,30 +1,34 @@
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 
-#include <hloop.h>
+#include <hv/hloop.h>
 
-#include "common/rl_example.h"
+#include "r_client_runtime.h"
+#include "r_client_workflow.h"
 
 /*
  * Flow
  * ----
- * 1. hio_get() attaches readiness watchers to rl-c-client UDP descriptors.
- * 2. The adapter drains readable sockets and handles received datagrams.
- * 3. A one-shot htimer_t advances the current request deadline.
- * 4. The result callback records the decision and stops hloop_run().
+ * 1. hio_get() attaches readiness watchers to runtime-owned UDP sockets.
+ * 2. A one-shot htimer_t follows the current admission deadline.
+ * 3. Read and timeout callbacks advance the public workflow.
+ * 4. Admitted work is measured and reported before hloop_run() stops.
  *
- * Ownership: the adapter owns sockets; the hloop owns hio_t and htimer_t
- * objects. Watchers are detached before the adapter closes its descriptors.
+ * Ownership: runtime owns sockets; hloop owns hio_t and htimer_t objects.
+ * Watchers are detached before runtime closes its descriptors.
  */
 typedef struct libhv_app {
     hloop_t *loop;
     hio_t *socket_events[2];
     size_t socket_count;
     htimer_t *timer;
-    rl_example_client_t client;
-    rl_example_request_t request;
+    r_runtime_client_t runtime;
+    r_admission_request_t request;
+    r_admission_outcome_t outcome;
+    char response[96];
+    uint32_t observed_latency_ms;
     int status;
-    bool allowed;
     bool done;
 } libhv_app_t;
 
@@ -34,10 +38,32 @@ static void stop_with_error(libhv_app_t *app, int status) {
     hloop_stop(app->loop);
 }
 
-static void on_rate_limit(void *user, int status, bool allowed) {
+static int prepare_response(void *user) {
+    libhv_app_t *app = user;
+    int length = snprintf(app->response, sizeof(app->response),
+        "inventory response prepared by libhv");
+    return length >= 0 && (size_t)length < sizeof(app->response)
+        ? RCLIENT_OK
+        : RCLIENT_ERR_IO;
+}
+
+static void on_admission(
+    void *user,
+    int status,
+    const r_admission_outcome_t *outcome
+) {
     libhv_app_t *app = user;
     app->status = status;
-    app->allowed = allowed;
+    app->outcome = *outcome;
+    if (status == RCLIENT_OK && outcome->allowed) {
+        app->status = r_runtime_admission_run_and_report(
+            &app->runtime,
+            &app->request,
+            prepare_response,
+            app,
+            &app->observed_latency_ms
+        );
+    }
     app->done = true;
     if (app->timer) {
         htimer_del(app->timer);
@@ -52,7 +78,7 @@ static void on_timeout(htimer_t *timer) {
     libhv_app_t *app = hevent_userdata(timer);
     app->timer = NULL;
     /* Timeout processing can complete inline; only re-arm an active request. */
-    int status = rl_example_request_on_timeout(&app->client, &app->request);
+    int status = r_runtime_admission_on_timeout(&app->runtime, &app->request);
     if (status != RCLIENT_OK) {
         stop_with_error(app, status);
     } else if (app->request.active && arm_timer(app) != 0) {
@@ -62,7 +88,7 @@ static void on_timeout(htimer_t *timer) {
 
 static int arm_timer(libhv_app_t *app) {
     uint64_t delay_ms = 0;
-    int status = rl_example_request_delay_ms(&app->request, &delay_ms);
+    int status = r_runtime_admission_delay_ms(&app->request, &delay_ms);
     if (status != RCLIENT_OK || delay_ms > UINT32_MAX) {
         return -1;
     }
@@ -77,16 +103,18 @@ static int arm_timer(libhv_app_t *app) {
 
 static void on_udp_readable(hio_t *io) {
     libhv_app_t *app = hio_context(io);
-    /* hio owns readiness; the adapter performs the actual recvfrom(). */
-    int status = rl_example_client_on_readable(&app->client, hio_fd(io));
+    int status = r_runtime_client_on_readable(
+        &app->runtime,
+        (r_runtime_socket_t)hio_fd(io)
+    );
     if (status != RCLIENT_OK) {
         stop_with_error(app, status);
     }
 }
 
 int main(void) {
-    rl_example_options_t options;
-    if (rl_example_options_from_env(&options) != RCLIENT_OK) {
+    r_runtime_options_t options;
+    if (r_runtime_options_from_env(&options) != RCLIENT_OK) {
         fprintf(stderr, "set RATELIMITLY_TENANT and RATELIMITLY_AUTH_KEY\n");
         return EXIT_FAILURE;
     }
@@ -97,17 +125,17 @@ int main(void) {
     if (!app.loop) {
         return EXIT_FAILURE;
     }
-    int status = rl_example_client_init(&app.client, &options);
+    int status = r_runtime_client_init(&app.runtime, &options);
     if (status != RCLIENT_OK) {
         fprintf(stderr, "client initialization failed: %s (%d)\n",
-            rl_example_status_name(status), status);
+            r_runtime_status_name(status), status);
         hloop_free(&app.loop);
         return EXIT_FAILURE;
     }
 
-    size_t available_sockets = rl_example_socket_count(&app.client);
+    size_t available_sockets = r_runtime_socket_count(&app.runtime);
     for (size_t i = 0; i < available_sockets; i++) {
-        int socket_fd = rl_example_socket_at(&app.client, i);
+        int socket_fd = (int)r_runtime_socket_at(&app.runtime, i);
         hio_t *io = hio_get(app.loop, socket_fd);
         if (!io || hio_add(io, on_udp_readable, HV_READ) != 0) {
             stop_with_error(&app, RCLIENT_ERR_IO);
@@ -118,11 +146,16 @@ int main(void) {
     }
 
     if (!app.done) {
-        status = rl_example_check(
-            &app.client,
+        r_admission_config_t config;
+        r_client_admission_config_defaults(&config);
+        config.bucket_name = "libhv-example";
+        config.service_name = "libhv-protected-service";
+        config.metrics_label = "libhv-example";
+        status = r_client_admission_start(
+            app.runtime.handle,
             &app.request,
-            "libhv-example",
-            on_rate_limit,
+            &config,
+            on_admission,
             &app
         );
         if (status != RCLIENT_OK || arm_timer(&app) != 0) {
@@ -134,7 +167,7 @@ int main(void) {
     }
 
     if (app.request.active) {
-        rl_example_request_cancel(&app.client, &app.request);
+        r_runtime_admission_cancel(&app.runtime, &app.request);
     }
     if (app.timer) {
         htimer_del(app.timer);
@@ -142,14 +175,23 @@ int main(void) {
     for (size_t i = 0; i < app.socket_count; i++) {
         hio_del(app.socket_events[i], HV_READ);
     }
-    rl_example_client_destroy(&app.client);
+    r_runtime_client_destroy(&app.runtime);
     hloop_free(&app.loop);
 
     if (app.status != RCLIENT_OK) {
         fprintf(stderr, "rate-limit check failed: %s (%d)\n",
-            rl_example_status_name(app.status), app.status);
+            r_runtime_status_name(app.status), app.status);
         return EXIT_FAILURE;
     }
-    puts(app.allowed ? "allowed" : "denied");
-    return app.allowed ? EXIT_SUCCESS : 2;
+    if (app.outcome.allowed) {
+        printf("allowed: %s; latency=%" PRIu32 " ms\n",
+            app.response, app.observed_latency_ms);
+    } else if (app.outcome.rate_limited && app.outcome.latency_limited) {
+        puts("denied: resource limit and latency guard");
+    } else if (app.outcome.latency_limited) {
+        puts("denied: latency guard");
+    } else {
+        puts("denied: resource rate limit");
+    }
+    return app.outcome.allowed ? EXIT_SUCCESS : 2;
 }
