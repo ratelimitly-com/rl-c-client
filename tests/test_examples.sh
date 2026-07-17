@@ -8,6 +8,7 @@ ROOT_README="$ROOT/README.md"
 API_GUIDE="$ROOT/docs/api.md"
 IO_GUIDE="$ROOT/IO_ABSTRACTION.md"
 CI_WORKFLOW="$ROOT/.github/workflows/ci.yml"
+WIN32_CMAKE="$ROOT/examples/win32/CMakeLists.txt"
 
 fail() {
   echo "test_examples: $*" >&2
@@ -19,6 +20,15 @@ grep -Fq -- 'macos-latest' "$CI_WORKFLOW" \
   || fail "CI does not validate the macOS build"
 grep -Fq -- 'tests/test_windows_example.sh' "$CI_WORKFLOW" \
   || fail "CI does not build and run the Win32 example"
+grep -Fq -- 'runs-on: windows-latest' "$CI_WORKFLOW" \
+  || fail "CI does not validate the Win32 example on native Windows"
+grep -Fq -- 'CMAKE_C_COMPILER_ID -ne "MSVC"' "$CI_WORKFLOW" \
+  || fail "native Windows CI does not verify the Microsoft C compiler"
+grep -Fq -- 'add_library(rclient STATIC' "$WIN32_CMAKE" \
+  || fail "Win32 CMake does not compile rl-c-client with the target compiler"
+if grep -Fq -- 'STATIC IMPORTED' "$WIN32_CMAKE"; then
+  fail "Win32 CMake still imports a compiler-specific client archive"
+fi
 [[ ! -e "$ROOT/examples/common" ]] \
   || fail "legacy examples/common adapter still exists"
 [[ ! -e "$ROOT/tests/test_example_common.c" \

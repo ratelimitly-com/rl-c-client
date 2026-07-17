@@ -40,20 +40,31 @@ macOS. To run the full responder assertions there without installing MinGW, set
 
 ## Build with CMake/MSVC
 
+Install the MSVC build of OpenSSL with vcpkg, then point CMake at vcpkg's
+toolchain file. Run these commands from this example directory in PowerShell:
+
 ```powershell
-cmake -S . -B build -A x64 -DRL_CLIENT_ROOT=C:\src\rl-c-client
+vcpkg install openssl:x64-windows
+cmake -S . -B build -A x64 `
+  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
+  -DVCPKG_TARGET_TRIPLET=x64-windows
 cmake --build build --config Release
+./build/Release/win32-example.exe
 ```
 
-The imported library path can be overridden with `RL_CLIENT_LIBRARY`.
+CMake compiles the client and the example with the same selected compiler. This
+avoids mixing a MinGW `librclient.a` with Visual Studio's incompatible `.lib`
+format and C runtime. Both targets build with `/W4 /WX`; warnings fail the build.
+The repository's `windows-latest` job performs this native MSVC build and starts
+the executable before the separate MinGW/Wine integration test runs.
 
 ## Platform support
 
 This example is intentionally Windows-only and supports both native MSVC and
-MinGW-w64 builds. The separate library path is required for cross-compilation so
-the linker cannot silently consume a Linux or macOS `librclient.a` from the
-repository root. Use the epoll, kqueue/libdispatch, or portable third-party loop
-examples for native Linux and macOS hosts.
+MinGW-w64 builds. The Makefile accepts an explicit Windows `librclient.a` for
+cross-compilation; CMake builds the client sources itself for Visual Studio. Use
+the epoll, kqueue/libdispatch, or portable third-party loop examples for native
+Linux and macOS hosts.
 
 ## Ownership and shutdown
 

@@ -84,3 +84,53 @@ jobs:
           MINGW_OPENSSL_PREFIX: ${{ runner.temp }}/openssl-mingw64
           WINDOWS_RUNNER: /usr/lib/wine/wine64
         run: bash tests/test_windows_example.sh
+
+  win32-msvc:
+    name: Win32 example (MSVC)
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install OpenSSL for MSVC
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install openssl:x64-windows
+
+      - name: Configure with Visual Studio
+        shell: pwsh
+        run: |
+          cmake -S examples/win32 -B build-msvc -A x64 `
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows
+
+          $compilerFile = Get-ChildItem build-msvc/CMakeFiles `
+            -Filter CMakeCCompiler.cmake -Recurse | Select-Object -First 1
+          if (-not $compilerFile) {
+            throw "CMake did not write C compiler metadata"
+          }
+          $compilerDefinition = Select-String -Path $compilerFile.FullName `
+            -Pattern 'set\(CMAKE_C_COMPILER_ID "([^"]+)"\)' | Select-Object -First 1
+          if (-not $compilerDefinition) {
+            throw "CMake did not record a C compiler ID"
+          }
+          $CMAKE_C_COMPILER_ID = $compilerDefinition.Matches[0].Groups[1].Value
+          if ($CMAKE_C_COMPILER_ID -ne "MSVC") {
+            throw "Expected MSVC, found $CMAKE_C_COMPILER_ID"
+          }
+
+      - name: Build with strict Microsoft warnings
+        run: cmake --build build-msvc --config Release --parallel
+
+      - name: Start the native executable
+        shell: pwsh
+        run: |
+          $output = & build-msvc/Release/win32-example.exe 2>&1
+          if ($LASTEXITCODE -ne 1) {
+            throw "Expected missing-configuration exit code 1, got $LASTEXITCODE"
+          }
+          if ($output -notmatch 'set RATELIMITLY_TENANT and RATELIMITLY_AUTH_KEY') {
+            throw "Native executable did not reach configuration validation"
+          }
