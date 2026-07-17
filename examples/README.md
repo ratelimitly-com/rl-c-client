@@ -12,6 +12,7 @@ those comments before transplanting the integration into an application.
 | libevent | Native event loop | Persistent `EV_READ` plus `evtimer` |
 | GLib/GIO | Portable main loop | Non-owning `GIOChannel` watches plus timeout source |
 | libev | Compact event loop | `ev_io` watchers plus a one-shot `ev_timer` |
+| sd-event | systemd event loop | `sd_event_add_io` plus monotonic time source |
 | libhv | Native event loop | `hio_t` readiness plus `htimer_t` |
 | liburing | Linux completion ring | `IORING_OP_POLL_ADD` through liburing |
 | epoll | Linux readiness API | Direct `epoll_wait` with a request deadline |
@@ -217,6 +218,20 @@ make
 
 **Production note.** Stop all fd watchers before destroying runtime sockets.
 This example targets Unix fd backends rather than narrowing WinSock handles.
+
+### sd-event (Linux)
+
+**Model.** `sd_event/main.c` combines `sd_event_add_io` socket sources with a
+one-shot monotonic time source derived from the relative admission delay.
+
+```sh
+cd sd_event
+make
+./sd-event-example
+```
+
+**Production note.** Keep wall-clock client deadlines and monotonic timer
+timestamps in separate domains; convert through a relative delay.
 
 ### libhv
 

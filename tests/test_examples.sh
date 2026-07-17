@@ -15,7 +15,7 @@ fail() {
 }
 
 [[ -f "$MANIFEST" ]] || fail "missing examples/manifest.txt"
-for migrated in latency_tracker libuv libevent glib libev epoll liburing io_uring; do
+for migrated in latency_tracker libuv libevent glib libev sd_event epoll liburing io_uring; do
   [[ -d "$ROOT/examples/$migrated" ]] \
     || fail "$migrated does not have its own directory"
 done
@@ -123,7 +123,7 @@ grep -Fq -- '#include "llhttp_adapter.h"' "$ROOT/examples/llhttp.c" \
 
 # Keep the adoption guide aligned with the supported inventory and present the
 # examples in the same progression: loops, frameworks, then parser-only code.
-expected_headings=$'libuv\nlibevent\nGLib/GIO\nlibev\nlibhv\nliburing (Linux)\nepoll (Linux)\nio_uring without liburing (Linux)\nMongoose\nCivetWeb\nGNU libmicrohttpd\nH2O\nLwan\nlibreactor\nfacil.io\nOnion\nKore\nUlfius'
+expected_headings=$'libuv\nlibevent\nGLib/GIO\nlibev\nsd-event (Linux)\nlibhv\nliburing (Linux)\nepoll (Linux)\nio_uring without liburing (Linux)\nMongoose\nCivetWeb\nGNU libmicrohttpd\nH2O\nLwan\nlibreactor\nfacil.io\nOnion\nKore\nUlfius'
 actual_headings="$(sed -n 's/^### //p' "$README")"
 [[ "$actual_headings" == "$expected_headings" ]] \
   || fail "README example headings are missing or out of order"

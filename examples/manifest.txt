@@ -4,6 +4,7 @@ libuv|loop|uv_run(
 libevent|loop|event_base_dispatch(
 glib|loop|g_main_loop_run(
 libev|loop|ev_run(
+sd_event|loop|sd_event_loop(
 libhv|loop|hloop_run(
 liburing|loop|io_uring_queue_init(
 epoll|loop|epoll_wait(
