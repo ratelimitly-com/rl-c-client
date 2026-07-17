@@ -429,15 +429,41 @@ static void runtime_cancel_dns(void *context, r_dns_req_id_t request_id) {
     (void)request_id;
 }
 
+static const char *runtime_environment_value(const char *name) {
+    /*
+     * r_runtime_options_t borrows environment strings; it does not own memory
+     * that callers must release. Microsoft's _dupenv_s would change that
+     * contract by allocating each value. Keep the standard C getenv behavior
+     * and suppress only MSVC's non-standard deprecation at this call site.
+     */
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#endif
+    const char *value = getenv(name);
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
+    return value;
+}
+
 int r_runtime_options_from_env(r_runtime_options_t *out_options) {
     if (!out_options) {
         return RCLIENT_ERR_CONFIG;
     }
     memset(out_options, 0, sizeof(*out_options));
-    out_options->tenant_dns_name = getenv("RATELIMITLY_TENANT");
-    out_options->auth_key = getenv("RATELIMITLY_AUTH_KEY");
-    out_options->server_host = getenv("RATELIMITLY_EXAMPLE_SERVER_HOST");
-    const char *port_text = getenv("RATELIMITLY_EXAMPLE_SERVER_PORT");
+    out_options->tenant_dns_name = runtime_environment_value(
+        "RATELIMITLY_TENANT"
+    );
+    out_options->auth_key = runtime_environment_value(
+        "RATELIMITLY_AUTH_KEY"
+    );
+    out_options->server_host = runtime_environment_value(
+        "RATELIMITLY_EXAMPLE_SERVER_HOST"
+    );
+    const char *port_text = runtime_environment_value(
+        "RATELIMITLY_EXAMPLE_SERVER_PORT"
+    );
     if (port_text && port_text[0] != '\0') {
         char *end = NULL;
         errno = 0;
