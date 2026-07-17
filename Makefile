@@ -65,7 +65,8 @@ librclient.a: $(LIB_OBJS)
 	$(AR) rcs $@ $(LIB_OBJS)
 
 librclient.so: $(LIB_OBJS)
-	$(CC) $(LDFLAGS) -shared -o $@ $(LIB_OBJS) -lcrypto
+	$(CC) $(LDFLAGS) -shared -o $@ $(LIB_OBJS) \
+		-lcrypto -lresolv -pthread
 
 src/%.o: src/%.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -fPIC -c $< -o $@
