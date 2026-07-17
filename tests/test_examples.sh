@@ -7,7 +7,6 @@ README="${R_EXAMPLE_README_PATH:-$ROOT/examples/README.md}"
 ROOT_README="$ROOT/README.md"
 API_GUIDE="$ROOT/docs/api.md"
 IO_GUIDE="$ROOT/IO_ABSTRACTION.md"
-COMMON_ADAPTER="$ROOT/examples/common/rl_example.c"
 
 fail() {
   echo "test_examples: $*" >&2
@@ -15,6 +14,16 @@ fail() {
 }
 
 [[ -f "$MANIFEST" ]] || fail "missing examples/manifest.txt"
+[[ ! -e "$ROOT/examples/common" ]] \
+  || fail "legacy examples/common adapter still exists"
+[[ ! -e "$ROOT/tests/test_example_common.c" \
+  && ! -e "$ROOT/tests/test_example_common.sh" ]] \
+  || fail "legacy common-adapter tests still exist"
+if grep -R -E 'common/rl_example|test_example_common' \
+  "$ROOT/Makefile" "$ROOT/README.md" "$ROOT/docs" "$ROOT/examples" \
+  >/dev/null; then
+  fail "build or documentation still references the legacy common adapter"
+fi
 for migrated in latency_tracker libuv libevent glib libev sd_event kqueue libdispatch win32 libhv epoll liburing io_uring mongoose civetweb libmicrohttpd h2o lwan libreactor facil_io onion kore ulfius llhttp; do
   [[ -d "$ROOT/examples/$migrated" ]] \
     || fail "$migrated does not have its own directory"
@@ -23,30 +32,19 @@ done
 while IFS='|' read -r name kind marker; do
   [[ -z "$name" || "$name" == \#* ]] && continue
   example_dir="$ROOT/examples/$name"
-  if [[ -d "$example_dir" ]]; then
-    source_file="$example_dir/main.c"
-    source_files=("$example_dir"/*.c)
-    for required in main.c README.md CMakeLists.txt Makefile; do
-      [[ -f "$example_dir/$required" ]] \
-        || fail "$name is missing $required"
-    done
-    if grep -Fq -- 'common/rl_example' "${source_files[@]}"; then
-      fail "$name still depends on examples/common"
-    fi
-    grep -Fq -- '#include "r_client_runtime.h"' "${source_files[@]}" \
-      || fail "$name does not use the public runtime"
-    grep -Fq -- '#include "r_client_workflow.h"' "${source_files[@]}" \
-      || fail "$name does not use the admission workflow"
-    if ! grep -Fq -- 'r_client_admission_report_latency(' "${source_files[@]}" \
-      && ! grep -Fq -- 'r_runtime_admission_run_and_report(' "${source_files[@]}"; then
-      fail "$name does not report protected-work latency"
-    fi
-  else
-    source_file="$ROOT/examples/$name.c"
-    source_files=("$source_file")
-    [[ -f "$source_file" ]] || fail "missing examples/$name.c"
-    grep -Fq -- '#include "common/rl_example.h"' "$source_file" \
-      || fail "$name does not use shared public adapter"
+  source_file="$example_dir/main.c"
+  source_files=("$example_dir"/*.c)
+  for required in main.c README.md CMakeLists.txt Makefile; do
+    [[ -f "$example_dir/$required" ]] \
+      || fail "$name is missing $required"
+  done
+  grep -Fq -- '#include "r_client_runtime.h"' "${source_files[@]}" \
+    || fail "$name does not use the public runtime"
+  grep -Fq -- '#include "r_client_workflow.h"' "${source_files[@]}" \
+    || fail "$name does not use the admission workflow"
+  if ! grep -Fq -- 'r_client_admission_report_latency(' "${source_files[@]}" \
+    && ! grep -Fq -- 'r_runtime_admission_run_and_report(' "${source_files[@]}"; then
+    fail "$name does not report protected-work latency"
   fi
   if grep -En -- '#include[[:space:]]+[<"].*src/' "${source_files[@]}" >/dev/null; then
     fail "$name includes private src header"
@@ -60,32 +58,21 @@ while IFS='|' read -r name kind marker; do
 
   case "$kind" in
     loop|framework)
-      if [[ -d "$example_dir" ]]; then
-        symbols=(
-          'r_client_admission_start('
-          'r_runtime_client_on_readable('
-        )
-      else
-        symbols=(
-          'rl_example_check('
-          'rl_example_client_on_readable('
-          'rl_example_request_delay_ms('
-          'rl_example_request_on_timeout('
-        )
-      fi
+      symbols=(
+        'r_client_admission_start('
+        'r_runtime_client_on_readable('
+      )
       for symbol in "${symbols[@]}"; do
         grep -Fq -- "$symbol" "$source_file" \
           || fail "$name does not wire $symbol"
       done
-      if [[ -d "$example_dir" ]]; then
-        if ! grep -Fq -- 'r_client_admission_deadline_ms(' "$source_file" \
-          && ! grep -Fq -- 'r_runtime_admission_delay_ms(' "$source_file"; then
-          fail "$name does not wire an admission deadline"
-        fi
-        if ! grep -Fq -- 'r_client_admission_on_timeout(' "$source_file" \
-          && ! grep -Fq -- 'r_runtime_admission_on_timeout(' "$source_file"; then
-          fail "$name does not wire admission timeouts"
-        fi
+      if ! grep -Fq -- 'r_client_admission_deadline_ms(' "$source_file" \
+        && ! grep -Fq -- 'r_runtime_admission_delay_ms(' "$source_file"; then
+        fail "$name does not wire an admission deadline"
+      fi
+      if ! grep -Fq -- 'r_client_admission_on_timeout(' "$source_file" \
+        && ! grep -Fq -- 'r_runtime_admission_on_timeout(' "$source_file"; then
+        fail "$name does not wire admission timeouts"
       fi
       ;;
     parser)
@@ -156,8 +143,6 @@ grep -Fq -- '## Clock domains' "$IO_GUIDE" \
 grep -Fq -- '`CLOCK_MONOTONIC`' "$IO_GUIDE" \
   || fail "I/O guide does not specify monotonic latency measurement"
 
-grep -Fq -- 'clock_gettime(CLOCK_REALTIME' "$COMMON_ADAPTER" \
-  || fail "shared adapter does not provide Unix-epoch client time"
 grep -Fq -- 'clock_gettime(CLOCK_MONOTONIC' \
   "$ROOT/examples/latency_tracker/main.c" \
   || grep -Fq -- 'r_runtime_monotonic_time_ms(' \

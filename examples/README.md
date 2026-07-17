@@ -50,9 +50,10 @@ Prefer a single long-lived client per event loop or bridge thread in a busy
 service. The per-request Ulfius pattern is included because its ownership is
 especially easy to understand, not because it minimizes setup cost.
 
-## Shared adapter and configuration
+## Public runtime and configuration
 
-`common/rl_example.c` removes protocol boilerplate from the integrations. It:
+Every example uses the public `r_client_runtime.h` helper to keep transport
+setup separate from its framework-specific control flow. The runtime:
 
 - owns nonblocking IPv4 and IPv6 UDP sockets;
 - performs SRV and A/AAAA discovery;
@@ -70,7 +71,7 @@ export RATELIMITLY_TENANT=tenant.example.com
 export RATELIMITLY_AUTH_KEY=rl-aes1...
 ```
 
-For local development, bypass DNS and point the adapter at the repository's
+For local development, bypass DNS and point the runtime at the repository's
 synthetic responder:
 
 ```sh
@@ -78,21 +79,23 @@ export RATELIMITLY_EXAMPLE_SERVER_HOST=127.0.0.1
 export RATELIMITLY_EXAMPLE_SERVER_PORT=39082
 ```
 
-Leave the fixed endpoint variables unset in a normal deployment. The adapter
+Leave the fixed endpoint variables unset in a normal deployment. The runtime
 then discovers `_ratelimitly._udp.<tenant>` SRV records.
 
-Build the library from the repository root, then enter this directory:
+Build the library from the repository root, then enter one example folder:
 
 ```sh
 make
-cd examples
+cd examples/libuv
+make
 ```
 
-The commands below assume `../librclient.a` exists. Exact framework compiler
-flags can vary by distribution; `pkg-config` commands use the names exported by
-the upstream projects or common Linux packages.
+Each folder has its own `README.md`, `Makefile`, and `CMakeLists.txt`. Exact
+framework compiler flags can vary by distribution; the build files use names
+exported by upstream projects or common system packages and expose override
+variables where a dependency is built from source.
 
-Run all repository tests, including the example inventory and shared-adapter
+Run all repository tests, including the example inventory and public runtime
 tests, from the repository root:
 
 ```sh
@@ -101,7 +104,8 @@ make test
 
 ## Latency tracking workflow
 
-`latency_tracker.c` demonstrates both halves of latency-based load shedding:
+[`latency_tracker/main.c`](latency_tracker/main.c) demonstrates both halves of
+latency-based load shedding:
 
 1. Hash a stable service name into `r_latency_guard_t.service_id`.
 2. Include that guard in the rate-limit request.
@@ -135,8 +139,8 @@ only to the guard decision.
 Build and run the standalone workflow:
 
 ```sh
-cc -I../include -Icommon latency_tracker.c common/rl_example.c \
-  ../librclient.a -lcrypto -lresolv -pthread -o latency-tracker-example
+cd latency_tracker
+make
 
 # Optional: simulated protected-work duration; default is 25 ms.
 export RATELIMITLY_EXAMPLE_WORK_MS=25
@@ -158,20 +162,21 @@ UDP send hook immediately and creates no request deadline or response watcher.
 
 ## Event-loop examples
 
-The six examples in this section submit one check, print `allowed` or `denied`,
-and exit. They are deliberately small references for readiness and deadline
-integration rather than HTTP servers.
+The examples in this section submit one combined admission check, print its
+decision, run and measure admitted work, report one latency sample, and exit.
+They are small references for readiness and deadline integration rather than
+HTTP servers.
 
 ### libuv
 
-**Model.** `libuv.c` registers both UDP sockets with `uv_poll_t`. A one-shot
+**Model.** [`libuv/main.c`](libuv/main.c) registers both UDP sockets with
+`uv_poll_t`. A one-shot
 `uv_timer_t` is rearmed from the current request deadline after every event.
 The loop thread owns the client and all watcher callbacks.
 
 ```sh
-cc -I../include -Icommon libuv.c common/rl_example.c ../librclient.a \
-  $(pkg-config --cflags --libs libuv) -lcrypto -lresolv -pthread \
-  -o libuv-example
+cd libuv
+make
 ./libuv-example
 ```
 
@@ -180,13 +185,13 @@ the shared client while a poll or timer callback can still run.
 
 ### libevent
 
-**Model.** `libevent.c` uses persistent `EV_READ` events for UDP ingress and an
-`evtimer` for the active request. The event-base thread owns the client.
+**Model.** [`libevent/main.c`](libevent/main.c) uses persistent `EV_READ` events
+for UDP ingress and an `evtimer` for the active request. The event-base thread
+owns the client.
 
 ```sh
-cc -I../include -Icommon libevent.c common/rl_example.c ../librclient.a \
-  $(pkg-config --cflags --libs libevent) -lcrypto -lresolv -pthread \
-  -o libevent-example
+cd libevent
+make
 ./libevent-example
 ```
 
@@ -279,14 +284,13 @@ associations before closing events or destroying runtime-owned sockets.
 
 ### libhv
 
-**Model.** `libhv.c` attaches each client descriptor with
+**Model.** [`libhv/main.c`](libhv/main.c) attaches each client descriptor with
 `hio_add(..., HV_READ)` and maps the request deadline to a one-shot `htimer_t`.
 All client calls remain on the libhv loop thread.
 
 ```sh
-cc -I../include -Icommon libhv.c common/rl_example.c ../librclient.a \
-  $(pkg-config --cflags --libs libhv) -lcrypto -lresolv -pthread \
-  -o libhv-example
+cd libhv
+make LIBHV_ROOT=/path/to/libhv
 ./libhv-example
 ```
 
@@ -295,14 +299,14 @@ onto this loop instead of calling the shared client concurrently.
 
 ### liburing (Linux)
 
-**Model.** `liburing.c` submits one `IORING_OP_POLL_ADD` per UDP socket and
+**Model.** [`liburing/main.c`](liburing/main.c) submits one
+`IORING_OP_POLL_ADD` per UDP socket and
 uses `io_uring_wait_cqe_timeout()` to cap each wait at the request deadline.
 Each completion is consumed before the corresponding poll is rearmed.
 
 ```sh
-cc -I../include -Icommon liburing.c common/rl_example.c ../librclient.a \
-  $(pkg-config --cflags --libs liburing) -lcrypto -lresolv -pthread \
-  -o liburing-example
+cd liburing
+make
 ./liburing-example
 ```
 
@@ -311,13 +315,13 @@ non-overlapping namespace if the same ring also serves application I/O.
 
 ### epoll (Linux)
 
-**Model.** `epoll.c` registers the nonblocking UDP descriptors directly. It
-recomputes the timeout passed to `epoll_wait()` from the client deadline on
-every iteration.
+**Model.** [`epoll/main.c`](epoll/main.c) registers the nonblocking UDP
+descriptors directly. It recomputes the timeout passed to `epoll_wait()` from
+the client deadline on every iteration.
 
 ```sh
-cc -I../include -Icommon epoll.c common/rl_example.c ../librclient.a \
-  -lcrypto -lresolv -pthread -o epoll-example
+cd epoll
+make
 ./epoll-example
 ```
 
@@ -326,13 +330,13 @@ failures; repeatedly retrying a broken descriptor creates a busy loop.
 
 ### io_uring without liburing (Linux)
 
-**Model.** `io_uring.c` uses Linux UAPI headers and syscalls directly. It maps
-the submission and completion rings, submits `IORING_OP_POLL_ADD`, and supplies
-the deadline through `IORING_ENTER_EXT_ARG`.
+**Model.** [`io_uring/main.c`](io_uring/main.c) uses Linux UAPI headers and
+syscalls directly. It maps the submission and completion rings, submits
+`IORING_OP_POLL_ADD`, and supplies the deadline through `IORING_ENTER_EXT_ARG`.
 
 ```sh
-cc -I../include -Icommon io_uring.c common/rl_example.c ../librclient.a \
-  -lcrypto -lresolv -pthread -o io-uring-example
+cd io_uring
+make
 ./io-uring-example
 ```
 
@@ -349,15 +353,14 @@ reliable disconnect lifecycle.
 
 ### Mongoose
 
-**Model.** `mongoose.c` leaves an HTTP connection pending while its check runs.
-`mg_mgr_poll()` drains client UDP sockets, advances request deadlines, and
-cancels the check if the connection closes. One Mongoose thread owns all state.
+**Model.** [`mongoose/main.c`](mongoose/main.c) leaves an HTTP connection pending
+while its check runs. `mg_mgr_poll()` drains client UDP sockets, advances request
+deadlines, and cancels the check if the connection closes. One Mongoose thread
+owns all state.
 
 ```sh
-MONGOOSE=/path/to/mongoose
-cc -I../include -Icommon -I"$MONGOOSE" mongoose.c common/rl_example.c \
-  "$MONGOOSE/mongoose.c" ../librclient.a -lcrypto -lresolv -pthread \
-  -o mongoose-example
+cd mongoose
+make MONGOOSE_ROOT=/path/to/mongoose
 ./mongoose-example
 curl -i http://127.0.0.1:8000/limited
 ```
