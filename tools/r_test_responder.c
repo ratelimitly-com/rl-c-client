@@ -391,7 +391,7 @@ int main(int argc, char **argv) {
             fd,
             input,
             sizeof(input),
-            MSG_DONTWAIT,
+            0,
             (struct sockaddr *)&peer,
             &peer_len
         );
