@@ -15,7 +15,7 @@ fail() {
 }
 
 [[ -f "$MANIFEST" ]] || fail "missing examples/manifest.txt"
-for migrated in latency_tracker libuv libevent; do
+for migrated in latency_tracker libuv libevent epoll; do
   [[ -d "$ROOT/examples/$migrated" ]] \
     || fail "$migrated does not have its own directory"
 done
