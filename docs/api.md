@@ -5,7 +5,7 @@ private and may change without compatibility guarantees.
 
 ## Headers
 
-Use:
+Core embedders use:
 
 ```c
 #include "r_client.h"
@@ -14,6 +14,20 @@ Use:
 
 `r_client.h` includes `r_client_io.h`, so most integrations only need
 `r_client.h`.
+
+Applications that want the repository's combined admission lifecycle and
+portable socket runtime can also use:
+
+```c
+#include "r_client_workflow.h"
+#include "r_client_runtime.h"
+```
+
+`r_client_workflow.h` combines one resource limit and one latency guard into a
+durable application decision. `r_client_runtime.h` adds nonblocking UDP sockets,
+synchronous SRV/A/AAAA resolution, portable clocks, and helpers for examples or
+small command-line programs. A server with its own asynchronous resolver and
+socket ownership should use the core I/O interfaces instead.
 
 ## Configuration
 
@@ -191,8 +205,38 @@ reports are filtered, the function returns `RCLIENT_OK` without sending. Other
 failures include `RCLIENT_ERR_DNS` when no server is available and
 `RCLIENT_ERR_IO` when the UDP send hook fails.
 
-See [`examples/latency_tracker.c`](../examples/latency_tracker.c) for complete
+See the self-contained
+[`examples/latency_tracker/`](../examples/latency_tracker/) folder for complete
 guard-pass, protected-work, report, and guard-deny control flow.
+
+## Combined Admission Workflow
+
+`r_client_workflow.h` packages the most commonly repeated application policy:
+one resource request, one latency guard, an explicit denial reason, and at most
+one latency report after admitted work.
+
+1. Start from `r_client_admission_config_defaults()` and replace the bucket,
+   service, and metrics names with stable application identifiers.
+2. Keep one caller-owned `r_admission_request_t` alive from
+   `r_client_admission_start()` through callback or cancellation.
+3. Drive its deadline with `r_client_admission_deadline_ms()` and
+   `r_client_admission_on_timeout()`, or the relative runtime helpers.
+4. Inspect the copied `r_admission_outcome_t`; it distinguishes resource,
+   latency, combined, and transport/protocol failures.
+5. Only after `outcome.allowed`, run protected work and call
+   `r_client_admission_report_latency()` once.
+
+`r_runtime_admission_run_and_report()` performs the last step for synchronous
+protected work. It measures with the runtime's monotonic clock and never reports
+denied, cancelled, failed, or previously reported work. HTTP integrations whose
+protected operation is asynchronous should record a monotonic start time and
+report from their own completion callback instead.
+
+The portable runtime reads `RATELIMITLY_TENANT` and `RATELIMITLY_AUTH_KEY` through
+`r_runtime_options_from_env()`. The optional
+`RATELIMITLY_EXAMPLE_SERVER_HOST`/`RATELIMITLY_EXAMPLE_SERVER_PORT` pair selects
+an explicit development endpoint; set both or neither. Runtime-owned socket
+handles remain valid until `r_runtime_client_destroy()`.
 
 ## Datagrams and Timers
 
@@ -234,6 +278,7 @@ All errors are negative:
 
 ## Compatibility
 
-The stable public surface is limited to `include/r_client.h` and
-`include/r_client_io.h`. Internal protocol builders, crypto helpers, and packet
-parsers are implementation details.
+The public surface consists of `include/r_client.h`, `include/r_client_io.h`,
+`include/r_client_workflow.h`, and `include/r_client_runtime.h`. Internal
+protocol builders, crypto helpers, and packet parsers are implementation
+details.

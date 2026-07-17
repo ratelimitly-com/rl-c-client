@@ -94,6 +94,8 @@ The public headers are:
 
 - `include/r_client.h`
 - `include/r_client_io.h`
+- `include/r_client_workflow.h`
+- `include/r_client_runtime.h`
 
 Do not include files from `src/`; they are private implementation details.
 
@@ -110,6 +112,8 @@ Core operations:
 - `r_client_default_request_policy`
 - `r_client_hash_id`
 - `r_client_parse_auth_key`
+- `r_client_admission_start` / `r_client_admission_report_latency`
+- `r_runtime_client_init` / `r_runtime_client_on_readable`
 
 See [docs/api.md](docs/api.md) for the API contract and
 [IO_ABSTRACTION.md](IO_ABSTRACTION.md) for event-loop integration.
@@ -121,8 +125,8 @@ integrations using only public headers. Start with the example matching the
 host application's ownership model:
 
 - latency tracker: guard admission, protected-work timing, and reporting;
-- event loops: libuv, libevent, libhv, liburing, direct epoll, and raw
-  io_uring;
+- event loops: libuv, libevent, GLib/GIO, libev, sd-event, kqueue,
+  libdispatch, Win32, libhv, liburing, direct epoll, and raw io_uring;
 - HTTP servers: Mongoose, CivetWeb, GNU libmicrohttpd, H2O, Lwan, libreactor,
   facil.io, Onion, Kore, and Ulfius; and
 - parser only: llhttp fragmented input and pipelining backpressure.

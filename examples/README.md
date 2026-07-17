@@ -7,30 +7,65 @@ those comments before transplanting the integration into an application.
 
 | Example | Integration model | Main technique |
 | --- | --- | --- |
-| Latency tracker | Guard and reporting workflow | Gate work, measure it, then report one sample |
-| libuv | Native event loop | `uv_poll_t` plus a one-shot `uv_timer_t` |
-| libevent | Native event loop | Persistent `EV_READ` plus `evtimer` |
-| GLib/GIO | Portable main loop | Non-owning `GIOChannel` watches plus timeout source |
-| libev | Compact event loop | `ev_io` watchers plus a one-shot `ev_timer` |
-| sd-event | systemd event loop | `sd_event_add_io` plus monotonic time source |
-| kqueue | Native macOS/BSD readiness | Direct `kevent` wait plus request deadline |
-| libdispatch | Serial dispatch queue | Read sources plus a one-shot timer source |
-| Win32 | Native WinSock wait loop | `WSAEVENT` readiness plus deadline timeout |
-| libhv | Native event loop | `hio_t` readiness plus `htimer_t` |
-| liburing | Linux completion ring | `IORING_OP_POLL_ADD` through liburing |
-| epoll | Linux readiness API | Direct `epoll_wait` with a request deadline |
-| io_uring | Raw Linux completion ring | Syscalls and shared ring mappings |
-| Mongoose | Single-thread HTTP loop | Pending connection state on `mg_mgr_poll` |
-| CivetWeb | Worker-thread HTTP server | Queue plus a dedicated client thread |
-| GNU libmicrohttpd | External HTTP loop | Suspended connections and merged `select` |
-| H2O | Native HTTP event loop | Descriptor watchers and pool cleanup |
-| Lwan | Coroutine HTTP server | Yielding handlers and a dedicated client thread |
-| libreactor | Native HTTP event loop | Descriptor and timer objects on one thread |
-| facil.io | Native HTTP event loop | Pause/resume handles with retained timers |
-| Onion | Worker-thread HTTP server | `OCS_YIELD` long-poll lifecycle |
-| Kore | Task-based HTTP server | Sleeping requests and task-channel results |
-| Ulfius | Threaded HTTP server | A private client in each endpoint callback |
-| llhttp | Parser only | Fragmented input and resumable backpressure |
+| [Latency tracker](latency_tracker/) | Guard and reporting workflow | Gate work, measure it, then report one sample |
+| [libuv](libuv/) | Native event loop | `uv_poll_t` plus a one-shot `uv_timer_t` |
+| [libevent](libevent/) | Native event loop | Persistent `EV_READ` plus `evtimer` |
+| [GLib/GIO](glib/) | Portable main loop | Non-owning `GIOChannel` watches plus timeout source |
+| [libev](libev/) | Compact event loop | `ev_io` watchers plus a one-shot `ev_timer` |
+| [sd-event](sd_event/) | systemd event loop | `sd_event_add_io` plus monotonic time source |
+| [kqueue](kqueue/) | Native macOS/BSD readiness | Direct `kevent` wait plus request deadline |
+| [libdispatch](libdispatch/) | Serial dispatch queue | Read sources plus a one-shot timer source |
+| [Win32](win32/) | Native WinSock wait loop | `WSAEVENT` readiness plus deadline timeout |
+| [libhv](libhv/) | Native event loop | `hio_t` readiness plus `htimer_t` |
+| [liburing](liburing/) | Linux completion ring | `IORING_OP_POLL_ADD` through liburing |
+| [epoll](epoll/) | Linux readiness API | Direct `epoll_wait` with a request deadline |
+| [io_uring](io_uring/) | Raw Linux completion ring | Syscalls and shared ring mappings |
+| [Mongoose](mongoose/) | Single-thread HTTP loop | Pending connection state on `mg_mgr_poll` |
+| [CivetWeb](civetweb/) | Worker-thread HTTP server | Queue plus a dedicated client thread |
+| [GNU libmicrohttpd](libmicrohttpd/) | External HTTP loop | Suspended connections and merged `select` |
+| [H2O](h2o/) | Native HTTP event loop | Descriptor watchers and pool cleanup |
+| [Lwan](lwan/) | Coroutine HTTP server | Yielding handlers and a dedicated client thread |
+| [libreactor](libreactor/) | Native HTTP event loop | Descriptor and timer objects on one thread |
+| [facil.io](facil_io/) | Native HTTP event loop | Pause/resume handles with retained timers |
+| [Onion](onion/) | Worker-thread HTTP server | `OCS_YIELD` long-poll lifecycle |
+| [Kore](kore/) | Task-based HTTP server | Sleeping requests and task-channel results |
+| [Ulfius](ulfius/) | Threaded HTTP server | A private client in each endpoint callback |
+| [llhttp](llhttp/) | Parser only | Fragmented input and resumable backpressure |
+
+## Platform matrix
+
+“Yes” means this example's source and build files directly support the platform,
+not merely that the upstream framework can run there. “Conditional” identifies a
+dependency or handle-width caveat explained in that folder's README. A dash means
+the platform API is unavailable or this particular ownership pattern is scoped
+more narrowly; choose the linked native or portable alternative instead.
+
+| Example | Linux | macOS | Windows | Scope note |
+| --- | --- | --- | --- | --- |
+| [Latency tracker](latency_tracker/) | Yes | Yes | — | POSIX `poll`; use Win32 for the same workflow on Windows. |
+| [libuv](libuv/) | Yes | Yes | Yes | Uses `uv_poll_init_socket` to preserve WinSock handles. |
+| [libevent](libevent/) | Yes | Yes | Yes | Keeps sockets in `evutil_socket_t`. |
+| [GLib/GIO](glib/) | Yes | Yes | Yes | Selects the Unix or Win32 `GIOChannel` constructor. |
+| [libev](libev/) | Yes | Yes | — | This source targets libev's Unix fd backends. |
+| [sd-event](sd_event/) | Yes | — | — | libsystemd API. |
+| [kqueue](kqueue/) | — | Yes | — | Also applies to BSD hosts. |
+| [libdispatch](libdispatch/) | Conditional | Yes | — | Open-source libdispatch is required on Linux. |
+| [Win32](win32/) | — | — | Yes | Native `WSAEVENT`; Wine/CrossOver test harness included. |
+| [libhv](libhv/) | Yes | Yes | Conditional | Verify that the libhv build preserves 64-bit `SOCKET` width. |
+| [liburing](liburing/) | Yes | — | — | Linux io_uring wrapper. |
+| [epoll](epoll/) | Yes | — | — | Linux kernel readiness API. |
+| [io_uring](io_uring/) | Yes | — | — | Raw Linux UAPI and syscalls. |
+| [Mongoose](mongoose/) | Yes | Yes | Yes | Portable single-threaded server loop. |
+| [CivetWeb](civetweb/) | Yes | Yes | — | This bridge uses pthreads, `pipe`, and `poll`. |
+| [GNU libmicrohttpd](libmicrohttpd/) | Yes | Yes | — | This source uses the POSIX external-`select` model. |
+| [H2O](h2o/) | Yes | Yes | — | Selects epoll or kqueue. |
+| [Lwan](lwan/) | Yes | — | — | Linux coroutine server. |
+| [libreactor](libreactor/) | Yes | — | — | Linux-focused descriptor API. |
+| [facil.io](facil_io/) | Yes | Yes | — | facil.io 0.7 POSIX descriptor model. |
+| [Onion](onion/) | Yes | Conditional | — | Onion v0.8 needs compatibility fixes for current macOS Clang. |
+| [Kore](kore/) | Yes | Yes | — | ELF module on Linux; bundle on macOS. |
+| [Ulfius](ulfius/) | Yes | Yes | — | This source deliberately uses POSIX `poll`. |
+| [llhttp](llhttp/) | Yes | Yes | Yes | Parser adapter plus a portable `select` host driver. |
 
 ## Choose an integration pattern
 

@@ -38,6 +38,14 @@ while IFS='|' read -r name kind marker; do
     [[ -f "$example_dir/$required" ]] \
       || fail "$name is missing $required"
   done
+  grep -Eq '^## Platform' "$example_dir/README.md" \
+    || fail "$name README has no platform-support section"
+  grep -Eqi 'resource|rate limit' "$example_dir/README.md" \
+    || fail "$name README does not explain rate limiting"
+  grep -Eqi 'latency' "$example_dir/README.md" \
+    || fail "$name README does not explain latency tracking"
+  grep -Fq -- "($name/)" "$README" \
+    || fail "integration guide does not link the $name folder"
   grep -Fq -- '#include "r_client_runtime.h"' "${source_files[@]}" \
     || fail "$name does not use the public runtime"
   grep -Fq -- '#include "r_client_workflow.h"' "${source_files[@]}" \
@@ -126,6 +134,8 @@ grep -Fq -- 'If it returns `HPE_PAUSED`' "$README" \
   || fail "README does not explain resumable llhttp backpressure"
 grep -Fq -- '## Latency tracking workflow' "$README" \
   || fail "README does not document latency tracking"
+grep -Fq -- '## Platform matrix' "$README" \
+  || fail "README does not provide a platform matrix"
 grep -Fq -- 'Never report latency for work rejected by the guard.' "$README" \
   || fail "README does not explain denied latency-guard behavior"
 
@@ -134,6 +144,13 @@ grep -Fq -- '[examples/README.md](examples/README.md)' "$ROOT_README" \
 grep -Fq -- '`result->success` combines resource and latency-guard decisions' \
   "$API_GUIDE" \
   || fail "API guide does not explain combined admission results"
+grep -Fq -- '`r_client_runtime.h`' "$API_GUIDE" \
+  || fail "API guide does not document the public runtime header"
+grep -Fq -- '`r_client_workflow.h`' "$API_GUIDE" \
+  || fail "API guide does not document the public workflow header"
+if grep -Fq -- '../examples/latency_tracker.c' "$API_GUIDE"; then
+  fail "API guide links the removed flat latency example"
+fi
 grep -Fq -- 'Never report latency for work rejected by its guard.' "$API_GUIDE" \
   || fail "API guide does not explain denied latency-guard behavior"
 grep -Fq -- 'The report must repeat the guard' "$API_GUIDE" \
