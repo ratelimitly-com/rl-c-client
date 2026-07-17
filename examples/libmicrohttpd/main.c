@@ -10,7 +10,8 @@
 
 #include <microhttpd.h>
 
-#include "common/rl_example.h"
+#include "r_client_runtime.h"
+#include "r_client_workflow.h"
 
 /*
  * Flow
@@ -18,8 +19,8 @@
  * 1. MHD contributes HTTP fd_sets; the adapter adds client UDP descriptors.
  * 2. One select() waits using the earliest MHD or rl-c-client deadline.
  * 3. GET /limited starts a check and suspends its HTTP connection.
- * 4. Completion records the result and resumes the connection.
- * 5. MHD invokes the handler again, which sends HTTP 200, 429, or 503.
+ * 4. Admission runs and measures protected work, then resumes the connection.
+ * 5. MHD invokes the handler again, which maps the combined decision to HTTP.
  *
  * Ownership: MHD owns connections and per-connection request_context pointers.
  * The app owns rl-c-client and the pending list. MHD completion notification
@@ -31,16 +32,18 @@ typedef struct pending_request {
     struct pending_request *next;
     microhttpd_app_t *app;
     struct MHD_Connection *connection;
-    rl_example_request_t request;
+    r_admission_request_t request;
+    r_admission_outcome_t outcome;
+    char response_body[96];
+    uint32_t observed_latency_ms;
     int status;
-    bool allowed;
     bool started;
     bool done;
 } pending_request_t;
 
 struct microhttpd_app {
     struct MHD_Daemon *daemon;
-    rl_example_client_t client;
+    r_runtime_client_t runtime;
     pending_request_t *pending;
 };
 
@@ -63,10 +66,37 @@ static void remove_pending(microhttpd_app_t *app, pending_request_t *pending) {
     }
 }
 
-static void on_rate_limit(void *user, int status, bool allowed) {
+static int prepare_protected_response(void *user) {
+    pending_request_t *pending = user;
+    /* Replace this with the database/API operation the endpoint protects. */
+    int length = snprintf(pending->response_body,
+        sizeof(pending->response_body), "allowed (protected work complete)\n");
+    return length > 0 && (size_t)length < sizeof(pending->response_body)
+        ? RCLIENT_OK
+        : RCLIENT_ERR_IO;
+}
+
+static void on_admission(
+    void *user,
+    int status,
+    const r_admission_outcome_t *outcome
+) {
     pending_request_t *pending = user;
     pending->status = status;
-    pending->allowed = allowed;
+    pending->outcome = *outcome;
+    if (status == RCLIENT_OK && outcome->allowed) {
+        int report_status = r_runtime_admission_run_and_report(
+            &pending->app->runtime,
+            &pending->request,
+            prepare_protected_response,
+            pending,
+            &pending->observed_latency_ms
+        );
+        if (report_status != RCLIENT_OK) {
+            fprintf(stderr, "latency report failed: %s (%d)\n",
+                r_runtime_status_name(report_status), report_status);
+        }
+    }
     pending->done = true;
     /* Remove before resume because the handler may run again immediately. */
     remove_pending(pending->app, pending);
@@ -115,6 +145,60 @@ static enum MHD_Result queue_method_not_allowed(
     return result;
 }
 
+static enum MHD_Result queue_admission_result(
+    struct MHD_Connection *connection,
+    const pending_request_t *pending
+) {
+    if (pending->status != RCLIENT_OK) {
+        return queue_text(connection, MHD_HTTP_SERVICE_UNAVAILABLE,
+            "rate-limit service unavailable\n");
+    }
+    if (pending->outcome.rate_limited && pending->outcome.latency_limited) {
+        return queue_text(connection, 429,
+            "denied by resource limit and latency guard\n");
+    }
+    if (pending->outcome.latency_limited) {
+        return queue_text(connection, MHD_HTTP_SERVICE_UNAVAILABLE,
+            "denied by latency guard\n");
+    }
+    if (!pending->outcome.allowed) {
+        return queue_text(connection, 429,
+            "denied by resource rate limit\n");
+    }
+    return queue_text(connection, MHD_HTTP_OK, pending->response_body);
+}
+
+static enum MHD_Result begin_admission(pending_request_t *pending) {
+    microhttpd_app_t *app = pending->app;
+    pending->started = true;
+    pending->next = app->pending;
+    app->pending = pending;
+
+    r_admission_config_t config;
+    r_client_admission_config_defaults(&config);
+    config.bucket_name = "libmicrohttpd-example";
+    config.service_name = "libmicrohttpd-protected-service";
+    config.metrics_label = "libmicrohttpd-example";
+    int status = r_client_admission_start(
+        app->runtime.handle,
+        &pending->request,
+        &config,
+        on_admission,
+        pending
+    );
+    if (status != RCLIENT_OK) {
+        remove_pending(app, pending);
+        pending->status = status;
+        pending->done = true;
+        return queue_text(pending->connection, MHD_HTTP_SERVICE_UNAVAILABLE,
+            "rate-limit check failed\n");
+    }
+
+    /* Suspension releases MHD from repeatedly calling this handler. */
+    MHD_suspend_connection(pending->connection);
+    return MHD_YES;
+}
+
 static enum MHD_Result handle_request(
     void *user,
     struct MHD_Connection *connection,
@@ -151,33 +235,10 @@ static enum MHD_Result handle_request(
         return queue_method_not_allowed(connection);
     }
     if (pending->done) {
-        if (pending->status != RCLIENT_OK) {
-            return queue_text(connection, MHD_HTTP_SERVICE_UNAVAILABLE,
-                "rate-limit service unavailable\n");
-        }
-        return queue_text(connection, pending->allowed ? MHD_HTTP_OK : 429,
-            pending->allowed ? "allowed\n" : "denied\n");
+        return queue_admission_result(connection, pending);
     }
     if (!pending->started) {
-        pending->started = true;
-        pending->next = app->pending;
-        app->pending = pending;
-        int status = rl_example_check(
-            &app->client,
-            &pending->request,
-            "libmicrohttpd-example",
-            on_rate_limit,
-            pending
-        );
-        if (status != RCLIENT_OK) {
-            remove_pending(app, pending);
-            pending->status = status;
-            pending->done = true;
-            return queue_text(connection, MHD_HTTP_SERVICE_UNAVAILABLE,
-                "rate-limit check failed\n");
-        }
-        /* Suspension releases the daemon from repeatedly calling this handler. */
-        MHD_suspend_connection(connection);
+        return begin_admission(pending);
     }
     return MHD_YES;
 }
@@ -198,7 +259,7 @@ static void request_completed(
     if (pending->request.active) {
         /* Completion notification also covers disconnects and daemon shutdown. */
         remove_pending(app, pending);
-        rl_example_request_cancel(&app->client, &pending->request);
+        r_runtime_admission_cancel(&app->runtime, &pending->request);
     }
     free(pending);
     *request_context = NULL;
@@ -209,12 +270,15 @@ static int expire_requests(microhttpd_app_t *app) {
     while (pending) {
         pending_request_t *next = pending->next;
         uint64_t delay_ms = 0;
-        int status = rl_example_request_delay_ms(&pending->request, &delay_ms);
+        int status = r_runtime_admission_delay_ms(&pending->request, &delay_ms);
         if (status != RCLIENT_OK) {
             return status;
         }
         if (delay_ms == 0) {
-            status = rl_example_request_on_timeout(&app->client, &pending->request);
+            status = r_runtime_admission_on_timeout(
+                &app->runtime,
+                &pending->request
+            );
             if (status != RCLIENT_OK) {
                 return status;
             }
@@ -234,7 +298,8 @@ static uint64_t next_timeout_ms(microhttpd_app_t *app) {
     }
     for (pending_request_t *pending = app->pending; pending; pending = pending->next) {
         uint64_t delay_ms = 0;
-        if (rl_example_request_delay_ms(&pending->request, &delay_ms) != RCLIENT_OK) {
+        if (r_runtime_admission_delay_ms(&pending->request, &delay_ms)
+            != RCLIENT_OK) {
             return 0;
         }
         if (delay_ms < timeout_ms) {
@@ -258,9 +323,9 @@ static int run_loop(microhttpd_app_t *app) {
             return RCLIENT_ERR_IO;
         }
 
-        size_t socket_count = rl_example_socket_count(&app->client);
+        size_t socket_count = r_runtime_socket_count(&app->runtime);
         for (size_t i = 0; i < socket_count; i++) {
-            int socket_fd = rl_example_socket_at(&app->client, i);
+            int socket_fd = r_runtime_socket_at(&app->runtime, i);
             if (socket_fd >= FD_SETSIZE) {
                 return RCLIENT_ERR_IO;
             }
@@ -286,9 +351,12 @@ static int run_loop(microhttpd_app_t *app) {
         }
 
         for (size_t i = 0; i < socket_count; i++) {
-            int socket_fd = rl_example_socket_at(&app->client, i);
+            int socket_fd = r_runtime_socket_at(&app->runtime, i);
             if (FD_ISSET(socket_fd, &read_set)) {
-                int status = rl_example_client_on_readable(&app->client, socket_fd);
+                int status = r_runtime_client_on_readable(
+                    &app->runtime,
+                    socket_fd
+                );
                 if (status != RCLIENT_OK) {
                     return status;
                 }
@@ -307,17 +375,17 @@ static int run_loop(microhttpd_app_t *app) {
 }
 
 int main(void) {
-    rl_example_options_t options;
-    if (rl_example_options_from_env(&options) != RCLIENT_OK) {
+    r_runtime_options_t options;
+    if (r_runtime_options_from_env(&options) != RCLIENT_OK) {
         fprintf(stderr, "set RATELIMITLY_TENANT and RATELIMITLY_AUTH_KEY\n");
         return EXIT_FAILURE;
     }
 
     microhttpd_app_t app = {0};
-    int status = rl_example_client_init(&app.client, &options);
+    int status = r_runtime_client_init(&app.runtime, &options);
     if (status != RCLIENT_OK) {
         fprintf(stderr, "client initialization failed: %s (%d)\n",
-            rl_example_status_name(status), status);
+            r_runtime_status_name(status), status);
         return EXIT_FAILURE;
     }
     app.daemon = MHD_start_daemon(
@@ -334,7 +402,7 @@ int main(void) {
     );
     if (!app.daemon) {
         fprintf(stderr, "failed to start libmicrohttpd on port 8000\n");
-        rl_example_client_destroy(&app.client);
+        r_runtime_client_destroy(&app.runtime);
         return EXIT_FAILURE;
     }
 
@@ -342,10 +410,10 @@ int main(void) {
     signal(SIGTERM, on_signal);
     status = run_loop(&app);
     MHD_stop_daemon(app.daemon);
-    rl_example_client_destroy(&app.client);
+    r_runtime_client_destroy(&app.runtime);
     if (status != RCLIENT_OK) {
         fprintf(stderr, "event loop failed: %s (%d)\n",
-            rl_example_status_name(status), status);
+            r_runtime_status_name(status), status);
         return EXIT_FAILURE;
     }
     return EXIT_SUCCESS;

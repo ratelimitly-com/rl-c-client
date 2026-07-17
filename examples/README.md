@@ -387,14 +387,15 @@ asynchronous response API if the service holds many simultaneous requests.
 
 ### GNU libmicrohttpd
 
-**Model.** `libmicrohttpd.c` runs MHD in external-`select` mode. It suspends an
-HTTP connection during the asynchronous check, resumes it from the callback,
-and merges MHD's timeout with the client request deadline.
+**Model.** [`libmicrohttpd/main.c`](libmicrohttpd/main.c) runs MHD in
+external-`select` mode. It suspends an HTTP connection during the asynchronous
+combined admission check, measures and reports admitted protected work, resumes
+the connection from the callback, and merges MHD's timeout with the client
+request deadline.
 
 ```sh
-cc -I../include -Icommon libmicrohttpd.c common/rl_example.c \
-  ../librclient.a $(pkg-config --cflags --libs libmicrohttpd) \
-  -lcrypto -lresolv -pthread -o libmicrohttpd-example
+cd libmicrohttpd
+make
 ./libmicrohttpd-example
 curl -i http://127.0.0.1:8000/limited
 ```
