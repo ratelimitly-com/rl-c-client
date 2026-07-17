@@ -71,6 +71,9 @@ cmake --build build
 ./build/llhttp-example
 ```
 
+CMake compiles `rl-c-client` with the selected compiler. This is important for
+Visual Studio, where an imported Unix/MinGW `librclient.a` is not link-compatible.
+
 If llhttp is in a custom prefix, set `PKG_CONFIG_PATH`. The Makefile also accepts
 explicit `LLHTTP_CFLAGS` and `LLHTTP_LIBS` values. CMake accepts
 `-DLLHTTP_ROOT=/path/to/prefix` when pkg-config is unavailable, which is useful

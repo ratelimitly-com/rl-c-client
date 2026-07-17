@@ -19,15 +19,26 @@ if(NOT TARGET PkgConfig::LIBEVENT)
         INTERFACE_INCLUDE_DIRECTORIES "${LIBEVENT_INCLUDE_DIR}")
 endif()
 
-add_library(rclient STATIC IMPORTED)
-set_target_properties(rclient PROPERTIES
-    IMPORTED_LOCATION "${RL_CLIENT_ROOT}/librclient.a")
+set(RL_CLIENT_SOURCES
+    "${RL_CLIENT_ROOT}/src/r_client.c"
+    "${RL_CLIENT_ROOT}/src/r_client_runtime.c"
+    "${RL_CLIENT_ROOT}/src/r_client_workflow.c"
+    "${RL_CLIENT_ROOT}/src/r_protocol.c"
+    "${RL_CLIENT_ROOT}/src/r_crypto.c"
+    "${RL_CLIENT_ROOT}/src/r_policy.c")
+add_library(rclient STATIC ${RL_CLIENT_SOURCES})
+target_compile_features(rclient PUBLIC c_std_11)
+target_include_directories(rclient
+    PUBLIC "${RL_CLIENT_ROOT}/include"
+    PRIVATE "${RL_CLIENT_ROOT}/src")
 
 add_executable(libevent-example main.c)
 target_compile_features(libevent-example PRIVATE c_std_11)
 if(MSVC)
+    target_compile_options(rclient PRIVATE /W4 /WX)
     target_compile_options(libevent-example PRIVATE /W4 /WX)
 else()
+    target_compile_options(rclient PRIVATE -Wall -Wextra -Werror)
     target_compile_options(libevent-example PRIVATE -Wall -Wextra -Werror)
 endif()
 target_include_directories(libevent-example PRIVATE "${RL_CLIENT_ROOT}/include")

@@ -44,6 +44,10 @@ cmake --build build
 ./build/libevent-example
 ```
 
+CMake compiles `rl-c-client` with the selected compiler. This keeps native
+Visual Studio builds on one object format and C runtime instead of importing a
+Unix/MinGW `librclient.a`.
+
 Set `RATELIMITLY_TENANT` and `RATELIMITLY_AUTH_KEY`. A local responder can be
 selected with `RATELIMITLY_EXAMPLE_SERVER_HOST` and
 `RATELIMITLY_EXAMPLE_SERVER_PORT`.

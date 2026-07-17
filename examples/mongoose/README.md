@@ -41,6 +41,9 @@ cmake --build build
 ./build/mongoose-example
 ```
 
+CMake builds both Mongoose and `rl-c-client` with the selected compiler. This
+keeps native Visual Studio builds free of Unix/MinGW archive incompatibilities.
+
 Set `RATELIMITLY_TENANT` and `RATELIMITLY_AUTH_KEY`, then request
 `http://127.0.0.1:8000/limited`.
 

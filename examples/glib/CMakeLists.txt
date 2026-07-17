@@ -8,14 +8,25 @@ find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GIO REQUIRED IMPORTED_TARGET gio-2.0)
 
-add_library(rclient STATIC IMPORTED)
-set_target_properties(rclient PROPERTIES
-    IMPORTED_LOCATION "${RL_CLIENT_ROOT}/librclient.a")
+set(RL_CLIENT_SOURCES
+    "${RL_CLIENT_ROOT}/src/r_client.c"
+    "${RL_CLIENT_ROOT}/src/r_client_runtime.c"
+    "${RL_CLIENT_ROOT}/src/r_client_workflow.c"
+    "${RL_CLIENT_ROOT}/src/r_protocol.c"
+    "${RL_CLIENT_ROOT}/src/r_crypto.c"
+    "${RL_CLIENT_ROOT}/src/r_policy.c")
+add_library(rclient STATIC ${RL_CLIENT_SOURCES})
+target_compile_features(rclient PUBLIC c_std_11)
+target_include_directories(rclient
+    PUBLIC "${RL_CLIENT_ROOT}/include"
+    PRIVATE "${RL_CLIENT_ROOT}/src")
 add_executable(glib-example main.c)
 target_compile_features(glib-example PRIVATE c_std_11)
 if(MSVC)
+    target_compile_options(rclient PRIVATE /W4 /WX)
     target_compile_options(glib-example PRIVATE /W4 /WX)
 else()
+    target_compile_options(rclient PRIVATE -Wall -Wextra -Werror)
     target_compile_options(glib-example PRIVATE -Wall -Wextra -Werror)
 endif()
 target_include_directories(glib-example PRIVATE "${RL_CLIENT_ROOT}/include")

@@ -40,6 +40,9 @@ cmake --build build
 ./build/glib-example
 ```
 
+CMake compiles `rl-c-client` with the selected compiler. Native Visual Studio
+builds therefore do not depend on an incompatible Unix/MinGW archive.
+
 Set `RATELIMITLY_TENANT` and `RATELIMITLY_AUTH_KEY`. Optional fixed responder
 variables bypass SRV discovery for local testing.
 

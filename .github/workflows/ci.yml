@@ -99,6 +99,13 @@ jobs:
         run: |
           & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install openssl:x64-windows
 
+      - name: Fetch pinned Mongoose release
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch 7.22 `
+            https://github.com/cesanta/mongoose.git `
+            "$env:RUNNER_TEMP/mongoose"
+
       - name: Configure with Visual Studio
         shell: pwsh
         run: |
@@ -122,7 +129,15 @@ jobs:
           }
 
       - name: Build with strict Microsoft warnings
-        run: cmake --build build-msvc --config Release --parallel
+        shell: pwsh
+        run: |
+          cmake --build build-msvc --config Release --parallel
+
+          cmake -S examples/mongoose -B build-msvc-mongoose -A x64 `
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows `
+            "-DMONGOOSE_ROOT=$env:RUNNER_TEMP/mongoose"
+          cmake --build build-msvc-mongoose --config Release --parallel
 
       - name: Start the native executable
         shell: pwsh
@@ -133,6 +148,14 @@ jobs:
           }
           if ($output -notmatch 'set RATELIMITLY_TENANT and RATELIMITLY_AUTH_KEY') {
             throw "Native executable did not reach configuration validation"
+          }
+
+          $mongooseOutput = & build-msvc-mongoose/Release/mongoose-example.exe 2>&1
+          if ($LASTEXITCODE -ne 1) {
+            throw "Expected Mongoose missing-configuration exit code 1, got $LASTEXITCODE"
+          }
+          if ($mongooseOutput -notmatch 'set RATELIMITLY_TENANT and RATELIMITLY_AUTH_KEY') {
+            throw "Mongoose executable did not reach configuration validation"
           }
           # The missing-configuration exit code was expected and validated.
           # Do not let PowerShell propagate it as the step's final status.

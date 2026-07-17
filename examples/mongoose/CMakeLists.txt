@@ -10,9 +10,18 @@ endif()
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 find_package(Threads REQUIRED)
 
-add_library(rclient STATIC IMPORTED)
-set_target_properties(rclient PROPERTIES
-    IMPORTED_LOCATION "${RL_CLIENT_ROOT}/librclient.a")
+set(RL_CLIENT_SOURCES
+    "${RL_CLIENT_ROOT}/src/r_client.c"
+    "${RL_CLIENT_ROOT}/src/r_client_runtime.c"
+    "${RL_CLIENT_ROOT}/src/r_client_workflow.c"
+    "${RL_CLIENT_ROOT}/src/r_protocol.c"
+    "${RL_CLIENT_ROOT}/src/r_crypto.c"
+    "${RL_CLIENT_ROOT}/src/r_policy.c")
+add_library(rclient STATIC ${RL_CLIENT_SOURCES})
+target_compile_features(rclient PUBLIC c_std_11)
+target_include_directories(rclient
+    PUBLIC "${RL_CLIENT_ROOT}/include"
+    PRIVATE "${RL_CLIENT_ROOT}/src")
 add_library(mongoose_vendor STATIC "${MONGOOSE_ROOT}/mongoose.c")
 target_include_directories(mongoose_vendor PUBLIC "${MONGOOSE_ROOT}")
 if(NOT WIN32)
@@ -21,8 +30,10 @@ endif()
 add_executable(mongoose-example main.c)
 target_compile_features(mongoose-example PRIVATE c_std_11)
 if(MSVC)
+    target_compile_options(rclient PRIVATE /W4 /WX)
     target_compile_options(mongoose-example PRIVATE /W4 /WX)
 else()
+    target_compile_options(rclient PRIVATE -Wall -Wextra -Werror)
     target_compile_options(mongoose-example PRIVATE -Wall -Wextra -Werror)
 endif()
 target_include_directories(mongoose-example PRIVATE

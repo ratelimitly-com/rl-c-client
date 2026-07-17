@@ -39,6 +39,9 @@ cmake --build build
 ./build/libhv-example
 ```
 
+CMake compiles `rl-c-client` with the selected compiler, including MSVC, rather
+than importing an archive produced for a different object format or C runtime.
+
 Set `RATELIMITLY_TENANT` and `RATELIMITLY_AUTH_KEY`; local fixed responder
 variables are optional.
 

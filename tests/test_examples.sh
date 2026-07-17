@@ -8,7 +8,6 @@ ROOT_README="$ROOT/README.md"
 API_GUIDE="$ROOT/docs/api.md"
 IO_GUIDE="$ROOT/IO_ABSTRACTION.md"
 CI_WORKFLOW="$ROOT/.github/workflows/ci.yml"
-WIN32_CMAKE="$ROOT/examples/win32/CMakeLists.txt"
 H2O_MAKEFILE="$ROOT/examples/h2o/Makefile"
 H2O_CMAKE="$ROOT/examples/h2o/CMakeLists.txt"
 LWAN_MAKEFILE="$ROOT/examples/lwan/Makefile"
@@ -28,11 +27,18 @@ grep -Fq -- 'runs-on: windows-latest' "$CI_WORKFLOW" \
   || fail "CI does not validate the Win32 example on native Windows"
 grep -Fq -- 'CMAKE_C_COMPILER_ID -ne "MSVC"' "$CI_WORKFLOW" \
   || fail "native Windows CI does not verify the Microsoft C compiler"
-grep -Fq -- 'add_library(rclient STATIC' "$WIN32_CMAKE" \
-  || fail "Win32 CMake does not compile rl-c-client with the target compiler"
-if grep -Fq -- 'STATIC IMPORTED' "$WIN32_CMAKE"; then
-  fail "Win32 CMake still imports a compiler-specific client archive"
-fi
+grep -Fq -- 'cmake -S examples/mongoose' "$CI_WORKFLOW" \
+  || fail "native Windows CI does not build a portable framework example"
+for windows_example in win32 libuv libevent glib libhv mongoose llhttp; do
+  windows_cmake="$ROOT/examples/$windows_example/CMakeLists.txt"
+  grep -Fq -- 'add_library(rclient STATIC' "$windows_cmake" \
+    || fail "$windows_example CMake does not compile rl-c-client with the target compiler"
+  grep -Fq -- 'src/r_client_runtime.c' "$windows_cmake" \
+    || fail "$windows_example CMake omits the public runtime implementation"
+  if grep -Fq -- 'STATIC IMPORTED' "$windows_cmake"; then
+    fail "$windows_example CMake still imports a compiler-specific client archive"
+  fi
+done
 grep -Fq -- '-lssl' "$H2O_MAKEFILE" \
   || fail "H2O Makefile omits libh2o's OpenSSL dependency"
 grep -Fq -- '-lm' "$H2O_MAKEFILE" \
