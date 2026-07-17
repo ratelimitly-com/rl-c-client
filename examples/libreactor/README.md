@@ -77,3 +77,8 @@ including after a peer disconnect.
 libreactor v3 is Linux-focused and this example is tested on Linux. CMake fails
 clearly on other systems. Use Mongoose, libevent, or another portable example
 for macOS and Windows hosts.
+
+## API references
+
+- [libreactor v3 documentation](https://github.com/fredrikwidlund/libreactor)
+  covers descriptor, timer, server, and loop APIs.

@@ -97,6 +97,10 @@ while IFS='|' read -r name kind marker; do
     || fail "$name README diagram omits latency reporting behavior"
   grep -Eq '^## Platform' "$example_dir/README.md" \
     || fail "$name README has no platform-support section"
+  grep -Fq -- '## API references' "$example_dir/README.md" \
+    || fail "$name README has no official API-reference section"
+  grep -Eq -- '\[[^]]+\]\(https?://[^)]+\)' "$example_dir/README.md" \
+    || fail "$name README has no online upstream API reference"
   grep -Eqi 'resource|rate limit' "$example_dir/README.md" \
     || fail "$name README does not explain rate limiting"
   grep -Eqi 'latency' "$example_dir/README.md" \

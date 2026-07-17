@@ -59,3 +59,8 @@ kernel and security policy must allow `io_uring_setup`.
 - Re-arm `POLL_ADD` after every completion.
 - Cancel or retire outstanding polls before closing their socket targets.
 - Recompute the timeout after every transition because retry deadlines change.
+
+## API references
+
+- [`io_uring_prep_poll_add(3)`](https://man7.org/linux/man-pages/man3/io_uring_prep_poll_add.3.html)
+  defines one-shot poll submission and completion behavior.

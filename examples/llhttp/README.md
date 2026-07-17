@@ -108,3 +108,8 @@ The adapter borrows the runtime and owns its parser and pending admission state.
 Keep it alive until completion or explicitly cancel it with `dispose`. Parser
 errors are returned as `llhttp_errno_t`; `rl_llhttp_adapter_last_client_status()`
 separately identifies submission failures from rl-c-client.
+
+## API references
+
+- [llhttp callback and pause semantics](https://github.com/nodejs/llhttp#pause)
+  define pausing in callbacks, error positions, and parser resumption.

@@ -69,3 +69,10 @@ CivetWeb or Onion.
 The example is tested on Linux and macOS and uses their POSIX `poll()` API.
 Although Ulfius has broader build options, this source deliberately rejects
 native Windows; use Mongoose or the Win32 loop example there.
+
+## API references
+
+- [Ulfius API documentation](https://babelouest.github.io/ulfius/) covers
+  endpoint callbacks, instances, and response ownership.
+- [Ulfius upstream source](https://github.com/babelouest/ulfius) documents
+  supported build and threading configurations.

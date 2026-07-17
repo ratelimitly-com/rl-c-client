@@ -65,3 +65,8 @@ outcome. The runtime owns the client and sockets. Free all socket and timer
 events before destroying the runtime. Keep client calls on the event-base
 thread, and re-arm the timer after every timeout transition because retries may
 publish a different absolute deadline.
+
+## API references
+
+- [libevent event API](https://libevent.org/doc/event_8h.html) documents
+  persistent socket events, timers, and event lifetime.

@@ -57,3 +57,8 @@ Win32/libuv/libevent examples.
 The application owns the loop, watchers, timer, request, and copied outcome.
 The runtime owns sockets. Remove watchers and the timer before runtime teardown,
 and keep client calls on the libhv loop thread.
+
+## API references
+
+- [libhv event-loop documentation](https://github.com/ithewei/libhv/blob/master/docs/README.md)
+  covers loop, I/O watcher, and timer APIs.

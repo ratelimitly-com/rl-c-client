@@ -62,3 +62,10 @@ kernels; liburing is the safer compatibility layer for production software.
 - An acquire load observes a complete CQE before its slot is retired.
 - `POLL_ADD` is one-shot and must be re-armed after draining the socket.
 - Ring poll requests are torn down before runtime sockets are closed.
+
+## API references
+
+- [`io_uring_enter(2)`](https://man7.org/linux/man-pages/man2/io_uring_enter.2.html)
+  defines submission, completion waits, and `IORING_ENTER_EXT_ARG`.
+- [`io_uring_setup(2)`](https://man7.org/linux/man-pages/man2/io_uring_setup.2.html)
+  defines ring layout and memory-ordering requirements.

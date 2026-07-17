@@ -76,3 +76,8 @@ The example is tested on Linux and macOS. Its `select()` model is portable to
 other POSIX hosts, subject to `FD_SETSIZE`. libmicrohttpd can support Windows,
 but this example intentionally uses POSIX resolver/runtime linkage; use the
 Mongoose or native Win32 example as the Windows starting point.
+
+## API references
+
+- [GNU libmicrohttpd manual](https://www.gnu.org/software/libmicrohttpd/manual/libmicrohttpd.html)
+  covers external loops, suspended connections, and completion callbacks.

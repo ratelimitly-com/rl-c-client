@@ -59,3 +59,10 @@ the runtime. Unlink pending state before replying because a reply can schedule
 connection teardown. Save `next` before timeout processing because completion
 can free the current node. A 10 ms manager tick bounds client UDP latency in
 this compact integration; a production host may integrate its own fd watcher.
+
+## API references
+
+- [Mongoose event-driven architecture](https://mongoose.ws/documentation/#event-driven-non-blocking-apis)
+  explains manager polling and callback serialization.
+- [Mongoose core API](https://mongoose.ws/documentation/#core-api) defines
+  manager and connection lifetime.

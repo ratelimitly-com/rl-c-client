@@ -80,3 +80,10 @@ The embedded loop selects epoll on Linux and kqueue on macOS. H2O and this
 example are therefore scoped to those two platforms. The CMake configuration
 fails clearly on native Windows rather than silently selecting an unsupported
 backend.
+
+## API references
+
+- [H2O embedding FAQ](https://h2o.examp1e.net/faq.html) explains building
+  and linking applications with `libh2o`.
+- [H2O public C header](https://github.com/h2o/h2o/blob/master/include/h2o.h)
+  defines handler, request-pool, timer, and embedded-loop APIs.

@@ -56,3 +56,10 @@ only. Use kqueue or libdispatch on macOS and the Win32 example on Windows.
   publish a new deadline.
 - Keep the request alive until callback or cancellation, and close the epoll
   instance before destroying its referenced runtime sockets.
+
+## API references
+
+- [Linux `epoll(7)` manual](https://man7.org/linux/man-pages/man7/epoll.7.html)
+  defines readiness models and descriptor lifetime.
+- [Linux `epoll_ctl(2)` manual](https://man7.org/linux/man-pages/man2/epoll_ctl.2.html)
+  defines interest-list registration and errors.

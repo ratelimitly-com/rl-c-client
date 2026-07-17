@@ -78,3 +78,8 @@ This source targets facil.io 0.7's `fio.h`/`http.h` API on Linux and macOS.
 facil.io 1.x is a substantially different API and requires a separate adapter.
 Native Windows is outside this POSIX descriptor model; start from Mongoose or
 the Win32 example there.
+
+## API references
+
+- [facil.io 0.7 upstream documentation](https://github.com/boazsegev/facil.io/tree/0.7.x)
+  covers HTTP listeners, descriptor attachment, timers, and lifecycle callbacks.

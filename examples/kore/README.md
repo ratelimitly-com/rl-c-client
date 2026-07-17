@@ -78,3 +78,10 @@ by a hardened deployment.
 Kore supports Linux and macOS, and the build files handle ELF shared modules and
 Darwin bundles. The seccomp declarations compile only on Linux. Native Windows
 is outside Kore's supported module model.
+
+## API references
+
+- [Kore API documentation](https://docs.kore.io/4.2.3/api.html) covers
+  requests, tasks, channels, and module lifecycle.
+- [Kore upstream source](https://github.com/jorisvink/kore) documents platform
+  support and current framework behavior.

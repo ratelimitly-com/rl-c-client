@@ -80,3 +80,8 @@ small coroutine stacks and prevents concurrent entry from worker coroutines.
 Lwan's event loop and this bridge target Linux. The CMake file rejects other
 platforms explicitly. On macOS or Windows, use one of the portable framework
 examples such as Mongoose.
+
+## API references
+
+- [Lwan upstream documentation](https://github.com/lpereira/lwan) covers URL
+  maps, coroutine handlers, build options, and optional dependencies.

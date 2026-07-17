@@ -61,5 +61,9 @@ Keep client calls on the main-context thread. Replace `prepare_response` with
 the real protected operation, or start asynchronous work after admission and
 report from its completion callback.
 
-API references: [GLib main loop](https://docs.gtk.org/glib/main-loop.html) and
-[GSocket sources](https://docs.gtk.org/gio/method.Socket.create_source.html).
+## API references
+
+- [GLib main loop](https://docs.gtk.org/glib/main-loop.html) covers contexts,
+  sources, and dispatch.
+- [GSocket source creation](https://docs.gtk.org/gio/method.Socket.create_source.html)
+  defines socket conditions and source ownership.

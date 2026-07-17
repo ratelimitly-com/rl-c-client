@@ -56,3 +56,10 @@ monotonic domain. Never compare wall and monotonic timestamps directly.
 
 The application owns all event sources, request storage, and copied outcome.
 Unref I/O and timer sources before destroying runtime-owned sockets.
+
+## API references
+
+- [`sd_event_add_io`](https://www.freedesktop.org/software/systemd/man/latest/sd_event_add_io.html)
+  defines I/O source registration and ownership.
+- [`sd_event_add_time`](https://www.freedesktop.org/software/systemd/man/latest/sd_event_add_time.html)
+  defines monotonic timer registration.

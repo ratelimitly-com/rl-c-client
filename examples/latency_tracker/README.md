@@ -59,3 +59,8 @@ native Win32 example when integrating a Windows message/socket event loop.
   report from its completion callback; never sleep on the loop thread.
 - Keep the request storage alive until completion or explicit cancellation.
 - Tune rate and latency policy values for the service SLO and key quotas.
+
+## API references
+
+- [Linux `poll(2)` manual](https://man7.org/linux/man-pages/man2/poll.2.html)
+  explains the readiness and timeout semantics used by the standalone loop.

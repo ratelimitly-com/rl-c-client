@@ -53,3 +53,8 @@ Windows API; use epoll/io_uring on Linux and the Win32 example on Windows.
 - Recompute the relative timeout after every client transition.
 - Close the kqueue before destroying runtime-owned sockets.
 - Keep request storage alive until callback or explicit cancellation.
+
+## API references
+
+- [FreeBSD `kqueue(2)` manual](https://man.freebsd.org/cgi/man.cgi?query=kevent&sektion=2)
+  defines filter registration, `EV_ERROR`, `EV_EOF`, and timeout behavior.

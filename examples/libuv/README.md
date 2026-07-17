@@ -68,3 +68,8 @@ The application owns libuv handles and request storage. The public runtime owns
 the client and sockets. Stop and close every watcher, drain libuv's close
 callbacks, and only then destroy the runtime. Keep all client calls on the loop
 thread unless the application adds explicit serialization.
+
+## API references
+
+- [libuv poll handles](https://docs.libuv.org/en/stable/poll.html) documents
+  socket initialization, level-triggered readiness, and handle lifetime.

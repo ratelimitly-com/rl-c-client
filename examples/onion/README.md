@@ -82,3 +82,8 @@ v0.8 on Linux. Onion v0.8 itself needs upstream compatibility fixes to build
 with current macOS/Clang, although the example can consume a compatible
 prebuilt macOS Onion library. CMake rejects Windows explicitly; use Mongoose or
 the native Win32 example for that platform.
+
+## API references
+
+- [Onion upstream documentation](https://github.com/davidmoreno/onion/tree/v0.8)
+  covers handler return codes, threaded listening, and object ownership.

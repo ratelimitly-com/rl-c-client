@@ -91,3 +91,10 @@ The runtime owns WinSock startup and every `SOCKET`. The application owns event
 objects, request storage, and the copied outcome. Clear each `WSAEventSelect`
 association and close its event before destroying runtime sockets. Never cast a
 `SOCKET` to `int`; its type is pointer-width on 64-bit Windows.
+
+## API references
+
+- [`WSAEventSelect`](https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-wsaeventselect)
+  defines event association and nonblocking socket behavior.
+- [`WSAWaitForMultipleEvents`](https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-wsawaitformultipleevents)
+  defines wait results and timeout semantics.

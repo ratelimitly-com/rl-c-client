@@ -82,3 +82,10 @@ This bridge uses pthreads, `pipe()`, and `poll()`, so its supported hosts are
 Linux and macOS. CivetWeb itself supports Windows, but this particular ownership
 pattern deliberately does not hide a second Windows implementation. For native
 Windows, start with the self-contained Mongoose or Win32 example.
+
+## API references
+
+- [CivetWeb embedding guide](https://github.com/civetweb/civetweb/blob/master/docs/Embedding.md)
+  covers server startup, handlers, worker threads, and shutdown.
+- [CivetWeb API reference](https://github.com/civetweb/civetweb/blob/master/docs/api.md)
+  defines the request-handler callback contract.

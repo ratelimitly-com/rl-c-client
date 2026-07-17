@@ -55,3 +55,8 @@ The application owns the loop, watchers, timer, request, and copied outcome.
 The runtime owns the client and sockets. Stop watchers before destroying the
 runtime. Keep calls on the loop thread, and re-arm the timer after each timeout
 transition because retries can change the deadline.
+
+## API references
+
+- [Official libev documentation](https://software.schmorp.de/pkg/libev.html)
+  covers I/O watcher, timer, and loop semantics.
