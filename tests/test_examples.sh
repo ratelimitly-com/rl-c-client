@@ -12,6 +12,7 @@ H2O_MAKEFILE="$ROOT/examples/h2o/Makefile"
 H2O_CMAKE="$ROOT/examples/h2o/CMakeLists.txt"
 LWAN_MAKEFILE="$ROOT/examples/lwan/Makefile"
 LWAN_CMAKE="$ROOT/examples/lwan/CMakeLists.txt"
+GLIB_SOURCE="$ROOT/examples/glib/main.c"
 
 fail() {
   echo "test_examples: $*" >&2
@@ -51,6 +52,8 @@ grep -Fq -- 'LWAN_DEP_LIBS' "$LWAN_MAKEFILE" \
   || fail "Lwan Makefile ignores build-specific optional dependencies"
 grep -Fq -- 'pkg_check_modules(LWAN_BUILD_CONFIG' "$LWAN_CMAKE" \
   || fail "Lwan CMake ignores build-specific optional dependencies"
+grep -Fq -- 'g_io_channel_unref(channel);' "$GLIB_SOURCE" \
+  || fail "GLib leaks a channel when source creation fails"
 [[ ! -e "$ROOT/examples/common" ]] \
   || fail "legacy examples/common adapter still exists"
 [[ ! -e "$ROOT/tests/test_example_common.c" \

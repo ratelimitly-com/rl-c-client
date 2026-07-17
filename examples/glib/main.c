@@ -174,6 +174,8 @@ static int initialize_socket_watches(application_t *app) {
             NULL
         );
         if (app->socket_watch_ids[i] == 0u) {
+            g_io_channel_unref(channel);
+            app->channels[i] = NULL;
             return RCLIENT_ERR_NOMEM;
         }
         app->socket_count++;
