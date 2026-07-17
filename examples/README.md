@@ -13,6 +13,7 @@ those comments before transplanting the integration into an application.
 | GLib/GIO | Portable main loop | Non-owning `GIOChannel` watches plus timeout source |
 | libev | Compact event loop | `ev_io` watchers plus a one-shot `ev_timer` |
 | sd-event | systemd event loop | `sd_event_add_io` plus monotonic time source |
+| kqueue | Native macOS/BSD readiness | Direct `kevent` wait plus request deadline |
 | libhv | Native event loop | `hio_t` readiness plus `htimer_t` |
 | liburing | Linux completion ring | `IORING_OP_POLL_ADD` through liburing |
 | epoll | Linux readiness API | Direct `epoll_wait` with a request deadline |
@@ -232,6 +233,20 @@ make
 
 **Production note.** Keep wall-clock client deadlines and monotonic timer
 timestamps in separate domains; convert through a relative delay.
+
+### kqueue (macOS/BSD)
+
+**Model.** `kqueue/main.c` registers runtime UDP sockets with `EVFILT_READ` and
+passes the current relative admission delay directly to `kevent`.
+
+```sh
+cd kqueue
+make
+./kqueue-example
+```
+
+**Production note.** Treat `EV_ERROR` and terminal `EV_EOF` as watcher errors,
+and close the kqueue before destroying runtime-owned sockets.
 
 ### libhv
 
