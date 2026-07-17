@@ -134,3 +134,6 @@ jobs:
           if ($output -notmatch 'set RATELIMITLY_TENANT and RATELIMITLY_AUTH_KEY') {
             throw "Native executable did not reach configuration validation"
           }
+          # The missing-configuration exit code was expected and validated.
+          # Do not let PowerShell propagate it as the step's final status.
+          exit 0
