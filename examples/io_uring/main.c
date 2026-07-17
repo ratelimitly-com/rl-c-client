@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 
 #include <errno.h>
+#include <inttypes.h>
 #include <linux/io_uring.h>
 #include <poll.h>
 #include <stdint.h>
@@ -11,18 +12,19 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
-#include "common/rl_example.h"
+#include "r_client_runtime.h"
+#include "r_client_workflow.h"
 
 /*
  * Flow (without liburing)
  * -----------------------
  * 1. io_uring_setup() creates a ring; mmap() exposes SQ, CQ, and SQEs.
- * 2. Publish one IORING_OP_POLL_ADD for each rl-c-client UDP descriptor.
- * 3. io_uring_enter() waits for a CQE or the current request deadline.
+ * 2. Publish one IORING_OP_POLL_ADD for each runtime-owned UDP socket.
+ * 3. io_uring_enter() waits for a CQE or the admission deadline.
  * 4. Drain a ready socket, re-arm its one-shot poll, and retire its CQE.
- * 5. Stop when the rl-c-client result callback records a decision.
+ * 5. Run admitted work, measure it, and report one latency sample.
  *
- * Ownership: the adapter owns sockets and the app owns all ring mappings. Ring
+ * Ownership: runtime owns sockets and the app owns all ring mappings. Ring
  * head/tail fields are shared with the kernel; acquire/release atomics publish
  * complete SQEs and retire fully observed CQEs.
  */
@@ -47,10 +49,12 @@ typedef struct raw_ring {
 
 typedef struct io_uring_app {
     raw_ring_t ring;
-    rl_example_client_t client;
-    rl_example_request_t request;
+    r_runtime_client_t runtime;
+    r_admission_request_t request;
+    r_admission_outcome_t outcome;
+    char response[96];
+    uint32_t observed_latency_ms;
     int status;
-    bool allowed;
     bool done;
 } io_uring_app_t;
 
@@ -202,10 +206,35 @@ static int raw_ring_pop(raw_ring_t *ring, struct io_uring_cqe *completion) {
     return 1;
 }
 
-static void on_rate_limit(void *user, int status, bool allowed) {
+static int prepare_response(void *user) {
+    io_uring_app_t *app = user;
+    int length = snprintf(
+        app->response,
+        sizeof(app->response),
+        "inventory response prepared by raw io_uring"
+    );
+    return length >= 0 && (size_t)length < sizeof(app->response)
+        ? RCLIENT_OK
+        : RCLIENT_ERR_IO;
+}
+
+static void on_admission(
+    void *user,
+    int status,
+    const r_admission_outcome_t *outcome
+) {
     io_uring_app_t *app = user;
     app->status = status;
-    app->allowed = allowed;
+    app->outcome = *outcome;
+    if (status == RCLIENT_OK && outcome->allowed) {
+        app->status = r_runtime_admission_run_and_report(
+            &app->runtime,
+            &app->request,
+            prepare_response,
+            app,
+            &app->observed_latency_ms
+        );
+    }
     app->done = true;
 }
 
@@ -213,13 +242,13 @@ static int arm_socket(io_uring_app_t *app, size_t index) {
     /* user_data is index + 1 because zero is reserved as an invalid tag. */
     return raw_ring_prep_poll(
         &app->ring,
-        rl_example_socket_at(&app->client, index),
+        (int)r_runtime_socket_at(&app->runtime, index),
         index + 1u
     );
 }
 
 static int run_loop(io_uring_app_t *app) {
-    size_t socket_count = rl_example_socket_count(&app->client);
+    size_t socket_count = r_runtime_socket_count(&app->runtime);
     for (size_t i = 0; i < socket_count; i++) {
         if (arm_socket(app, i) != 0) {
             return RCLIENT_ERR_IO;
@@ -231,13 +260,13 @@ static int run_loop(io_uring_app_t *app) {
 
     while (!app->done) {
         uint64_t delay_ms = 0;
-        int status = rl_example_request_delay_ms(&app->request, &delay_ms);
+        int status = r_runtime_admission_delay_ms(&app->request, &delay_ms);
         if (status != RCLIENT_OK) {
             return status;
         }
         int wait_result = raw_ring_wait(&app->ring, delay_ms);
         if (wait_result < 0 && errno == ETIME) {
-            status = rl_example_request_on_timeout(&app->client, &app->request);
+            status = r_runtime_admission_on_timeout(&app->runtime, &app->request);
             if (status != RCLIENT_OK) {
                 return status;
             }
@@ -260,9 +289,9 @@ static int run_loop(io_uring_app_t *app) {
                 return RCLIENT_ERR_IO;
             }
             size_t index = (size_t)(completion.user_data - 1u);
-            status = rl_example_client_on_readable(
-                &app->client,
-                rl_example_socket_at(&app->client, index)
+            status = r_runtime_client_on_readable(
+                &app->runtime,
+                r_runtime_socket_at(&app->runtime, index)
             );
             if (status != RCLIENT_OK) {
                 return status;
@@ -280,8 +309,8 @@ static int run_loop(io_uring_app_t *app) {
 }
 
 int main(void) {
-    rl_example_options_t options;
-    if (rl_example_options_from_env(&options) != RCLIENT_OK) {
+    r_runtime_options_t options;
+    if (r_runtime_options_from_env(&options) != RCLIENT_OK) {
         fprintf(stderr, "set RATELIMITLY_TENANT and RATELIMITLY_AUTH_KEY\n");
         return EXIT_FAILURE;
     }
@@ -293,17 +322,22 @@ int main(void) {
         perror("io_uring_setup");
         return EXIT_FAILURE;
     }
-    int status = rl_example_client_init(&app.client, &options);
+    int status = r_runtime_client_init(&app.runtime, &options);
     if (status != RCLIENT_OK) {
         fprintf(stderr, "client initialization failed: %s (%d)\n",
-            rl_example_status_name(status), status);
+            r_runtime_status_name(status), status);
     }
     if (status == RCLIENT_OK) {
-        status = rl_example_check(
-            &app.client,
+        r_admission_config_t config;
+        r_client_admission_config_defaults(&config);
+        config.bucket_name = "io-uring-example";
+        config.service_name = "io-uring-protected-service";
+        config.metrics_label = "io-uring-example";
+        status = r_client_admission_start(
+            app.runtime.handle,
             &app.request,
-            "io-uring-example",
-            on_rate_limit,
+            &config,
+            on_admission,
             &app
         );
     }
@@ -315,17 +349,26 @@ int main(void) {
     }
 
     if (app.request.active) {
-        rl_example_request_cancel(&app.client, &app.request);
+        r_runtime_admission_cancel(&app.runtime, &app.request);
     }
     /* Tear down kernel poll requests before closing their target sockets. */
     raw_ring_destroy(&app.ring);
-    rl_example_client_destroy(&app.client);
+    r_runtime_client_destroy(&app.runtime);
 
     if (app.status != RCLIENT_OK) {
         fprintf(stderr, "rate-limit check failed: %s (%d)\n",
-            rl_example_status_name(app.status), app.status);
+            r_runtime_status_name(app.status), app.status);
         return EXIT_FAILURE;
     }
-    puts(app.allowed ? "allowed" : "denied");
-    return app.allowed ? EXIT_SUCCESS : 2;
+    if (app.outcome.allowed) {
+        printf("allowed: %s; latency=%" PRIu32 " ms\n",
+            app.response, app.observed_latency_ms);
+    } else if (app.outcome.rate_limited && app.outcome.latency_limited) {
+        puts("denied: resource limit and latency guard");
+    } else if (app.outcome.latency_limited) {
+        puts("denied: latency guard");
+    } else {
+        puts("denied: resource rate limit");
+    }
+    return app.outcome.allowed ? EXIT_SUCCESS : 2;
 }
