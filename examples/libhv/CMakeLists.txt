@@ -27,6 +27,7 @@ target_compile_features(rclient PUBLIC c_std_11)
 target_include_directories(rclient
     PUBLIC "${RL_CLIENT_ROOT}/include"
     PRIVATE "${RL_CLIENT_ROOT}/src")
+target_link_libraries(rclient PUBLIC OpenSSL::Crypto)
 add_executable(libhv-example main.c)
 target_compile_features(libhv-example PRIVATE c_std_11)
 if(MSVC)

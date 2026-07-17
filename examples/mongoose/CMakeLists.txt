@@ -22,6 +22,7 @@ target_compile_features(rclient PUBLIC c_std_11)
 target_include_directories(rclient
     PUBLIC "${RL_CLIENT_ROOT}/include"
     PRIVATE "${RL_CLIENT_ROOT}/src")
+target_link_libraries(rclient PUBLIC OpenSSL::Crypto)
 add_library(mongoose_vendor STATIC "${MONGOOSE_ROOT}/mongoose.c")
 target_include_directories(mongoose_vendor PUBLIC "${MONGOOSE_ROOT}")
 if(NOT WIN32)

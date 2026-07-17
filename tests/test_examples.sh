@@ -36,6 +36,8 @@ for windows_example in win32 libuv libevent glib libhv mongoose llhttp; do
     || fail "$windows_example CMake does not compile rl-c-client with the target compiler"
   grep -Fq -- 'src/r_client_runtime.c' "$windows_cmake" \
     || fail "$windows_example CMake omits the public runtime implementation"
+  grep -Fq -- 'target_link_libraries(rclient PUBLIC OpenSSL::Crypto' "$windows_cmake" \
+    || fail "$windows_example does not propagate OpenSSL to the client target"
   if grep -Fq -- 'STATIC IMPORTED' "$windows_cmake"; then
     fail "$windows_example CMake still imports a compiler-specific client archive"
   fi
