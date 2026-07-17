@@ -11,6 +11,7 @@ those comments before transplanting the integration into an application.
 | libuv | Native event loop | `uv_poll_t` plus a one-shot `uv_timer_t` |
 | libevent | Native event loop | Persistent `EV_READ` plus `evtimer` |
 | GLib/GIO | Portable main loop | Non-owning `GIOChannel` watches plus timeout source |
+| libev | Compact event loop | `ev_io` watchers plus a one-shot `ev_timer` |
 | libhv | Native event loop | `hio_t` readiness plus `htimer_t` |
 | liburing | Linux completion ring | `IORING_OP_POLL_ADD` through liburing |
 | epoll | Linux readiness API | Direct `epoll_wait` with a request deadline |
@@ -202,6 +203,20 @@ make
 
 **Production note.** Remove every source and unref every non-owning channel
 before destroying the runtime that owns the underlying sockets.
+
+### libev
+
+**Model.** `libev/main.c` uses `ev_io` for UDP readiness and re-arms a one-shot
+`ev_timer` from the current admission deadline.
+
+```sh
+cd libev
+make
+./libev-example
+```
+
+**Production note.** Stop all fd watchers before destroying runtime sockets.
+This example targets Unix fd backends rather than narrowing WinSock handles.
 
 ### libhv
 
