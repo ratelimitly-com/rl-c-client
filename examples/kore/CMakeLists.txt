@@ -1,0 +1,30 @@
+cmake_minimum_required(VERSION 3.16)
+project(rl_kore_example C)
+
+if(WIN32)
+    message(FATAL_ERROR "Kore modules and this task integration target POSIX hosts")
+endif()
+set(RL_CLIENT_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." CACHE PATH
+    "Path to the rl-c-client source tree")
+set(KORE_ROOT "" CACHE PATH "Path to the Kore source tree")
+if(NOT EXISTS "${KORE_ROOT}/include/kore/kore.h")
+    message(FATAL_ERROR "Set KORE_ROOT to a Kore source tree")
+endif()
+find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+find_package(Threads REQUIRED)
+
+add_library(rclient STATIC IMPORTED)
+set_target_properties(rclient PROPERTIES
+    IMPORTED_LOCATION "${RL_CLIENT_ROOT}/librclient.a")
+add_library(kore-example MODULE main.c)
+set_target_properties(kore-example PROPERTIES PREFIX "" SUFFIX ".so")
+target_compile_features(kore-example PRIVATE c_std_11)
+target_compile_options(kore-example PRIVATE -Wall -Wextra -Werror)
+target_compile_definitions(kore-example PRIVATE KORE_USE_TASKS)
+target_include_directories(kore-example PRIVATE "${RL_CLIENT_ROOT}/include")
+target_include_directories(kore-example SYSTEM PRIVATE "${KORE_ROOT}/include")
+target_link_libraries(kore-example PRIVATE
+    rclient OpenSSL::Crypto Threads::Threads resolv)
+if(APPLE)
+    target_link_options(kore-example PRIVATE "-undefined" "dynamic_lookup")
+endif()

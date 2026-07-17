@@ -506,19 +506,18 @@ with an error rather than leaving them suspended.
 
 ### Kore
 
-**Model.** `kore.c` runs each exchange as a `kore_task`, putting the HTTP
-request to sleep until the task channel reports a result. Task-local client
-ownership avoids cross-thread access. The Linux module also declares the extra
-socket syscalls required by Kore's seccomp filter.
+**Model.** [`kore/main.c`](kore/main.c) runs each exchange as a `kore_task`,
+putting the HTTP request to sleep until the task channel reports a combined
+admission result. Task-local runtime ownership avoids cross-thread access and
+reports admitted protected-work latency. The Linux module also declares the
+extra socket syscalls required by Kore's seccomp filter.
 
 Build Kore with task support and its no-TLS backend, then build the module:
 
 ```sh
-make -C /path/to/kore TASKS=1 TLS_BACKEND=none
-cc -fPIC -shared -DKORE_USE_TASKS -I/path/to/kore/include \
-  -I../include -Icommon kore.c common/rl_example.c ../librclient.a \
-  -lcrypto -lresolv -pthread -o kore-example.so
-kore -fnc kore.conf
+cd kore
+make KORE_ROOT=/path/to/kore
+kore -fnrc kore.conf
 curl -i http://127.0.0.1:8000/limited
 ```
 

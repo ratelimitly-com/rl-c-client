@@ -26,18 +26,19 @@ KORE_SECCOMP_FILTER("ratelimitly",
 );
 #endif
 
-#include "common/rl_example.h"
+#include "r_client_runtime.h"
+#include "r_client_workflow.h"
 
 /*
  * Flow
  * ----
  * 1. GET /limited creates a kore_task and returns KORE_RESULT_RETRY.
- * 2. The task creates a private client and polls its UDP sockets to completion.
- * 3. The task writes a fixed-size result to its channel.
+ * 2. The task creates a private runtime and polls combined admission to completion.
+ * 3. Admitted work is measured/reported, then sent through the task channel.
  * 4. Kore wakes the sleeping HTTP request; the handler reads and maps the result.
  *
- * Ownership: the task owns its client, sockets, and check. Kore owns hdlr_extra
- * and frees it with the request. This per-request model favors clarity; a
+ * Ownership: the task owns its runtime, sockets, and admission. Kore owns
+ * hdlr_extra and frees it with the request. This model favors clarity; a
  * high-volume service can instead use one long-lived task and channel-fed queue.
  */
 
@@ -47,43 +48,49 @@ typedef struct handler_state {
 
 typedef struct task_result {
     int status;
-    bool allowed;
+    r_admission_outcome_t outcome;
+    uint32_t observed_latency_ms;
+    bool protected_work_complete;
 } task_result_t;
 
 typedef struct check_result {
     bool done;
     int status;
-    bool allowed;
+    r_admission_outcome_t outcome;
 } check_result_t;
 
 int limited(struct http_request *request);
 int run_rate_limit_task(struct kore_task *task);
 
-static void on_rate_limit(void *user, int status, bool allowed) {
+static void on_admission(
+    void *user,
+    int status,
+    const r_admission_outcome_t *outcome
+) {
     check_result_t *result = user;
     result->done = true;
     result->status = status;
-    result->allowed = allowed;
+    result->outcome = *outcome;
 }
 
 static int wait_for_result(
-    rl_example_client_t *client,
-    rl_example_request_t *request,
+    r_runtime_client_t *runtime,
+    r_admission_request_t *request,
     check_result_t *result
 ) {
     while (!result->done) {
         struct pollfd sockets[2] = {0};
-        size_t socket_count = rl_example_socket_count(client);
+        size_t socket_count = r_runtime_socket_count(runtime);
         if (socket_count == 0 || socket_count > 2) {
             return RCLIENT_ERR_IO;
         }
         for (size_t i = 0; i < socket_count; i++) {
-            sockets[i].fd = rl_example_socket_at(client, i);
+            sockets[i].fd = r_runtime_socket_at(runtime, i);
             sockets[i].events = POLLIN;
         }
 
         uint64_t delay_ms = 0;
-        int status = rl_example_request_delay_ms(request, &delay_ms);
+        int status = r_runtime_admission_delay_ms(request, &delay_ms);
         if (status != RCLIENT_OK) {
             return status;
         }
@@ -96,7 +103,7 @@ static int wait_for_result(
             return RCLIENT_ERR_IO;
         }
         if (ready == 0) {
-            status = rl_example_request_on_timeout(client, request);
+            status = r_runtime_admission_on_timeout(runtime, request);
             if (status != RCLIENT_OK) {
                 return status;
             }
@@ -107,7 +114,7 @@ static int wait_for_result(
                 return RCLIENT_ERR_IO;
             }
             if ((sockets[i].revents & POLLIN) != 0) {
-                status = rl_example_client_on_readable(client, sockets[i].fd);
+                status = r_runtime_client_on_readable(runtime, sockets[i].fd);
                 if (status != RCLIENT_OK) {
                     return status;
                 }
@@ -117,43 +124,62 @@ static int wait_for_result(
     return result->status;
 }
 
+static int perform_protected_work(void *user) {
+    task_result_t *output = user;
+    /* Replace this with the database/API operation the route protects. */
+    output->protected_work_complete = true;
+    return RCLIENT_OK;
+}
+
 int run_rate_limit_task(struct kore_task *task) {
     task_result_t output = {.status = RCLIENT_ERR_CONFIG};
-    rl_example_options_t options;
-    if (rl_example_options_from_env(&options) != RCLIENT_OK) {
+    r_runtime_options_t options;
+    if (r_runtime_options_from_env(&options) != RCLIENT_OK) {
         kore_task_channel_write(task, &output, sizeof(output));
         return KORE_RESULT_OK;
     }
 
-    rl_example_client_t *client = calloc(1, sizeof(*client));
-    if (!client) {
-        output.status = RCLIENT_ERR_NOMEM;
-        kore_task_channel_write(task, &output, sizeof(output));
-        return KORE_RESULT_OK;
-    }
-    output.status = rl_example_client_init(client, &options);
+    r_runtime_client_t runtime;
+    output.status = r_runtime_client_init(&runtime, &options);
     if (output.status == RCLIENT_OK) {
         check_result_t result = {0};
-        rl_example_request_t request = {0};
-        output.status = rl_example_check(
-            client,
+        r_admission_request_t request = {0};
+        r_admission_config_t config;
+        r_client_admission_config_defaults(&config);
+        config.bucket_name = "kore-example";
+        config.service_name = "kore-protected-service";
+        config.metrics_label = "kore-example";
+        output.status = r_client_admission_start(
+            runtime.handle,
             &request,
-            "kore-example",
-            on_rate_limit,
+            &config,
+            on_admission,
             &result
         );
         if (output.status == RCLIENT_OK) {
-            output.status = wait_for_result(client, &request, &result);
+            output.status = wait_for_result(&runtime, &request, &result);
         }
         if (request.active) {
-            rl_example_request_cancel(client, &request);
+            r_runtime_admission_cancel(&runtime, &request);
         }
         if (output.status == RCLIENT_OK) {
-            output.allowed = result.allowed;
+            output.outcome = result.outcome;
+            if (result.outcome.allowed) {
+                int report_status = r_runtime_admission_run_and_report(
+                    &runtime,
+                    &request,
+                    perform_protected_work,
+                    &output,
+                    &output.observed_latency_ms
+                );
+                if (report_status != RCLIENT_OK) {
+                    kore_log(LOG_ERR, "latency report failed: %s (%d)",
+                        r_runtime_status_name(report_status), report_status);
+                }
+            }
         }
-        rl_example_client_destroy(client);
+        r_runtime_client_destroy(&runtime);
     }
-    free(client);
     kore_task_channel_write(task, &output, sizeof(output));
     return KORE_RESULT_OK;
 }
@@ -197,7 +223,10 @@ int limited(struct http_request *request) {
     http_response_header(request, "content-type", "text/plain");
     if (length != sizeof(result) || result.status != RCLIENT_OK) {
         http_response(request, 503, unavailable, sizeof(unavailable) - 1);
-    } else if (!result.allowed) {
+    } else if (result.outcome.latency_limited
+        && !result.outcome.rate_limited) {
+        http_response(request, 503, unavailable, sizeof(unavailable) - 1);
+    } else if (!result.outcome.allowed) {
         http_response(request, 429, denied, sizeof(denied) - 1);
     } else {
         http_response(request, 200, allowed, sizeof(allowed) - 1);
