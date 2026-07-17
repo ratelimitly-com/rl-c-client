@@ -15,7 +15,7 @@ fail() {
 }
 
 [[ -f "$MANIFEST" ]] || fail "missing examples/manifest.txt"
-for migrated in latency_tracker libuv; do
+for migrated in latency_tracker libuv libevent; do
   [[ -d "$ROOT/examples/$migrated" ]] \
     || fail "$migrated does not have its own directory"
 done
@@ -36,8 +36,10 @@ while IFS='|' read -r name kind marker; do
       || fail "$name does not use the public runtime"
     grep -Fq -- '#include "r_client_workflow.h"' "$source_file" \
       || fail "$name does not use the admission workflow"
-    grep -Fq -- 'r_client_admission_report_latency(' "$source_file" \
-      || fail "$name does not report protected-work latency"
+    if ! grep -Fq -- 'r_client_admission_report_latency(' "$source_file" \
+      && ! grep -Fq -- 'r_runtime_admission_run_and_report(' "$source_file"; then
+      fail "$name does not report protected-work latency"
+    fi
   else
     source_file="$ROOT/examples/$name.c"
     [[ -f "$source_file" ]] || fail "missing examples/$name.c"
@@ -59,10 +61,7 @@ while IFS='|' read -r name kind marker; do
       if [[ -d "$example_dir" ]]; then
         symbols=(
           'r_client_admission_start('
-          'r_client_admission_report_latency('
           'r_runtime_client_on_readable('
-          'r_client_admission_deadline_ms('
-          'r_client_admission_on_timeout('
         )
       else
         symbols=(
@@ -76,6 +75,16 @@ while IFS='|' read -r name kind marker; do
         grep -Fq -- "$symbol" "$source_file" \
           || fail "$name does not wire $symbol"
       done
+      if [[ -d "$example_dir" ]]; then
+        if ! grep -Fq -- 'r_client_admission_deadline_ms(' "$source_file" \
+          && ! grep -Fq -- 'r_runtime_admission_delay_ms(' "$source_file"; then
+          fail "$name does not wire an admission deadline"
+        fi
+        if ! grep -Fq -- 'r_client_admission_on_timeout(' "$source_file" \
+          && ! grep -Fq -- 'r_runtime_admission_on_timeout(' "$source_file"; then
+          fail "$name does not wire admission timeouts"
+        fi
+      fi
       ;;
     parser)
       grep -Fq -- 'rl_example_check(' "$source_file" \
