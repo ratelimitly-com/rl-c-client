@@ -10,6 +10,7 @@ those comments before transplanting the integration into an application.
 | Latency tracker | Guard and reporting workflow | Gate work, measure it, then report one sample |
 | libuv | Native event loop | `uv_poll_t` plus a one-shot `uv_timer_t` |
 | libevent | Native event loop | Persistent `EV_READ` plus `evtimer` |
+| GLib/GIO | Portable main loop | Non-owning `GIOChannel` watches plus timeout source |
 | libhv | Native event loop | `hio_t` readiness plus `htimer_t` |
 | liburing | Linux completion ring | `IORING_OP_POLL_ADD` through liburing |
 | epoll | Linux readiness API | Direct `epoll_wait` with a request deadline |
@@ -186,6 +187,21 @@ cc -I../include -Icommon libevent.c common/rl_example.c ../librclient.a \
 
 **Production note.** Free every successfully created event, including partial
 initialization paths, before destroying the client.
+
+### GLib/GIO
+
+**Model.** `glib/main.c` attaches non-owning `GIOChannel` watches for the
+runtime's UDP sockets and uses a one-shot GLib timeout for the request deadline.
+The same source supports Unix sockets and WinSock handles.
+
+```sh
+cd glib
+make
+./glib-example
+```
+
+**Production note.** Remove every source and unref every non-owning channel
+before destroying the runtime that owns the underlying sockets.
 
 ### libhv
 
