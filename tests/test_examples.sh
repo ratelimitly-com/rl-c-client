@@ -15,7 +15,7 @@ fail() {
 }
 
 [[ -f "$MANIFEST" ]] || fail "missing examples/manifest.txt"
-for migrated in latency_tracker libuv libevent glib libev sd_event kqueue libdispatch win32 libhv epoll liburing io_uring mongoose civetweb libmicrohttpd h2o lwan libreactor facil_io onion kore; do
+for migrated in latency_tracker libuv libevent glib libev sd_event kqueue libdispatch win32 libhv epoll liburing io_uring mongoose civetweb libmicrohttpd h2o lwan libreactor facil_io onion kore ulfius; do
   [[ -d "$ROOT/examples/$migrated" ]] \
     || fail "$migrated does not have its own directory"
 done

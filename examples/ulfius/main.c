@@ -12,17 +12,18 @@
 
 #include <ulfius.h>
 
-#include "common/rl_example.h"
+#include "r_client_runtime.h"
+#include "r_client_workflow.h"
 
 /*
  * Flow
  * ----
  * 1. Ulfius dispatches GET /limited on a libmicrohttpd connection thread.
- * 2. The callback creates a private client and starts one check.
+ * 2. The callback creates a private runtime and starts combined admission.
  * 3. poll(2) waits for UDP readiness or the current request deadline.
- * 4. The callback maps the completed decision to HTTP 200, 429, or 503.
+ * 4. Allowed work is measured/reported, then both decisions map to HTTP.
  *
- * Ownership: one connection callback owns one client, its sockets, and request;
+ * Ownership: one callback owns one runtime, its sockets, and admission request;
  * no client state is shared. This blocks only that connection thread. Higher
  * volume services should use the dedicated bridge pattern in Onion/CivetWeb.
  */
@@ -30,7 +31,7 @@
 typedef struct check_result {
     bool done;
     int status;
-    bool allowed;
+    r_admission_outcome_t outcome;
 } check_result_t;
 
 static volatile sig_atomic_t stop_requested;
@@ -40,32 +41,36 @@ static void on_signal(int signal_number) {
     stop_requested = 1;
 }
 
-static void on_rate_limit(void *user, int status, bool allowed) {
+static void on_admission(
+    void *user,
+    int status,
+    const r_admission_outcome_t *outcome
+) {
     check_result_t *result = user;
     result->done = true;
     result->status = status;
-    result->allowed = allowed;
+    result->outcome = *outcome;
 }
 
 static int wait_for_result(
-    rl_example_client_t *client,
-    rl_example_request_t *request,
+    r_runtime_client_t *runtime,
+    r_admission_request_t *request,
     check_result_t *result
 ) {
     while (!result->done) {
         struct pollfd sockets[2] = {0};
-        size_t socket_count = rl_example_socket_count(client);
+        size_t socket_count = r_runtime_socket_count(runtime);
         if (socket_count == 0 || socket_count > 2) {
             return RCLIENT_ERR_IO;
         }
         for (size_t i = 0; i < socket_count; i++) {
-            sockets[i].fd = rl_example_socket_at(client, i);
+            sockets[i].fd = r_runtime_socket_at(runtime, i);
             sockets[i].events = POLLIN;
         }
 
         /* The rl-c-client deadline remains the sole timeout policy. */
         uint64_t delay_ms = 0;
-        int status = rl_example_request_delay_ms(request, &delay_ms);
+        int status = r_runtime_admission_delay_ms(request, &delay_ms);
         if (status != RCLIENT_OK) {
             return status;
         }
@@ -78,7 +83,7 @@ static int wait_for_result(
             return RCLIENT_ERR_IO;
         }
         if (ready == 0) {
-            status = rl_example_request_on_timeout(client, request);
+            status = r_runtime_admission_on_timeout(runtime, request);
             if (status != RCLIENT_OK) {
                 return status;
             }
@@ -89,7 +94,7 @@ static int wait_for_result(
                 return RCLIENT_ERR_IO;
             }
             if ((sockets[i].revents & POLLIN) != 0) {
-                status = rl_example_client_on_readable(client, sockets[i].fd);
+                status = r_runtime_client_on_readable(runtime, sockets[i].fd);
                 if (status != RCLIENT_OK) {
                     return status;
                 }
@@ -99,41 +104,67 @@ static int wait_for_result(
     return result->status;
 }
 
+static int perform_protected_work(void *user) {
+    bool *completed = user;
+    /* Replace this with the application operation the endpoint protects. */
+    *completed = true;
+    return RCLIENT_OK;
+}
+
 static int run_check(
-    const rl_example_options_t *options,
-    bool *allowed
+    const r_runtime_options_t *options,
+    r_admission_outcome_t *outcome
 ) {
-    /* Client state is kept off libmicrohttpd's callback stack. */
-    rl_example_client_t *client = calloc(1, sizeof(*client));
-    if (!client) {
+    /* Runtime state is kept off libmicrohttpd's callback stack. */
+    r_runtime_client_t *runtime = calloc(1, sizeof(*runtime));
+    if (!runtime) {
         return RCLIENT_ERR_NOMEM;
     }
-    int status = rl_example_client_init(client, options);
+    int status = r_runtime_client_init(runtime, options);
     if (status != RCLIENT_OK) {
-        free(client);
+        free(runtime);
         return status;
     }
 
     check_result_t result = {0};
-    rl_example_request_t request = {0};
-    status = rl_example_check(
-        client,
+    r_admission_request_t request = {0};
+    r_admission_config_t config;
+    r_client_admission_config_defaults(&config);
+    config.bucket_name = "ulfius-example";
+    config.service_name = "ulfius-protected-service";
+    config.metrics_label = "ulfius-example";
+    status = r_client_admission_start(
+        runtime->handle,
         &request,
-        "ulfius-example",
-        on_rate_limit,
+        &config,
+        on_admission,
         &result
     );
     if (status == RCLIENT_OK) {
-        status = wait_for_result(client, &request, &result);
+        status = wait_for_result(runtime, &request, &result);
     }
     if (request.active) {
-        rl_example_request_cancel(client, &request);
+        r_runtime_admission_cancel(runtime, &request);
     }
     if (status == RCLIENT_OK) {
-        *allowed = result.allowed;
+        *outcome = result.outcome;
+        if (result.outcome.allowed) {
+            bool protected_work_complete = false;
+            int report_status = r_runtime_admission_run_and_report(
+                runtime,
+                &request,
+                perform_protected_work,
+                &protected_work_complete,
+                NULL
+            );
+            if (report_status != RCLIENT_OK) {
+                fprintf(stderr, "latency report failed: %s (%d)\n",
+                    r_runtime_status_name(report_status), report_status);
+            }
+        }
     }
-    rl_example_client_destroy(client);
-    free(client);
+    r_runtime_client_destroy(runtime);
+    free(runtime);
     return status;
 }
 
@@ -143,15 +174,19 @@ static int limited(
     void *user_data
 ) {
     (void)request;
-    bool allowed = false;
-    int status = run_check(user_data, &allowed);
+    r_admission_outcome_t outcome = {.decision = R_ADMISSION_ERROR};
+    int status = run_check(user_data, &outcome);
     if (status != RCLIENT_OK) {
         fprintf(stderr, "rate-limit check failed: %s (%d)\n",
-            rl_example_status_name(status), status);
+            r_runtime_status_name(status), status);
         ulfius_set_string_body_response(response, 503,
             "rate-limit service unavailable\n");
-    } else if (!allowed) {
-        ulfius_set_string_body_response(response, 429, "denied\n");
+    } else if (outcome.latency_limited && !outcome.rate_limited) {
+        ulfius_set_string_body_response(response, 503,
+            "denied by latency guard\n");
+    } else if (!outcome.allowed) {
+        ulfius_set_string_body_response(response, 429,
+            "denied by resource rate limit\n");
     } else {
         ulfius_set_string_body_response(response, 200, "allowed\n");
     }
@@ -160,8 +195,8 @@ static int limited(
 }
 
 int main(void) {
-    rl_example_options_t options;
-    if (rl_example_options_from_env(&options) != RCLIENT_OK) {
+    r_runtime_options_t options;
+    if (r_runtime_options_from_env(&options) != RCLIENT_OK) {
         fprintf(stderr, "set RATELIMITLY_TENANT and RATELIMITLY_AUTH_KEY\n");
         return EXIT_FAILURE;
     }

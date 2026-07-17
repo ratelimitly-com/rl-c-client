@@ -527,14 +527,14 @@ own Kore build and sandbox policy.
 
 ### Ulfius
 
-**Model.** `ulfius.c` gives each endpoint callback a private client and polls
-its UDP sockets on that callback's libmicrohttpd worker. This avoids shared
-mutable client state and does not block the listener thread.
+**Model.** [`ulfius/main.c`](ulfius/main.c) gives each endpoint callback a
+private runtime and polls its UDP sockets on that callback's libmicrohttpd
+worker. This avoids shared mutable state, does not block the listener thread,
+and measures/reports admitted protected work.
 
 ```sh
-cc -I../include -Icommon $(pkg-config --cflags libulfius) ulfius.c \
-  common/rl_example.c ../librclient.a $(pkg-config --libs libulfius) \
-  -lcrypto -lresolv -pthread -o ulfius-example
+cd ulfius
+make
 ./ulfius-example
 curl -i http://127.0.0.1:8000/limited
 ```
