@@ -10,6 +10,24 @@ one latency sample. Replace that function with the operation your application
 actually protects. Rate-denied, latency-denied, cancelled, and failed work does
 not report a sample.
 
+## Control flow
+
+```mermaid
+flowchart TD
+    Start["Start resource + latency admission"] --> Watch["Register persistent EV_READ events"]
+    Watch --> Timer["Arm one-shot evtimer deadline"]
+    Timer --> Dispatch["event_base_dispatch"]
+    Dispatch --> Event{"Socket or timer callback?"}
+    Event -->|EV_READ| Read["Drain runtime datagrams"]
+    Event -->|Timer| Timeout["Advance admission timeout"]
+    Read --> Decision{"Admission complete?"}
+    Timeout --> Decision
+    Decision -->|No| Rearm["Recompute and re-arm deadline"]
+    Rearm --> Dispatch
+    Decision -->|Denied| Reject["Respond without latency sample"]
+    Decision -->|Allowed| Work["Run work, measure, report latency"]
+```
+
 ## Build and run
 
 Install libevent, build `librclient.a`, then choose either build system:

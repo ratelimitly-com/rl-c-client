@@ -9,6 +9,24 @@ Allowed requests run protected work, measure it monotonically, and report the
 sample before returning the HTTP response. Replace `perform_protected_work()`
 with the database query, RPC, or other operation the endpoint should protect.
 
+## Control flow
+
+```mermaid
+flowchart TD
+    Callback["Ulfius callback receives GET /limited"] --> Runtime["Create callback-private runtime"]
+    Runtime --> Start["Start resource limit + latency guard"]
+    Start --> Poll["poll private UDP sockets and deadline"]
+    Poll --> Decision{"Admission result"}
+    Decision -->|Pending| Poll
+    Decision -->|Resource denied| Rate["Return HTTP 429; no sample"]
+    Decision -->|Latency denied or error| Shed["Return HTTP 503; no sample"]
+    Decision -->|Allowed| Work["Run work, measure, report latency"]
+    Work --> Success["Return HTTP 200"]
+    Rate --> Destroy["Destroy private runtime"]
+    Shed --> Destroy
+    Success --> Destroy
+```
+
 ## Build and run
 
 Install Ulfius and its `libulfius` pkg-config metadata, then:

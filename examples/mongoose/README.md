@@ -8,6 +8,22 @@ The request contains a resource rate limit and a latency guard. Resource denial
 returns 429, latency shedding returns 503, and an allowed response is measured
 and reported after Mongoose queues it. `MG_EV_CLOSE` cancels abandoned work.
 
+## Control flow
+
+```mermaid
+flowchart TD
+    Request["GET /limited"] --> Pending["Create pending admission state"]
+    Pending --> Start["Start resource limit + latency guard"]
+    Start --> Poll["mg_mgr_poll for at most 10 ms"]
+    Poll --> Advance["Drain client UDP sockets and advance deadlines"]
+    Advance --> Decision{"Admission complete?"}
+    Decision -->|No| Poll
+    Decision -->|Resource denied| Rate["Queue HTTP 429; no sample"]
+    Decision -->|Latency denied or error| Shed["Queue HTTP 503; no sample"]
+    Decision -->|Allowed| Work["Queue HTTP 200, measure, report latency"]
+    Poll -->|MG_EV_CLOSE| Cancel["Cancel and unlink abandoned request"]
+```
+
 ## Build
 
 Download or check out Mongoose and point `MONGOOSE_ROOT` at the directory that

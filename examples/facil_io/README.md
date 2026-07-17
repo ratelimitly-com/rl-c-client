@@ -9,6 +9,27 @@ Allowed requests run protected work, measure it monotonically, and report its
 latency before HTTP resumes. Replace `perform_protected_work()` with the
 database query, RPC, or other operation the route should protect.
 
+## Control flow
+
+```mermaid
+flowchart TD
+    Request["GET /limited"] --> Pause["Pause facil.io HTTP handle"]
+    Pause --> Start["Start resource limit + latency guard"]
+    Start --> Watch["Watch duplicate UDP descriptors"]
+    Watch --> Timer["Schedule retained one-shot deadline callback"]
+    Timer --> Event{"Descriptor or timer callback?"}
+    Event -->|Readable duplicate| Read["Drain original runtime socket"]
+    Event -->|Deadline| Timeout["Advance admission timeout"]
+    Read --> Complete["Defer synchronous completion until owner returns"]
+    Timeout --> Complete
+    Complete --> Decision{"Admission result"}
+    Decision -->|Pending| Timer
+    Decision -->|Denied or error| Reject["Prepare 429 or 503; no sample"]
+    Decision -->|Allowed| Work["Run work, measure, report latency"]
+    Reject --> Resume["Resume HTTP handle"]
+    Work --> Resume
+```
+
 ## Build and run
 
 Build facil.io 0.7's shared library, then provide its source path:

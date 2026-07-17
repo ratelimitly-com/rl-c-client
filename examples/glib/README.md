@@ -5,6 +5,24 @@ sockets to a `GMainLoop`. A one-shot GLib timeout follows the active admission
 deadline. The request includes both a resource rate limit and a latency guard;
 only admitted, successfully completed work is measured and reported.
 
+## Control flow
+
+```mermaid
+flowchart TD
+    Start["Start resource + latency admission"] --> Sources["Attach non-owning GIOChannel sources"]
+    Sources --> Timer["Attach one-shot GLib timeout"]
+    Timer --> Loop["g_main_loop_run"]
+    Loop --> Event{"GMainContext callback"}
+    Event -->|Socket source| Read["Drain runtime datagrams"]
+    Event -->|Timeout source| Timeout["Advance admission timeout"]
+    Read --> Decision{"Admission complete?"}
+    Timeout --> Decision
+    Decision -->|No| Rearm["Replace deadline source"]
+    Rearm --> Loop
+    Decision -->|Denied| Reject["Finish without latency sample"]
+    Decision -->|Allowed| Work["Run work, measure, report latency"]
+```
+
 ## Build and run
 
 Install GLib/GIO development files, build `librclient.a`, then use either build

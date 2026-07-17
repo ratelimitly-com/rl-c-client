@@ -8,6 +8,25 @@ Every request contains one resource rate limit and one latency guard. Only
 admitted, completed work is measured and reported; denials and cancellation do
 not emit latency samples.
 
+## Control flow
+
+```mermaid
+flowchart TD
+    Start["Start resource + latency admission"] --> Events["Associate SOCKETs with WSAEVENTs"]
+    Events --> Delay["Compute current admission delay"]
+    Delay --> Wait["WSAWaitForMultipleEvents"]
+    Wait --> Result{"Socket event or timeout?"}
+    Result -->|FD_READ| Read["WSAEnumNetworkEvents, then drain datagrams"]
+    Result -->|Timeout| Timeout["Advance admission timeout"]
+    Read --> Decision{"Admission complete?"}
+    Timeout --> Decision
+    Decision -->|No| Delay
+    Decision -->|Denied| Reject["Finish without latency sample"]
+    Decision -->|Allowed| Work["Run work, measure, report latency"]
+    Reject --> Close["Clear associations, close events, destroy runtime"]
+    Work --> Close
+```
+
 ## Build with MinGW-w64
 
 First build a Windows `librclient.a` with a Windows OpenSSL build, then:

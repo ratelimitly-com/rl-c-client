@@ -10,6 +10,25 @@ monotonic clock, and report the sample before sending the HTTP response. Replace
 `prepare_protected_response()` with the database query, RPC, or other work the
 route should protect.
 
+## Control flow
+
+```mermaid
+flowchart TD
+    Request["GET /limited"] --> Pending["Allocate pending state in H2O request pool"]
+    Pending --> Start["Start resource limit + latency guard"]
+    Start --> Watch["Watch dup of each UDP socket"]
+    Watch --> Timer["Link H2O deadline timer"]
+    Timer --> Event{"Socket or timer callback?"}
+    Event -->|Readable duplicate| Read["Drain original runtime socket"]
+    Event -->|Timer| Timeout["Advance admission timeout"]
+    Read --> Decision{"Admission result"}
+    Timeout --> Decision
+    Decision -->|Pending| Timer
+    Decision -->|Denied or error| Reject["Send 429 or 503; no sample"]
+    Decision -->|Allowed| Work["Run work, measure, report latency"]
+    Work --> Response["Send HTTP 200"]
+```
+
 ## Build and run
 
 Install H2O with the `libh2o-evloop` pkg-config module, then:

@@ -9,6 +9,26 @@ The application layer submits one resource and one latency guard. Only admitted
 work runs; completed work is measured and reported once. Denied, cancelled, or
 failed work produces no latency sample.
 
+## Control flow
+
+```mermaid
+flowchart TD
+    Setup["Map SQ, CQ, and SQE regions"] --> Start["Start resource + latency admission"]
+    Start --> Publish["Publish POLL_ADD SQEs with release ordering"]
+    Publish --> Enter["io_uring_enter with deadline"]
+    Enter --> Result{"CQE or timeout?"}
+    Result -->|Poll CQE| Consume["Acquire CQE, drain socket, retire slot"]
+    Result -->|Timeout| Timeout["Advance admission timeout"]
+    Consume --> ReadDone{"Admission complete?"}
+    Timeout --> TimeDone{"Admission complete?"}
+    ReadDone -->|No| Publish
+    TimeDone -->|No| Enter
+    ReadDone -->|Denied| Reject["No protected work or sample"]
+    TimeDone -->|Denied| Reject
+    ReadDone -->|Allowed| Work["Run work, measure, report latency"]
+    TimeDone -->|Allowed| Work
+```
+
 ## Build and run
 
 Linux UAPI headers are the only io_uring dependency:

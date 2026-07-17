@@ -10,6 +10,21 @@ The example intentionally does not report denied or cancelled work. Those
 paths did not complete an operation, so manufacturing a sample would corrupt
 the server-side tracker.
 
+## Control flow
+
+```mermaid
+flowchart TD
+    Start["Submit resource limit + latency guard"] --> Wait["poll UDP sockets until readable or deadline"]
+    Wait --> Advance["Advance runtime on datagram or timeout"]
+    Advance --> Done{"Admission complete?"}
+    Done -->|No| Wait
+    Done -->|Denied or cancelled| Stop["Stop without a latency sample"]
+    Done -->|Allowed| Work["Run protected operation"]
+    Work --> Measure["Measure elapsed monotonic time"]
+    Measure --> Report["Report one sample to same latency tracker"]
+    Report --> Stop
+```
+
 ## Build and run
 
 Build `librclient.a` first, then use either build file in this directory:

@@ -5,6 +5,24 @@ one-shot `htimer_t` for the admission deadline. Every request contains a
 resource rate limit and a latency guard. Only admitted, completed work is
 measured and reported.
 
+## Control flow
+
+```mermaid
+flowchart TD
+    Start["Start resource + latency admission"] --> Watch["Attach hio_t socket watchers"]
+    Watch --> Timer["Arm one-shot htimer_t deadline"]
+    Timer --> Loop["hloop_run"]
+    Loop --> Event{"libhv callback"}
+    Event -->|Readable hio_t| Read["Drain runtime datagrams"]
+    Event -->|htimer_t| Timeout["Advance admission timeout"]
+    Read --> Decision{"Admission complete?"}
+    Timeout --> Decision
+    Decision -->|No| Rearm["Recompute and re-arm timer"]
+    Rearm --> Loop
+    Decision -->|Denied| Reject["No protected work or sample"]
+    Decision -->|Allowed| Work["Run work, measure, report latency"]
+```
+
 ## Build and run
 
 Install libhv, build `librclient.a`, then choose a build system:

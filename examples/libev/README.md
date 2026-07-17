@@ -5,6 +5,24 @@ This example uses one `ev_io` watcher per client UDP socket and a one-shot
 rate limit with a latency guard. Only admitted and successfully completed work
 is measured and reported.
 
+## Control flow
+
+```mermaid
+flowchart TD
+    Start["Start resource + latency admission"] --> Watch["Start ev_io watchers"]
+    Watch --> Timer["Arm one-shot ev_timer"]
+    Timer --> Loop["ev_run"]
+    Loop --> Event{"Watcher callback"}
+    Event -->|ev_io| Read["Drain runtime datagrams"]
+    Event -->|ev_timer| Timeout["Advance admission timeout"]
+    Read --> Decision{"Admission complete?"}
+    Timeout --> Decision
+    Decision -->|No| Rearm["Recompute and re-arm timer"]
+    Rearm --> Loop
+    Decision -->|Denied| Reject["No protected work or sample"]
+    Decision -->|Allowed| Work["Run work, measure, report latency"]
+```
+
 ## Build and run
 
 Install libev development files and build the client library first:

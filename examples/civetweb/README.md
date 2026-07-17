@@ -9,6 +9,24 @@ work with a monotonic clock, and reports the sample to the latency tracker. The
 small `prepare_protected_response()` function is the seam to replace with a
 database call, RPC, or other operation that the endpoint needs to protect.
 
+## Control flow
+
+```mermaid
+flowchart TD
+    Worker["CivetWeb worker receives GET /limited"] --> Queue["Enqueue stack-owned bridge job"]
+    Queue --> Wait["Worker waits on job condition variable"]
+    Queue --> Bridge["Dedicated bridge starts resource + latency admission"]
+    Bridge --> Poll["Bridge polls wake pipe, UDP sockets, and deadline"]
+    Poll --> Decision{"Admission result"}
+    Decision -->|Resource denied| Rate["Publish HTTP 429; no sample"]
+    Decision -->|Latency denied or error| Shed["Publish HTTP 503; no sample"]
+    Decision -->|Allowed| Work["Run work, measure, report latency"]
+    Rate --> Signal["Signal waiting worker"]
+    Shed --> Signal
+    Work --> Signal
+    Signal --> Response["Worker writes HTTP response"]
+```
+
 ## Build and run
 
 Check out CivetWeb and point `CIVETWEB_ROOT` to its source tree. This example is

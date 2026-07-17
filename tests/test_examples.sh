@@ -53,6 +53,21 @@ while IFS='|' read -r name kind marker; do
     [[ -f "$example_dir/$required" ]] \
       || fail "$name is missing $required"
   done
+  grep -Fq -- '## Control flow' "$example_dir/README.md" \
+    || fail "$name README has no control-flow diagram section"
+  grep -Fq -- '```mermaid' "$example_dir/README.md" \
+    || fail "$name README has no Mermaid diagram"
+  [[ "$(grep -Fc -- '```mermaid' "$example_dir/README.md")" -eq 1 ]] \
+    || fail "$name README must contain exactly one Mermaid diagram"
+  grep -Eq -- '^flowchart (TD|LR)$' "$example_dir/README.md" \
+    || fail "$name README Mermaid diagram has no flowchart direction"
+  diagram="$(sed -n '/^```mermaid$/,/^```$/p' "$example_dir/README.md")"
+  grep -Eqi -- 'resource|rate limit' <<<"$diagram" \
+    || fail "$name README diagram omits resource rate limiting"
+  grep -Fqi -- 'latency' <<<"$diagram" \
+    || fail "$name README diagram omits latency admission"
+  grep -Eqi -- 'report|sample' <<<"$diagram" \
+    || fail "$name README diagram omits latency reporting behavior"
   grep -Eq '^## Platform' "$example_dir/README.md" \
     || fail "$name README has no platform-support section"
   grep -Eqi 'resource|rate limit' "$example_dir/README.md" \
@@ -151,6 +166,8 @@ grep -Fq -- '## Latency tracking workflow' "$README" \
   || fail "README does not document latency tracking"
 grep -Fq -- '## Platform matrix' "$README" \
   || fail "README does not provide a platform matrix"
+grep -Fq -- '```mermaid' "$README" \
+  || fail "README does not provide a Mermaid integration overview"
 grep -Fq -- 'Never report latency for work rejected by the guard.' "$README" \
   || fail "README does not explain denied latency-guard behavior"
 

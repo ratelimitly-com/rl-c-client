@@ -10,6 +10,24 @@ sample before the task sends its fixed-size result through the channel. Replace
 `perform_protected_work()` with the database query, RPC, or other operation the
 route should protect.
 
+## Control flow
+
+```mermaid
+flowchart TD
+    Request["GET /limited"] --> Sleep["Sleep Kore HTTP request"]
+    Sleep --> Task["Start kore_task with private runtime"]
+    Task --> Admission["Start resource limit + latency guard"]
+    Admission --> Poll["Task polls UDP sockets and deadline"]
+    Poll --> Decision{"Admission result"}
+    Decision -->|Resource denied| Rate["Create HTTP 429 result; no sample"]
+    Decision -->|Latency denied or error| Shed["Create HTTP 503 result; no sample"]
+    Decision -->|Allowed| Work["Run work, measure, report latency"]
+    Rate --> Channel["Write fixed-size task-channel result"]
+    Shed --> Channel
+    Work --> Channel
+    Channel --> Wake["Wake request and send HTTP response"]
+```
+
 ## Build and run
 
 Build Kore with task support and its no-TLS backend, then build the module:

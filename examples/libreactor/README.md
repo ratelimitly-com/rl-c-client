@@ -9,6 +9,26 @@ Allowed requests run a protected operation, measure it monotonically, and
 report that sample before responding. Replace `perform_protected_work()` with
 the database query, RPC, or other operation the endpoint should protect.
 
+## Control flow
+
+```mermaid
+flowchart TD
+    Request["GET /limited"] --> Pending["Create reactor-owned pending state"]
+    Pending --> Start["Start resource limit + latency guard"]
+    Start --> Watch["Watch dup of each UDP socket"]
+    Watch --> Timer["Arm nearest reactor timer"]
+    Timer --> Event{"Descriptor or timer callback?"}
+    Event -->|Readable duplicate| Read["Drain original runtime socket"]
+    Event -->|Timer| Timeout["Advance admission timeout"]
+    Read --> Complete["Defer synchronous completion until owner returns"]
+    Timeout --> Complete
+    Complete --> Decision{"Admission result"}
+    Decision -->|Pending| Timer
+    Decision -->|Denied or error| Reject["Respond 429 or 503; no sample"]
+    Decision -->|Allowed| Work["Run work, measure, report latency"]
+    Work --> Response["Respond HTTP 200"]
+```
+
 ## Build and run
 
 Build and install libreactor v3 so `pkg-config libreactor` can find it, then:

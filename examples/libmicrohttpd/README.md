@@ -10,6 +10,26 @@ protected application operation, measure it monotonically, report that sample,
 and then resume the connection. Replace `prepare_protected_response()` with the
 database query, RPC, or other work the endpoint actually protects.
 
+## Control flow
+
+```mermaid
+flowchart TD
+    Request["GET /limited"] --> Suspend["MHD_suspend_connection"]
+    Suspend --> Start["Start resource limit + latency guard"]
+    Start --> Merge["Merge MHD fds, runtime sockets, and nearest deadline"]
+    Merge --> Wait["select"]
+    Wait --> Advance["Run MHD, drain UDP, or deliver timeout"]
+    Advance --> Decision{"Admission result"}
+    Decision -->|Pending| Merge
+    Decision -->|Resource denied| Rate["Prepare HTTP 429; no sample"]
+    Decision -->|Latency denied or error| Shed["Prepare HTTP 503; no sample"]
+    Decision -->|Allowed| Work["Run work, measure, report latency"]
+    Rate --> Resume["MHD_resume_connection"]
+    Shed --> Resume
+    Work --> Resume
+    Resume --> Response["Queue HTTP response"]
+```
+
 ## Build and run
 
 Install libmicrohttpd and its pkg-config metadata, then build:

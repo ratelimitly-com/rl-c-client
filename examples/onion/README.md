@@ -10,6 +10,24 @@ report the sample before the bridge completes HTTP. Replace
 `prepare_protected_response()` with the database query, RPC, or other operation
 the route should protect.
 
+## Control flow
+
+```mermaid
+flowchart TD
+    Worker["Onion worker receives /limited"] --> Yield["Return OCS_YIELD with heap job"]
+    Yield --> Queue["Transfer request and response to bridge queue"]
+    Queue --> Bridge["Bridge starts resource + latency admission"]
+    Bridge --> Poll["Poll wake pipe, UDP sockets, and deadline"]
+    Poll --> Decision{"Admission result"}
+    Decision -->|Resource denied| Rate["Prepare HTTP 429; no sample"]
+    Decision -->|Latency denied or error| Shed["Prepare HTTP 503; no sample"]
+    Decision -->|Allowed| Work["Run work, measure, report latency"]
+    Rate --> Flush["Write and flush yielded response"]
+    Shed --> Flush
+    Work --> Flush
+    Flush --> Free["Free request, response, and job exactly once"]
+```
+
 ## Build and run
 
 Build and install Onion v0.8 to a prefix, then pass that prefix to the example:

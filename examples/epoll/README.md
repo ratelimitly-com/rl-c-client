@@ -8,6 +8,23 @@ Each admission request contains a resource rate limit and a latency guard. The
 allowed path measures response construction and reports one sample. Resource
 denials, guard denials, cancellation, and failed work do not report latency.
 
+## Control flow
+
+```mermaid
+flowchart TD
+    Start["Start resource + latency admission"] --> Register["Register UDP sockets for EPOLLIN"]
+    Register --> Delay["Compute current admission timeout"]
+    Delay --> Wait["epoll_wait"]
+    Wait --> Result{"Ready events or timeout?"}
+    Result -->|EPOLLIN| Read["Drain runtime datagrams"]
+    Result -->|Timeout| Timeout["Advance admission timeout"]
+    Read --> Decision{"Admission complete?"}
+    Timeout --> Decision
+    Decision -->|No| Delay
+    Decision -->|Denied| Reject["No protected work or sample"]
+    Decision -->|Allowed| Work["Run work, measure, report latency"]
+```
+
 ## Build and run on Linux
 
 ```sh

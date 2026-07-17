@@ -10,6 +10,25 @@ and reports that completed work. Replace that function with the asynchronous
 operation protected by your application. Denied and cancelled requests do not
 produce latency samples.
 
+## Control flow
+
+```mermaid
+flowchart TD
+    Start["Start resource + latency admission"] --> Watch["Arm uv_poll_t sockets and uv_timer_t deadline"]
+    Watch --> Run["uv_run"]
+    Run --> Event{"Next callback"}
+    Event -->|Socket readable| Read["Drain runtime datagrams"]
+    Event -->|Timer fired| Timeout["Advance admission timeout"]
+    Read --> Decision{"Admission complete?"}
+    Timeout --> Decision
+    Decision -->|No| Rearm["Re-arm one-shot deadline"]
+    Rearm --> Run
+    Decision -->|Denied| Reject["Finish without latency report"]
+    Decision -->|Allowed| Work["Run work, measure, report latency"]
+    Reject --> Close["Close watchers, then destroy runtime"]
+    Work --> Close
+```
+
 ## Build and run
 
 Install libuv and make its `pkg-config` metadata available, then build the

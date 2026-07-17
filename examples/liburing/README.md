@@ -8,6 +8,26 @@ current admission deadline.
 The request combines a resource rate limit with a latency guard. Admitted work
 is measured and reported once; denied, cancelled, or failed work is not.
 
+## Control flow
+
+```mermaid
+flowchart TD
+    Start["Start resource + latency admission"] --> Submit["Submit one IORING_OP_POLL_ADD per socket"]
+    Submit --> Wait["Wait for CQE with admission timeout"]
+    Wait --> Result{"CQE or timeout?"}
+    Result -->|Poll CQE| Consume["Consume CQE and drain datagrams"]
+    Result -->|Wait timeout| Timeout["Advance admission timeout"]
+    Consume --> ReadDone{"Admission complete?"}
+    Timeout --> TimeDone{"Admission complete?"}
+    ReadDone -->|No| Rearm["Re-arm one-shot POLL_ADD"]
+    Rearm --> Wait
+    TimeDone -->|No| Wait
+    ReadDone -->|Denied| Reject["No protected work or sample"]
+    TimeDone -->|Denied| Reject
+    ReadDone -->|Allowed| Work["Run work, measure, report latency"]
+    TimeDone -->|Allowed| Work
+```
+
 ## Build and run
 
 Install liburing development files and build the library first:

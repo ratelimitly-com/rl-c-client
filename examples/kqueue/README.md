@@ -5,6 +5,23 @@ runtime-owned UDP sockets with `EVFILT_READ` and supplies each current admission
 delay as the `kevent` timeout. The request contains one resource rate limit and
 one latency guard; only admitted, completed work produces a latency report.
 
+## Control flow
+
+```mermaid
+flowchart TD
+    Start["Start resource + latency admission"] --> Register["Register UDP sockets with EVFILT_READ"]
+    Register --> Delay["Compute current relative deadline"]
+    Delay --> Wait["kevent wait"]
+    Wait --> Result{"Read event or timeout?"}
+    Result -->|Read event| Read["Drain runtime datagrams"]
+    Result -->|Timeout| Timeout["Advance admission timeout"]
+    Read --> Decision{"Admission complete?"}
+    Timeout --> Decision
+    Decision -->|No| Delay
+    Decision -->|Denied| Reject["No protected work or sample"]
+    Decision -->|Allowed| Work["Run work, measure, report latency"]
+```
+
 ## Build and run
 
 On macOS or a BSD with kqueue:

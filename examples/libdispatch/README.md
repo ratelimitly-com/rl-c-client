@@ -7,6 +7,25 @@ admission deadline, and a semaphore gives `main` a finite shutdown path.
 Each request contains a resource rate limit and a latency guard. Only admitted,
 successfully completed work is measured and reported.
 
+## Control flow
+
+```mermaid
+flowchart TD
+    Main["main creates private serial queue"] --> Start["Queue resource + latency admission"]
+    Start --> Sources["Resume dispatch read sources"]
+    Sources --> Timer["Arm one-shot dispatch timer"]
+    Timer --> Event{"Serial-queue callback"}
+    Event -->|Read source| Read["Drain runtime datagrams"]
+    Event -->|Timer source| Timeout["Advance admission timeout"]
+    Read --> Decision{"Admission complete?"}
+    Timeout --> Decision
+    Decision -->|No| Timer
+    Decision -->|Denied| Reject["Signal completion without sample"]
+    Decision -->|Allowed| Work["Run work, measure, report latency"]
+    Reject --> Shutdown["Cancel sources, destroy runtime, signal semaphore"]
+    Work --> Shutdown
+```
+
 ## Build and run
 
 On macOS, build the client library and then this folder:

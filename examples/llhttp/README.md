@@ -10,6 +10,25 @@ TCP bytes while it drives rl-c-client's UDP sockets and deadline. An allowed
 operation is measured with a monotonic clock and reported to the same latency
 tracker; rejected work is never run or reported.
 
+## Control flow
+
+```mermaid
+flowchart TD
+    Bytes["Feed received TCP fragments"] --> Parse["llhttp_execute"]
+    Parse --> Boundary{"Complete request?"}
+    Boundary -->|No| Bytes
+    Boundary -->|Yes| Start["Start resource limit + latency guard"]
+    Start --> Pause["Return HPE_PAUSED and retain unconsumed bytes"]
+    Pause --> Host["Host watches runtime UDP sockets and deadline"]
+    Host --> Decision{"Admission result"}
+    Decision -->|Pending| Host
+    Decision -->|Denied| Resume["Adapter calls llhttp_resume"]
+    Decision -->|Allowed| Work["Run work, measure, report latency"]
+    Work --> Resume
+    Resume --> Callback["Invoke result callback"]
+    Callback --> Replay["Host replays retained bytes"]
+```
+
 ## Build and run
 
 Install llhttp 9.x and its pkg-config metadata first. For example:

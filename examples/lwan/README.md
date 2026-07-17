@@ -10,6 +10,24 @@ monotonically, and report its latency before waking the coroutine. Replace
 `perform_protected_work()` with the database query, RPC, or other work the route
 should protect.
 
+## Control flow
+
+```mermaid
+flowchart TD
+    Coroutine["Lwan coroutine receives /limited"] --> Queue["Queue reference-counted bridge job"]
+    Queue --> Yield["Coroutine yields"]
+    Queue --> Bridge["Dedicated bridge starts resource + latency admission"]
+    Bridge --> Poll["Bridge polls wake pipe, UDP sockets, and deadline"]
+    Poll --> Decision{"Admission result"}
+    Decision -->|Denied or error| Reject["Publish 403 or 503; no sample"]
+    Decision -->|Allowed| Work["Run work, measure, report latency"]
+    Reject --> Publish["Publish result with release ordering"]
+    Work --> Publish
+    Publish --> Wake["Wake coroutine"]
+    Wake --> Response["Return HTTP response"]
+    Yield -->|Peer disconnects| Cleanup["Drop coroutine reference safely"]
+```
+
 ## Build and run
 
 Build Lwan first, then provide its source and build directories:

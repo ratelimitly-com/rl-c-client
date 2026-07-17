@@ -6,6 +6,24 @@ This Linux-only example integrates the client with systemd's `sd-event` loop.
 contains both a resource rate limit and a latency guard; only admitted,
 completed work is reported.
 
+## Control flow
+
+```mermaid
+flowchart TD
+    Start["Start resource + latency admission"] --> IO["Add sd_event_add_io sources"]
+    IO --> Convert["Convert wall deadline to monotonic delay"]
+    Convert --> Timer["Arm CLOCK_MONOTONIC time source"]
+    Timer --> Loop["sd_event_loop"]
+    Loop --> Event{"I/O or time callback?"}
+    Event -->|Readable| Read["Drain runtime datagrams"]
+    Event -->|Deadline| Timeout["Advance admission timeout"]
+    Read --> Decision{"Admission complete?"}
+    Timeout --> Decision
+    Decision -->|No| Convert
+    Decision -->|Denied| Reject["Finish without latency sample"]
+    Decision -->|Allowed| Work["Run work, measure, report latency"]
+```
+
 ## Build and run
 
 Install libsystemd development files and build the client library:

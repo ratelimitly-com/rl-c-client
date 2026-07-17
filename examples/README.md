@@ -5,6 +5,20 @@ servers, and parsers. They use only the public client headers under `include/`.
 Each source file starts with a numbered flow and an ownership summary; read
 those comments before transplanting the integration into an application.
 
+## Integration lifecycle
+
+```mermaid
+flowchart LR
+    Host["Host event loop or HTTP framework"] --> Admission["Resource limit + latency guard"]
+    Admission --> Runtime["rl-c-client UDP runtime"]
+    Runtime --> Decision{"Admitted?"}
+    Decision -->|No| Reject["Reject without latency sample"]
+    Decision -->|Yes| Work["Run protected work"]
+    Work --> Measure["Measure with monotonic clock"]
+    Measure --> Report["Report one latency sample"]
+    Report --> Runtime
+```
+
 | Example | Integration model | Main technique |
 | --- | --- | --- |
 | [Latency tracker](latency_tracker/) | Guard and reporting workflow | Gate work, measure it, then report one sample |
