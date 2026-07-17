@@ -14,6 +14,7 @@ First build a Windows `librclient.a` with a Windows OpenSSL build, then:
 
 ```sh
 make CC=x86_64-w64-mingw32-gcc \
+  RL_CLIENT_LIBRARY=/path/to/windows/librclient.a \
   OPENSSL_PREFIX=/path/to/mingw/openssl
 ```
 
@@ -29,6 +30,14 @@ cmake --build build --config Release
 ```
 
 The imported library path can be overridden with `RL_CLIENT_LIBRARY`.
+
+## Platform support
+
+This example is intentionally Windows-only and supports both native MSVC and
+MinGW-w64 builds. The separate library path is required for cross-compilation so
+the linker cannot silently consume a Linux or macOS `librclient.a` from the
+repository root. Use the epoll, kqueue/libdispatch, or portable third-party loop
+examples for native Linux and macOS hosts.
 
 ## Ownership and shutdown
 
