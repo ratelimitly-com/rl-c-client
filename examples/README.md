@@ -449,15 +449,15 @@ assertion in supported Lwan versions.
 
 ### libreactor
 
-**Model.** `libreactor.c` runs HTTP, UDP readiness, and deadlines on one reactor
-thread. Duplicate descriptors observe readiness while the common adapter owns
-datagram reads. Synchronous completions are deferred so callback state is not
-freed while a client operation remains on the stack.
+**Model.** [`libreactor/main.c`](libreactor/main.c) runs HTTP, UDP readiness,
+and deadlines on one reactor thread. Duplicate descriptors observe readiness
+while the public runtime owns datagram reads. Synchronous completions are
+deferred so callback state is not freed while a client operation remains on the
+stack. Allowed protected work is measured and reported before response.
 
 ```sh
-cc -I../include -Icommon $(pkg-config --cflags libreactor) libreactor.c \
-  common/rl_example.c ../librclient.a $(pkg-config --libs libreactor) \
-  -lssl -lcrypto -lresolv -pthread -o libreactor-example
+cd libreactor
+make
 ./libreactor-example
 curl -i http://127.0.0.1:8000/limited
 ```

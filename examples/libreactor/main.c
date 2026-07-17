@@ -8,16 +8,17 @@
 
 #include <reactor.h>
 
-#include "common/rl_example.h"
+#include "r_client_runtime.h"
+#include "r_client_workflow.h"
 
 /*
  * Flow
  * ----
  * 1. libreactor watches duplicates of the rl-c-client UDP descriptors.
- * 2. GET /limited allocates pending state and starts an asynchronous check.
+ * 2. GET /limited allocates state and starts combined admission.
  * 3. A reactor timer advances that request's current deadline.
  * 4. UDP readiness lets the adapter drain the original socket.
- * 5. Completion calls server_respond() with HTTP 200, 429, or 503.
+ * 5. Admitted work is measured, reported, and mapped with both decisions.
  *
  * Ownership: the adapter owns original sockets; descriptor objects own their
  * duplicates. Each HTTP request owns one timer and check. libreactor keeps a
@@ -35,16 +36,18 @@ typedef struct udp_watcher {
 typedef struct pending_request {
     reactor_app_t *app;
     server_request *http_request;
-    rl_example_request_t request;
+    r_admission_request_t request;
     timer timer;
     bool defer_completion;
     bool completion_ready;
     int completion_status;
-    bool completion_allowed;
+    r_admission_outcome_t completion_outcome;
+    bool protected_work_complete;
+    uint32_t observed_latency_ms;
 } pending_request_t;
 
 struct reactor_app {
-    rl_example_client_t client;
+    r_runtime_client_t runtime;
     server http_server;
     udp_watcher_t watchers[2];
     size_t watcher_count;
@@ -53,12 +56,12 @@ struct reactor_app {
 static void finish_request(
     pending_request_t *pending,
     int status,
-    bool allowed
+    const r_admission_outcome_t *outcome
 ) {
     /* Stop all loop callbacks before releasing request-owned state. */
     timer_destruct(&pending->timer);
     if (pending->request.active) {
-        rl_example_request_cancel(&pending->app->client, &pending->request);
+        r_runtime_admission_cancel(&pending->app->runtime, &pending->request);
     }
 
     if (status != RCLIENT_OK) {
@@ -66,11 +69,16 @@ static void finish_request(
             data_string("503 Service Unavailable"),
             data_string("text/plain"),
             data_string("rate-limit service unavailable\n"));
-    } else if (!allowed) {
+    } else if (outcome->latency_limited && !outcome->rate_limited) {
+        server_respond(pending->http_request,
+            data_string("503 Service Unavailable"),
+            data_string("text/plain"),
+            data_string("denied by latency guard\n"));
+    } else if (!outcome->allowed) {
         server_respond(pending->http_request,
             data_string("429 Too Many Requests"),
             data_string("text/plain"),
-            data_string("denied\n"));
+            data_string("denied by resource limit\n"));
     } else {
         server_ok(pending->http_request,
             data_string("text/plain"), data_string("allowed\n"));
@@ -78,22 +86,46 @@ static void finish_request(
     free(pending);
 }
 
-static void on_rate_limit(void *user, int status, bool allowed) {
+static int perform_protected_work(void *user) {
     pending_request_t *pending = user;
+    /* Replace this with the application operation the route protects. */
+    pending->protected_work_complete = true;
+    return RCLIENT_OK;
+}
+
+static void on_admission(
+    void *user,
+    int status,
+    const r_admission_outcome_t *outcome
+) {
+    pending_request_t *pending = user;
+    if (status == RCLIENT_OK && outcome->allowed) {
+        int report_status = r_runtime_admission_run_and_report(
+            &pending->app->runtime,
+            &pending->request,
+            perform_protected_work,
+            pending,
+            &pending->observed_latency_ms
+        );
+        if (report_status != RCLIENT_OK) {
+            fprintf(stderr, "latency report failed: %s (%d)\n",
+                r_runtime_status_name(report_status), report_status);
+        }
+    }
     /* Some rl-c-client operations may complete synchronously.  Defer freeing
      * the object until the operation that owns the current stack returns. */
     if (pending->defer_completion) {
         pending->completion_ready = true;
         pending->completion_status = status;
-        pending->completion_allowed = allowed;
+        pending->completion_outcome = *outcome;
         return;
     }
-    finish_request(pending, status, allowed);
+    finish_request(pending, status, outcome);
 }
 
 static int arm_timer(pending_request_t *pending) {
     uint64_t delay_ms = 0;
-    int status = rl_example_request_delay_ms(&pending->request, &delay_ms);
+    int status = r_runtime_admission_delay_ms(&pending->request, &delay_ms);
     if (status != RCLIENT_OK) {
         return status;
     }
@@ -107,20 +139,21 @@ static int arm_timer(pending_request_t *pending) {
 static void on_timeout(reactor_event *event) {
     pending_request_t *pending = event->state;
     pending->defer_completion = true;
-    int status = rl_example_request_on_timeout(
-        &pending->app->client,
+    int status = r_runtime_admission_on_timeout(
+        &pending->app->runtime,
         &pending->request
     );
     pending->defer_completion = false;
 
     if (pending->completion_ready) {
         finish_request(pending,
-            pending->completion_status, pending->completion_allowed);
+            pending->completion_status, &pending->completion_outcome);
         return;
     }
     if (status != RCLIENT_OK || arm_timer(pending) != RCLIENT_OK) {
         finish_request(pending,
-            status != RCLIENT_OK ? status : RCLIENT_ERR_IO, false);
+            status != RCLIENT_OK ? status : RCLIENT_ERR_IO,
+            &pending->completion_outcome);
     }
 }
 
@@ -130,13 +163,13 @@ static void on_udp_readable(reactor_event *event) {
         fprintf(stderr, "libreactor UDP watcher closed unexpectedly\n");
         return;
     }
-    int status = rl_example_client_on_readable(
-        &watcher->app->client,
+    int status = r_runtime_client_on_readable(
+        &watcher->app->runtime,
         watcher->client_fd
     );
     if (status != RCLIENT_OK) {
         fprintf(stderr, "Ratelimitly UDP ingress failed: %s (%d)\n",
-            rl_example_status_name(status), status);
+            r_runtime_status_name(status), status);
     }
 }
 
@@ -163,29 +196,35 @@ static void on_http_request(reactor_event *event) {
     timer_construct(&pending->timer, on_timeout, pending);
 
     pending->defer_completion = true;
-    int status = rl_example_check(
-        &app->client,
+    r_admission_config_t config;
+    r_client_admission_config_defaults(&config);
+    config.bucket_name = "libreactor-example";
+    config.service_name = "libreactor-protected-service";
+    config.metrics_label = "libreactor-example";
+    int status = r_client_admission_start(
+        app->runtime.handle,
         &pending->request,
-        "libreactor-example",
-        on_rate_limit,
+        &config,
+        on_admission,
         pending
     );
     pending->defer_completion = false;
     if (pending->completion_ready) {
         finish_request(pending,
-            pending->completion_status, pending->completion_allowed);
+            pending->completion_status, &pending->completion_outcome);
     } else if (status != RCLIENT_OK || arm_timer(pending) != RCLIENT_OK) {
         finish_request(pending,
-            status != RCLIENT_OK ? status : RCLIENT_ERR_IO, false);
+            status != RCLIENT_OK ? status : RCLIENT_ERR_IO,
+            &pending->completion_outcome);
     }
 }
 
 static int open_udp_watchers(reactor_app_t *app) {
-    size_t socket_count = rl_example_socket_count(&app->client);
+    size_t socket_count = r_runtime_socket_count(&app->runtime);
     for (size_t i = 0; i < socket_count; i++) {
         udp_watcher_t *watcher = &app->watchers[i];
         watcher->app = app;
-        watcher->client_fd = rl_example_socket_at(&app->client, i);
+        watcher->client_fd = r_runtime_socket_at(&app->runtime, i);
         int duplicate_fd = dup(watcher->client_fd);
         if (duplicate_fd < 0) {
             return -1;
@@ -198,17 +237,17 @@ static int open_udp_watchers(reactor_app_t *app) {
 }
 
 int main(void) {
-    rl_example_options_t options;
-    if (rl_example_options_from_env(&options) != RCLIENT_OK) {
+    r_runtime_options_t options;
+    if (r_runtime_options_from_env(&options) != RCLIENT_OK) {
         fprintf(stderr, "set RATELIMITLY_TENANT and RATELIMITLY_AUTH_KEY\n");
         return EXIT_FAILURE;
     }
 
     reactor_app_t app = {0};
-    int status = rl_example_client_init(&app.client, &options);
+    int status = r_runtime_client_init(&app.runtime, &options);
     if (status != RCLIENT_OK) {
         fprintf(stderr, "client initialization failed: %s (%d)\n",
-            rl_example_status_name(status), status);
+            r_runtime_status_name(status), status);
         return EXIT_FAILURE;
     }
 
@@ -236,6 +275,6 @@ cleanup:
         descriptor_destruct(&app.watchers[i].descriptor);
     }
     reactor_destruct();
-    rl_example_client_destroy(&app.client);
+    r_runtime_client_destroy(&app.runtime);
     return exit_status;
 }
