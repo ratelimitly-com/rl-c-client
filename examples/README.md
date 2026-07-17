@@ -487,15 +487,15 @@ timers. A failed schedule must release the timer's reference immediately.
 
 ### Onion
 
-**Model.** `onion.c` returns `OCS_YIELD`, so Onion workers do not synchronously
-poll client sockets. A dedicated thread owns the client and completes each
-yielded response through Onion's long-poll lifecycle. Shutdown cancels active
-checks and releases every yielded request exactly once.
+**Model.** [`onion/main.c`](onion/main.c) returns `OCS_YIELD`, so Onion workers
+do not poll client sockets. A dedicated thread owns the runtime, runs combined
+admission, and completes each yielded response through Onion's long-poll
+lifecycle. Shutdown cancels active checks and releases every yielded request
+exactly once; admitted work is measured and reported before response.
 
 ```sh
-cc -I../include -Icommon $(pkg-config --cflags onion) onion.c \
-  common/rl_example.c ../librclient.a $(pkg-config --libs onion) \
-  -lcrypto -lresolv -pthread -o onion-example
+cd onion
+make ONION_ROOT=/path/to/onion-install
 ./onion-example
 curl -i http://127.0.0.1:8000/limited
 ```
