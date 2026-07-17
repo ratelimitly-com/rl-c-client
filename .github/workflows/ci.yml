@@ -12,18 +12,31 @@ permissions:
 
 jobs:
   c-client:
-    name: C client
-    runs-on: ubuntu-latest
+    name: C client (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends build-essential libssl-dev
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install openssl@3
+          echo "OPENSSL_PREFIX=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
 
       - name: Build libraries
         run: make
@@ -33,3 +46,41 @@ jobs:
 
       - name: Build perf client
         run: make perf_client
+
+  win32-example:
+    name: Win32 example (MinGW + Wine)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install cross-build and Wine dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libssl-dev mingw-w64 perl wine64
+
+      - name: Build static Windows OpenSSL
+        env:
+          OPENSSL_TAG: openssl-3.5.7
+          OPENSSL_PREFIX: ${{ runner.temp }}/openssl-mingw64
+        run: |
+          git clone --depth 1 --branch "$OPENSSL_TAG" \
+            https://github.com/openssl/openssl.git \
+            "${{ runner.temp }}/openssl-src"
+          cd "${{ runner.temp }}/openssl-src"
+          ./Configure mingw64 \
+            --cross-compile-prefix=x86_64-w64-mingw32- \
+            --prefix="$OPENSSL_PREFIX" \
+            --libdir=lib \
+            no-shared no-tests no-apps
+          make -s -j2
+          make -s install_sw
+
+      - name: Cross-build and run Win32 integration
+        env:
+          MINGW_OPENSSL_PREFIX: ${{ runner.temp }}/openssl-mingw64
+          WINDOWS_RUNNER: /usr/lib/wine/wine64
+        run: bash tests/test_windows_example.sh

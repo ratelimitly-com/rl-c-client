@@ -7,6 +7,7 @@ README="${R_EXAMPLE_README_PATH:-$ROOT/examples/README.md}"
 ROOT_README="$ROOT/README.md"
 API_GUIDE="$ROOT/docs/api.md"
 IO_GUIDE="$ROOT/IO_ABSTRACTION.md"
+CI_WORKFLOW="$ROOT/.github/workflows/ci.yml"
 
 fail() {
   echo "test_examples: $*" >&2
@@ -14,6 +15,10 @@ fail() {
 }
 
 [[ -f "$MANIFEST" ]] || fail "missing examples/manifest.txt"
+grep -Fq -- 'macos-latest' "$CI_WORKFLOW" \
+  || fail "CI does not validate the macOS build"
+grep -Fq -- 'tests/test_windows_example.sh' "$CI_WORKFLOW" \
+  || fail "CI does not build and run the Win32 example"
 [[ ! -e "$ROOT/examples/common" ]] \
   || fail "legacy examples/common adapter still exists"
 [[ ! -e "$ROOT/tests/test_example_common.c" \
