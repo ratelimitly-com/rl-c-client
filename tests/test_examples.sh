@@ -15,8 +15,10 @@ fail() {
 }
 
 [[ -f "$MANIFEST" ]] || fail "missing examples/manifest.txt"
-[[ -d "$ROOT/examples/latency_tracker" ]] \
-  || fail "latency_tracker does not have its own directory"
+for migrated in latency_tracker libuv; do
+  [[ -d "$ROOT/examples/$migrated" ]] \
+    || fail "$migrated does not have its own directory"
+done
 
 while IFS='|' read -r name kind marker; do
   [[ -z "$name" || "$name" == \#* ]] && continue
@@ -54,12 +56,23 @@ while IFS='|' read -r name kind marker; do
 
   case "$kind" in
     loop|framework)
-      grep -Fq -- 'rl_example_check(' "$source_file" \
-        || fail "$name does not submit rate-limit checks"
-      for symbol in \
-        'rl_example_client_on_readable(' \
-        'rl_example_request_delay_ms(' \
-        'rl_example_request_on_timeout('; do
+      if [[ -d "$example_dir" ]]; then
+        symbols=(
+          'r_client_admission_start('
+          'r_client_admission_report_latency('
+          'r_runtime_client_on_readable('
+          'r_client_admission_deadline_ms('
+          'r_client_admission_on_timeout('
+        )
+      else
+        symbols=(
+          'rl_example_check('
+          'rl_example_client_on_readable('
+          'rl_example_request_delay_ms('
+          'rl_example_request_on_timeout('
+        )
+      fi
+      for symbol in "${symbols[@]}"; do
         grep -Fq -- "$symbol" "$source_file" \
           || fail "$name does not wire $symbol"
       done
