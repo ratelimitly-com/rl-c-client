@@ -545,14 +545,18 @@ as the CivetWeb or Onion pattern.
 
 ## llhttp parser adapter
 
-`llhttp` parses HTTP but does not provide an event loop. `llhttp.c` collects URL
-fragments, removes query data from the bucket key, and starts a check when a
-request completes. The companion `llhttp_adapter.h` is the host-facing API.
+`llhttp` parses HTTP but does not provide an event loop. The self-contained
+[`llhttp/`](llhttp/) example collects URL fragments, removes query data from the
+bucket key, and starts a combined resource-limit and latency-guard check when a
+request completes. Its small `select()` driver makes the host contract runnable;
+replace that driver with the TCP loop already used by your application.
 
-Compile both into a host that already builds llhttp:
+Build the library and example after installing llhttp and its pkg-config file:
 
 ```sh
-cc -I. -I/path/to/llhttp/include -I../include -Icommon -c llhttp.c
+cd llhttp
+make
+./llhttp-example
 ```
 
 The host lifecycle is:
@@ -560,8 +564,8 @@ The host lifecycle is:
 1. Call `rl_llhttp_adapter_init()` once per accepted connection and check its
    return status.
 2. Pass every TCP fragment to `rl_llhttp_adapter_feed()`.
-3. If it returns `HPE_PAUSED`, keep the unconsumed bytes beginning at
-   `llhttp_get_error_pos()`. One check is already active.
+3. If it returns `HPE_PAUSED`, keep bytes at and after the returned `consumed`
+   offset. One check is already active.
 4. Drive the shared client's UDP descriptors and the adapter request's deadline
    using one of the loop patterns above.
 5. The result callback runs after the adapter calls `llhttp_resume()`. Feed the
@@ -570,7 +574,9 @@ The host lifecycle is:
    `rl_llhttp_adapter_dispose()` before releasing connection state.
 
 The pause is resumable backpressure for a pipelined next request; validation
-failures use `HPE_USER` and are terminal parser errors. The host owns TCP I/O,
-UDP readiness, deadlines, and the adapter allocation. The shared client may be
-used by multiple adapters only when the host serializes all access on one event
-loop thread.
+failures use `HPE_USER` and are terminal parser errors. Allowed protected work
+is timed monotonically and reported to the same tracker, while denied work is
+never run or reported. The host owns TCP I/O, retained bytes, UDP readiness,
+deadlines, and the adapter allocation. See
+[`llhttp/README.md`](llhttp/README.md) for complete ownership, build, platform,
+and error-handling details.

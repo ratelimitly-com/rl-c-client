@@ -15,7 +15,7 @@ fail() {
 }
 
 [[ -f "$MANIFEST" ]] || fail "missing examples/manifest.txt"
-for migrated in latency_tracker libuv libevent glib libev sd_event kqueue libdispatch win32 libhv epoll liburing io_uring mongoose civetweb libmicrohttpd h2o lwan libreactor facil_io onion kore ulfius; do
+for migrated in latency_tracker libuv libevent glib libev sd_event kqueue libdispatch win32 libhv epoll liburing io_uring mongoose civetweb libmicrohttpd h2o lwan libreactor facil_io onion kore ulfius llhttp; do
   [[ -d "$ROOT/examples/$migrated" ]] \
     || fail "$migrated does not have its own directory"
 done
@@ -25,35 +25,37 @@ while IFS='|' read -r name kind marker; do
   example_dir="$ROOT/examples/$name"
   if [[ -d "$example_dir" ]]; then
     source_file="$example_dir/main.c"
+    source_files=("$example_dir"/*.c)
     for required in main.c README.md CMakeLists.txt Makefile; do
       [[ -f "$example_dir/$required" ]] \
         || fail "$name is missing $required"
     done
-    if grep -Fq -- 'common/rl_example' "$source_file"; then
+    if grep -Fq -- 'common/rl_example' "${source_files[@]}"; then
       fail "$name still depends on examples/common"
     fi
-    grep -Fq -- '#include "r_client_runtime.h"' "$source_file" \
+    grep -Fq -- '#include "r_client_runtime.h"' "${source_files[@]}" \
       || fail "$name does not use the public runtime"
-    grep -Fq -- '#include "r_client_workflow.h"' "$source_file" \
+    grep -Fq -- '#include "r_client_workflow.h"' "${source_files[@]}" \
       || fail "$name does not use the admission workflow"
-    if ! grep -Fq -- 'r_client_admission_report_latency(' "$source_file" \
-      && ! grep -Fq -- 'r_runtime_admission_run_and_report(' "$source_file"; then
+    if ! grep -Fq -- 'r_client_admission_report_latency(' "${source_files[@]}" \
+      && ! grep -Fq -- 'r_runtime_admission_run_and_report(' "${source_files[@]}"; then
       fail "$name does not report protected-work latency"
     fi
   else
     source_file="$ROOT/examples/$name.c"
+    source_files=("$source_file")
     [[ -f "$source_file" ]] || fail "missing examples/$name.c"
     grep -Fq -- '#include "common/rl_example.h"' "$source_file" \
       || fail "$name does not use shared public adapter"
   fi
-  if grep -En -- '#include[[:space:]]+[<"].*src/' "$source_file" >/dev/null; then
+  if grep -En -- '#include[[:space:]]+[<"].*src/' "${source_files[@]}" >/dev/null; then
     fail "$name includes private src header"
   fi
-  grep -Fq -- "$marker" "$source_file" \
+  grep -Fq -- "$marker" "${source_files[@]}" \
     || fail "$name does not use expected $marker API"
-  grep -Fq -- ' * Flow' "$source_file" \
+  grep -Fq -- ' * Flow' "${source_files[@]}" \
     || fail "$name does not explain its control flow"
-  grep -Fq -- ' * Ownership:' "$source_file" \
+  grep -Fq -- ' * Ownership:' "${source_files[@]}" \
     || fail "$name does not explain resource ownership"
 
   case "$kind" in
@@ -87,8 +89,14 @@ while IFS='|' read -r name kind marker; do
       fi
       ;;
     parser)
-      grep -Fq -- 'rl_example_check(' "$source_file" \
-        || fail "$name does not submit rate-limit checks"
+      for symbol in \
+        'r_client_admission_start(' \
+        'r_runtime_client_on_readable(' \
+        'r_runtime_admission_delay_ms(' \
+        'r_runtime_admission_on_timeout('; do
+        grep -Fq -- "$symbol" "${source_files[@]}" \
+          || fail "$name does not wire $symbol"
+      done
       ;;
     workflow)
       for symbol in \
@@ -116,9 +124,9 @@ bridge_stop_line="$(grep -nF -- 'bridge_stop(&bridge);' "$civet_source" | tail -
   && "$server_stop_line" -lt "$bridge_stop_line" ]] \
   || fail "CivetWeb bridge is destroyed before server workers stop"
 
-[[ -f "$ROOT/examples/llhttp_adapter.h" ]] \
+[[ -f "$ROOT/examples/llhttp/llhttp_adapter.h" ]] \
   || fail "llhttp adapter has no host-facing header"
-grep -Fq -- '#include "llhttp_adapter.h"' "$ROOT/examples/llhttp.c" \
+grep -Fq -- '#include "llhttp_adapter.h"' "$ROOT/examples/llhttp/main.c" \
   || fail "llhttp source does not use its host-facing header"
 
 # Keep the adoption guide aligned with the supported inventory and present the

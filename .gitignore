@@ -10,3 +10,4 @@ compile_commands.json
 /tests/test_responder
 /bin/perf_client
 /bin/r_test_responder
+/examples/*/*-example
