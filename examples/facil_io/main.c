@@ -8,16 +8,17 @@
 #include <fio.h>
 #include <http.h>
 
-#include "common/rl_example.h"
+#include "r_client_runtime.h"
+#include "r_client_workflow.h"
 
 /*
  * Flow
  * ----
  * 1. facil.io watches duplicates of the rl-c-client UDP descriptors.
- * 2. GET /limited pauses its HTTP handle and starts an asynchronous check.
+ * 2. GET /limited pauses HTTP and starts combined asynchronous admission.
  * 3. A one-shot fio_run_every() callback advances the request deadline.
  * 4. UDP readiness lets the adapter drain the original socket.
- * 5. Completion resumes HTTP and sends status 200, 429, or 503.
+ * 5. Admitted work is measured/reported before HTTP resumes with a decision.
  *
  * Ownership: facil.io owns attached duplicate descriptors; the adapter owns
  * originals. Each timer and paused HTTP handle retains pending_request_t until
@@ -36,17 +37,19 @@ typedef struct udp_watcher {
 typedef struct pending_request {
     facil_app_t *app;
     http_pause_handle_s *http;
-    rl_example_request_t request;
+    r_admission_request_t request;
     size_t references;
     bool completed;
     bool defer_completion;
     bool completion_ready;
     int completion_status;
-    bool completion_allowed;
+    r_admission_outcome_t completion_outcome;
+    bool protected_work_complete;
+    uint32_t observed_latency_ms;
 } pending_request_t;
 
 struct facil_app {
-    rl_example_client_t client;
+    r_runtime_client_t runtime;
     udp_watcher_t watchers[2];
     size_t watcher_count;
 };
@@ -79,7 +82,12 @@ static void send_http_result(http_s *http) {
         http->status = 503;
         body = unavailable_body;
         length = sizeof(unavailable_body) - 1;
-    } else if (!pending->completion_allowed) {
+    } else if (pending->completion_outcome.latency_limited
+        && !pending->completion_outcome.rate_limited) {
+        http->status = 503;
+        body = unavailable_body;
+        length = sizeof(unavailable_body) - 1;
+    } else if (!pending->completion_outcome.allowed) {
         http->status = 429;
         body = denied_body;
         length = sizeof(denied_body) - 1;
@@ -100,31 +108,57 @@ static void discard_http_result(void *data) {
 static void complete_pending(
     pending_request_t *pending,
     int status,
-    bool allowed
+    const r_admission_outcome_t *outcome
 ) {
     if (pending->completed) {
         return;
     }
     pending->completed = true;
     pending->completion_status = status;
-    pending->completion_allowed = allowed;
+    if (outcome) {
+        pending->completion_outcome = *outcome;
+    }
     if (pending->request.active) {
-        rl_example_request_cancel(&pending->app->client, &pending->request);
+        r_runtime_admission_cancel(&pending->app->runtime, &pending->request);
     }
     http_resume(pending->http, send_http_result, discard_http_result);
 }
 
-static void on_rate_limit(void *user, int status, bool allowed) {
+static int perform_protected_work(void *user) {
     pending_request_t *pending = user;
+    /* Replace this with the application operation the route protects. */
+    pending->protected_work_complete = true;
+    return RCLIENT_OK;
+}
+
+static void on_admission(
+    void *user,
+    int status,
+    const r_admission_outcome_t *outcome
+) {
+    pending_request_t *pending = user;
+    if (status == RCLIENT_OK && outcome->allowed) {
+        int report_status = r_runtime_admission_run_and_report(
+            &pending->app->runtime,
+            &pending->request,
+            perform_protected_work,
+            pending,
+            &pending->observed_latency_ms
+        );
+        if (report_status != RCLIENT_OK) {
+            fprintf(stderr, "latency report failed: %s (%d)\n",
+                r_runtime_status_name(report_status), report_status);
+        }
+    }
     /* Do not resume/free from inside an rl-c-client call that still has this
      * object on its stack. */
     if (pending->defer_completion) {
         pending->completion_ready = true;
         pending->completion_status = status;
-        pending->completion_allowed = allowed;
+        pending->completion_outcome = *outcome;
         return;
     }
-    complete_pending(pending, status, allowed);
+    complete_pending(pending, status, outcome);
 }
 
 static void on_timer_finished(void *data) {
@@ -140,23 +174,23 @@ static void on_timer(void *data) {
     }
 
     pending->defer_completion = true;
-    int status = rl_example_request_on_timeout(
-        &pending->app->client,
+    int status = r_runtime_admission_on_timeout(
+        &pending->app->runtime,
         &pending->request
     );
     pending->defer_completion = false;
     if (pending->completion_ready) {
         complete_pending(pending,
-            pending->completion_status, pending->completion_allowed);
+            pending->completion_status, &pending->completion_outcome);
     } else if (status != RCLIENT_OK || arm_timer(pending) != RCLIENT_OK) {
         complete_pending(pending,
-            status != RCLIENT_OK ? status : RCLIENT_ERR_IO, false);
+            status != RCLIENT_OK ? status : RCLIENT_ERR_IO, NULL);
     }
 }
 
 static int arm_timer(pending_request_t *pending) {
     uint64_t delay_ms = 0;
-    int status = rl_example_request_delay_ms(&pending->request, &delay_ms);
+    int status = r_runtime_admission_delay_ms(&pending->request, &delay_ms);
     if (status != RCLIENT_OK) {
         return status;
     }
@@ -176,20 +210,25 @@ static void on_http_paused(http_pause_handle_s *http) {
     pending_request_t *pending = http_paused_udata_get(http);
     pending->http = http;
     pending->defer_completion = true;
-    int status = rl_example_check(
-        &pending->app->client,
+    r_admission_config_t config;
+    r_client_admission_config_defaults(&config);
+    config.bucket_name = "facil.io-example";
+    config.service_name = "facil.io-protected-service";
+    config.metrics_label = "facil.io-example";
+    int status = r_client_admission_start(
+        pending->app->runtime.handle,
         &pending->request,
-        "facil.io-example",
-        on_rate_limit,
+        &config,
+        on_admission,
         pending
     );
     pending->defer_completion = false;
     if (pending->completion_ready) {
         complete_pending(pending,
-            pending->completion_status, pending->completion_allowed);
+            pending->completion_status, &pending->completion_outcome);
     } else if (status != RCLIENT_OK || arm_timer(pending) != RCLIENT_OK) {
         complete_pending(pending,
-            status != RCLIENT_OK ? status : RCLIENT_ERR_IO, false);
+            status != RCLIENT_OK ? status : RCLIENT_ERR_IO, NULL);
     }
 }
 
@@ -218,22 +257,22 @@ static void on_http_request(http_s *http) {
 static void on_udp_readable(intptr_t uuid, fio_protocol_s *protocol) {
     (void)uuid;
     udp_watcher_t *watcher = (udp_watcher_t *)protocol;
-    int status = rl_example_client_on_readable(
-        &watcher->app->client,
+    int status = r_runtime_client_on_readable(
+        &watcher->app->runtime,
         watcher->client_fd
     );
     if (status != RCLIENT_OK) {
         fprintf(stderr, "Ratelimitly UDP ingress failed: %s (%d)\n",
-            rl_example_status_name(status), status);
+            r_runtime_status_name(status), status);
     }
 }
 
 static int attach_udp_watchers(facil_app_t *application) {
-    size_t socket_count = rl_example_socket_count(&application->client);
+    size_t socket_count = r_runtime_socket_count(&application->runtime);
     for (size_t i = 0; i < socket_count; i++) {
         udp_watcher_t *watcher = &application->watchers[i];
         watcher->app = application;
-        watcher->client_fd = rl_example_socket_at(&application->client, i);
+        watcher->client_fd = r_runtime_socket_at(&application->runtime, i);
         watcher->uuid = -1;
         watcher->protocol.on_data = on_udp_readable;
         int duplicate_fd = dup(watcher->client_fd);
@@ -265,32 +304,32 @@ static void detach_udp_watchers(facil_app_t *application) {
 }
 
 int main(void) {
-    rl_example_options_t options;
-    if (rl_example_options_from_env(&options) != RCLIENT_OK) {
+    r_runtime_options_t options;
+    if (r_runtime_options_from_env(&options) != RCLIENT_OK) {
         fprintf(stderr, "set RATELIMITLY_TENANT and RATELIMITLY_AUTH_KEY\n");
         return EXIT_FAILURE;
     }
-    int status = rl_example_client_init(&app.client, &options);
+    int status = r_runtime_client_init(&app.runtime, &options);
     if (status != RCLIENT_OK) {
         fprintf(stderr, "client initialization failed: %s (%d)\n",
-            rl_example_status_name(status), status);
+            r_runtime_status_name(status), status);
         return EXIT_FAILURE;
     }
     if (attach_udp_watchers(&app) != 0) {
         fprintf(stderr, "failed to initialize rate-limit UDP watchers\n");
         detach_udp_watchers(&app);
-        rl_example_client_destroy(&app.client);
+        r_runtime_client_destroy(&app.runtime);
         return EXIT_FAILURE;
     }
     if (http_listen("8000", NULL, .on_request = on_http_request) == -1) {
         fprintf(stderr, "failed to listen on port 8000\n");
         detach_udp_watchers(&app);
-        rl_example_client_destroy(&app.client);
+        r_runtime_client_destroy(&app.runtime);
         return EXIT_FAILURE;
     }
 
     fio_start(.threads = 1, .workers = 1);
     detach_udp_watchers(&app);
-    rl_example_client_destroy(&app.client);
+    r_runtime_client_destroy(&app.runtime);
     return EXIT_SUCCESS;
 }

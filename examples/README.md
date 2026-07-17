@@ -468,21 +468,16 @@ callbacks unsafe.
 
 ### facil.io
 
-**Model.** `facil_io.c` attaches duplicate UDP descriptors as facil.io
-protocols and uses HTTP pause/resume for asynchronous checks. Timer callbacks
-retain request state through `on_finish`, preventing a use-after-free when a
-UDP response races its deadline. One event-loop thread serializes client calls.
+**Model.** [`facil_io/main.c`](facil_io/main.c) attaches duplicate UDP
+descriptors as facil.io protocols and uses HTTP pause/resume for combined
+admission checks. Timer callbacks retain request state through `on_finish`,
+preventing a use-after-free when a UDP response races its deadline. One event
+loop thread serializes client calls and reports admitted protected-work latency.
 
 ```sh
-FACIL=/path/to/facil.io
-FACIL_BUILD=/path/to/facil.io-build
-cc -I../include -Icommon -I"$FACIL/lib" -I"$FACIL/lib/facil" \
-  -I"$FACIL/lib/facil/tls" -I"$FACIL/lib/facil/fiobj" \
-  -I"$FACIL/lib/facil/cli" -I"$FACIL/lib/facil/http" \
-  -I"$FACIL/lib/facil/http/parsers" -I"$FACIL/lib/facil/redis" \
-  facil_io.c common/rl_example.c ../librclient.a \
-  "$FACIL_BUILD/libfacil.io.a" -lcrypto -lssl -lresolv -ldl -lm -pthread \
-  -o facil-io-example
+cd facil_io
+make -C /path/to/facil.io lib
+make FACIL_ROOT=/path/to/facil.io
 ./facil-io-example
 curl -i http://127.0.0.1:8000/limited
 ```
