@@ -149,6 +149,24 @@ bridge_stop_line="$(grep -nF -- 'bridge_stop(&bridge);' "$civet_source" | tail -
   && "$server_stop_line" -lt "$bridge_stop_line" ]] \
   || fail "CivetWeb bridge is destroyed before server workers stop"
 
+# Dispatch source cancellation is asynchronous. The descriptors monitored by
+# socket sources must remain valid until every cancellation handler has run.
+dispatch_source="$ROOT/examples/libdispatch/main.c"
+dispatch_readme="$ROOT/examples/libdispatch/README.md"
+grep -Fq -- 'dispatch_source_set_cancel_handler_f' "$dispatch_source" \
+  || fail "libdispatch sources have no cancellation handlers"
+grep -Fq -- 'cancellation handlers have run' "$dispatch_readme" \
+  || fail "libdispatch README does not explain safe descriptor teardown"
+cancel_wait_line="$(grep -nF -- \
+  'dispatch_group_wait(app.source_cancellations' "$dispatch_source" \
+  | cut -d: -f1)"
+runtime_destroy_line="$(grep -nF -- \
+  'dispatch_sync_f(app.queue, &app, destroy_runtime_on_queue);' \
+  "$dispatch_source" | cut -d: -f1)"
+[[ -n "$cancel_wait_line" && -n "$runtime_destroy_line" \
+  && "$cancel_wait_line" -lt "$runtime_destroy_line" ]] \
+  || fail "libdispatch runtime is destroyed before source cancellation finishes"
+
 [[ -f "$ROOT/examples/llhttp/llhttp_adapter.h" ]] \
   || fail "llhttp adapter has no host-facing header"
 grep -Fq -- '#include "llhttp_adapter.h"' "$ROOT/examples/llhttp/main.c" \

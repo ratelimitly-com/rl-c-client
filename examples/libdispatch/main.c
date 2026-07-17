@@ -17,8 +17,9 @@
  * 4. Protected work runs only after resource and latency admission.
  * 5. Completed work is measured/reported, then a semaphore releases main().
  *
- * Ownership: application owns queue, sources, semaphore, request, and outcome.
- * runtime owns sockets. Source cancellation and runtime teardown run serially.
+ * Ownership: application owns queue, sources, cancellation group, semaphore,
+ * request, and outcome. runtime owns sockets, which stay open until every
+ * dispatch source cancellation handler confirms that monitoring has stopped.
  */
 
 typedef struct application application_t;
@@ -32,6 +33,7 @@ typedef struct socket_watcher {
 struct application {
     dispatch_queue_t queue;
     dispatch_semaphore_t finished;
+    dispatch_group_t source_cancellations;
     dispatch_source_t timer;
     socket_watcher_t sockets[2];
     size_t socket_count;
@@ -130,6 +132,21 @@ static void on_udp_readable(void *context) {
     }
 }
 
+/*
+ * dispatch_source_cancel() only starts asynchronous cancellation. Each source
+ * leaves this group from its cancellation handler, after libdispatch has
+ * stopped referring to the source's timer or socket registration.
+ */
+static void on_timer_cancelled(void *context) {
+    application_t *app = context;
+    dispatch_group_leave(app->source_cancellations);
+}
+
+static void on_socket_cancelled(void *context) {
+    socket_watcher_t *watcher = context;
+    dispatch_group_leave(watcher->app->source_cancellations);
+}
+
 static int initialize_sources(application_t *app) {
     app->timer = dispatch_source_create(
         DISPATCH_SOURCE_TYPE_TIMER,
@@ -142,6 +159,8 @@ static int initialize_sources(application_t *app) {
     }
     dispatch_set_context(app->timer, app);
     dispatch_source_set_event_handler_f(app->timer, on_timeout);
+    dispatch_group_enter(app->source_cancellations);
+    dispatch_source_set_cancel_handler_f(app->timer, on_timer_cancelled);
     dispatch_resume(app->timer);
 
     size_t count = r_runtime_socket_count(&app->runtime);
@@ -160,6 +179,11 @@ static int initialize_sources(application_t *app) {
         }
         dispatch_set_context(watcher->source, watcher);
         dispatch_source_set_event_handler_f(watcher->source, on_udp_readable);
+        dispatch_group_enter(app->source_cancellations);
+        dispatch_source_set_cancel_handler_f(
+            watcher->source,
+            on_socket_cancelled
+        );
         dispatch_resume(watcher->source);
         app->socket_count++;
     }
@@ -188,7 +212,7 @@ static void start_admission(void *context) {
     }
 }
 
-static void destroy_on_queue(void *context) {
+static void cancel_sources_on_queue(void *context) {
     application_t *app = context;
     if (app->request.active) {
         r_runtime_admission_cancel(&app->runtime, &app->request);
@@ -203,6 +227,10 @@ static void destroy_on_queue(void *context) {
         dispatch_release(app->sockets[i].source);
         app->sockets[i].source = NULL;
     }
+}
+
+static void destroy_runtime_on_queue(void *context) {
+    application_t *app = context;
     r_runtime_client_destroy(&app->runtime);
 }
 
@@ -229,7 +257,17 @@ int main(void) {
     application_t app = {.status = RCLIENT_ERR_IO};
     app.queue = dispatch_queue_create("com.ratelimitly.example", NULL);
     app.finished = dispatch_semaphore_create(0);
-    if (!app.queue || !app.finished) {
+    app.source_cancellations = dispatch_group_create();
+    if (!app.queue || !app.finished || !app.source_cancellations) {
+        if (app.source_cancellations) {
+            dispatch_release(app.source_cancellations);
+        }
+        if (app.finished) {
+            dispatch_release(app.finished);
+        }
+        if (app.queue) {
+            dispatch_release(app.queue);
+        }
         return EXIT_FAILURE;
     }
     int status = r_runtime_client_init(&app.runtime, &options);
@@ -242,7 +280,16 @@ int main(void) {
         status = app.status;
     }
 
-    dispatch_sync_f(app.queue, &app, destroy_on_queue);
+    dispatch_sync_f(app.queue, &app, cancel_sources_on_queue);
+
+    /*
+     * Wait outside the serial queue: cancellation handlers are delivered on
+     * that queue. Once all handlers have run, runtime-owned sockets are safe
+     * to close.
+     */
+    dispatch_group_wait(app.source_cancellations, DISPATCH_TIME_FOREVER);
+    dispatch_sync_f(app.queue, &app, destroy_runtime_on_queue);
+    dispatch_release(app.source_cancellations);
     dispatch_release(app.finished);
     dispatch_release(app.queue);
     if (status != RCLIENT_OK) {
