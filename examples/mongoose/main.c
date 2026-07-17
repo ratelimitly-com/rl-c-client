@@ -4,7 +4,8 @@
 
 #include <mongoose.h>
 
-#include "common/rl_example.h"
+#include "r_client_runtime.h"
+#include "r_client_workflow.h"
 
 /*
  * Flow
@@ -12,10 +13,11 @@
  * 1. MG_EV_HTTP_MSG validates GET /limited and starts an asynchronous check.
  * 2. The connection stays open while pending state links it to that check.
  * 3. Each short mg_mgr_poll() tick is followed by UDP and deadline processing.
- * 4. Completion replies with 200, 429, or 503; MG_EV_CLOSE cancels abandoned work.
+ * 4. Completion distinguishes rate/latency denial before replying.
+ * 5. Allowed response work is measured and reported after completion.
  *
  * Ownership: the thread calling mg_mgr_poll() owns HTTP connections, the
- * rl-c-client instance, UDP sockets, and pending requests. No locks or worker
+ * runtime, UDP sockets, and pending requests. No locks or worker
  * handoff are needed. Mongoose has no arbitrary-fd watcher in this compact
  * pattern, so a 10 ms poll interval bounds UDP response latency.
  */
@@ -25,12 +27,12 @@ typedef struct pending_request {
     struct pending_request *next;
     mongoose_app_t *app;
     struct mg_connection *connection;
-    rl_example_request_t request;
+    r_admission_request_t request;
 } pending_request_t;
 
 struct mongoose_app {
     struct mg_mgr manager;
-    rl_example_client_t client;
+    r_runtime_client_t runtime;
     pending_request_t *pending;
 };
 
@@ -64,7 +66,18 @@ static pending_request_t *find_pending(
     return NULL;
 }
 
-static void on_rate_limit(void *user, int status, bool allowed) {
+static int send_allowed_reply(void *user) {
+    pending_request_t *pending = user;
+    mg_http_reply(pending->connection, 200, "Content-Type: text/plain\r\n",
+        "allowed\n");
+    return RCLIENT_OK;
+}
+
+static void on_admission(
+    void *user,
+    int status,
+    const r_admission_outcome_t *outcome
+) {
     pending_request_t *pending = user;
     mongoose_app_t *app = pending->app;
     /* Unlink before replying: mg_http_reply may schedule connection teardown. */
@@ -72,12 +85,27 @@ static void on_rate_limit(void *user, int status, bool allowed) {
     if (status != RCLIENT_OK) {
         mg_http_reply(pending->connection, 503, "Content-Type: text/plain\r\n",
             "rate-limit service unavailable\n");
-    } else if (!allowed) {
+    } else if (outcome->latency_limited && outcome->rate_limited) {
         mg_http_reply(pending->connection, 429, "Content-Type: text/plain\r\n",
-            "denied\n");
+            "denied by resource limit and latency guard\n");
+    } else if (outcome->latency_limited) {
+        mg_http_reply(pending->connection, 503, "Content-Type: text/plain\r\n",
+            "denied by latency guard\n");
+    } else if (!outcome->allowed) {
+        mg_http_reply(pending->connection, 429, "Content-Type: text/plain\r\n",
+            "denied by resource rate limit\n");
     } else {
-        mg_http_reply(pending->connection, 200, "Content-Type: text/plain\r\n",
-            "allowed\n");
+        status = r_runtime_admission_run_and_report(
+            &app->runtime,
+            &pending->request,
+            send_allowed_reply,
+            pending,
+            NULL
+        );
+        if (status != RCLIENT_OK) {
+            fprintf(stderr, "latency report failed: %s (%d)\n",
+                r_runtime_status_name(status), status);
+        }
     }
     free(pending);
 }
@@ -92,7 +120,7 @@ static void cancel_connection_request(
     }
     remove_pending(app, pending);
     /* MG_EV_CLOSE means the callback may no longer touch this connection. */
-    rl_example_request_cancel(&app->client, &pending->request);
+    r_runtime_admission_cancel(&app->runtime, &pending->request);
     free(pending);
 }
 
@@ -115,11 +143,16 @@ static void begin_rate_limit(
     pending->connection = connection;
     pending->next = app->pending;
     app->pending = pending;
-    int status = rl_example_check(
-        &app->client,
+    r_admission_config_t config;
+    r_client_admission_config_defaults(&config);
+    config.bucket_name = "mongoose-example";
+    config.service_name = "mongoose-protected-service";
+    config.metrics_label = "mongoose-example";
+    int status = r_client_admission_start(
+        app->runtime.handle,
         &pending->request,
-        "mongoose-example",
-        on_rate_limit,
+        &config,
+        on_admission,
         pending
     );
     if (status != RCLIENT_OK) {
@@ -155,11 +188,11 @@ static void on_http_event(
 
 static int drive_rate_limits(mongoose_app_t *app) {
     /* Reads are nonblocking, so polling both possible UDP sockets is cheap. */
-    size_t socket_count = rl_example_socket_count(&app->client);
+    size_t socket_count = r_runtime_socket_count(&app->runtime);
     for (size_t i = 0; i < socket_count; i++) {
-        int status = rl_example_client_on_readable(
-            &app->client,
-            rl_example_socket_at(&app->client, i)
+        int status = r_runtime_client_on_readable(
+            &app->runtime,
+            r_runtime_socket_at(&app->runtime, i)
         );
         if (status != RCLIENT_OK) {
             return status;
@@ -171,12 +204,12 @@ static int drive_rate_limits(mongoose_app_t *app) {
     while (pending) {
         pending_request_t *next = pending->next;
         uint64_t delay_ms = 0;
-        int status = rl_example_request_delay_ms(&pending->request, &delay_ms);
+        int status = r_runtime_admission_delay_ms(&pending->request, &delay_ms);
         if (status != RCLIENT_OK) {
             return status;
         }
         if (delay_ms == 0) {
-            status = rl_example_request_on_timeout(&app->client, &pending->request);
+            status = r_runtime_admission_on_timeout(&app->runtime, &pending->request);
             if (status != RCLIENT_OK) {
                 return status;
             }
@@ -190,30 +223,30 @@ static void cancel_all(mongoose_app_t *app) {
     while (app->pending) {
         pending_request_t *pending = app->pending;
         app->pending = pending->next;
-        rl_example_request_cancel(&app->client, &pending->request);
+        r_runtime_admission_cancel(&app->runtime, &pending->request);
         free(pending);
     }
 }
 
 int main(void) {
-    rl_example_options_t options;
-    if (rl_example_options_from_env(&options) != RCLIENT_OK) {
+    r_runtime_options_t options;
+    if (r_runtime_options_from_env(&options) != RCLIENT_OK) {
         fprintf(stderr, "set RATELIMITLY_TENANT and RATELIMITLY_AUTH_KEY\n");
         return EXIT_FAILURE;
     }
 
     mongoose_app_t app = {0};
-    int loop_status = rl_example_client_init(&app.client, &options);
+    int loop_status = r_runtime_client_init(&app.runtime, &options);
     if (loop_status != RCLIENT_OK) {
         fprintf(stderr, "client initialization failed: %s (%d)\n",
-            rl_example_status_name(loop_status), loop_status);
+            r_runtime_status_name(loop_status), loop_status);
         return EXIT_FAILURE;
     }
     mg_mgr_init(&app.manager);
     if (!mg_http_listen(&app.manager, "http://0.0.0.0:8000", on_http_event, &app)) {
         fprintf(stderr, "failed to listen on port 8000\n");
         mg_mgr_free(&app.manager);
-        rl_example_client_destroy(&app.client);
+        r_runtime_client_destroy(&app.runtime);
         return EXIT_FAILURE;
     }
 
@@ -225,13 +258,13 @@ int main(void) {
         loop_status = drive_rate_limits(&app);
         if (loop_status != RCLIENT_OK) {
             fprintf(stderr, "rate-limit event loop failed: %s (%d)\n",
-                rl_example_status_name(loop_status), loop_status);
+                r_runtime_status_name(loop_status), loop_status);
             break;
         }
     }
 
     cancel_all(&app);
     mg_mgr_free(&app.manager);
-    rl_example_client_destroy(&app.client);
+    r_runtime_client_destroy(&app.runtime);
     return loop_status == RCLIENT_OK ? EXIT_SUCCESS : EXIT_FAILURE;
 }
