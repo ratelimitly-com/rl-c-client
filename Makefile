@@ -85,6 +85,7 @@ test: $(TEST_BINS) $(TEST_RESPONDER_BIN)
 	bash ./tests/test_latency_tracker.sh
 	bash ./tests/test_examples.sh
 	bash ./tests/test_windows_headers.sh
+	bash ./tests/test_windows_core.sh
 	bash ./tests/test_windows_runtime.sh
 
 tests/test_protocol: tests/test_protocol.c src/r_protocol.o src/r_crypto.o

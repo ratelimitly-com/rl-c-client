@@ -3,7 +3,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef _WIN32
 #include <arpa/inet.h>
+#endif
 #include <stdio.h>
 
 #include <openssl/crypto.h>
