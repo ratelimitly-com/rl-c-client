@@ -14,14 +14,15 @@
 
 #include <lwan.h>
 
-#include "common/rl_example.h"
+#include "r_client_runtime.h"
+#include "r_client_workflow.h"
 
 /*
  * Flow
  * ----
  * 1. A Lwan coroutine queues a reference-counted job, then yields.
- * 2. A dedicated thread starts the check and polls client UDP sockets.
- * 3. Completion publishes status with release ordering and drops its reference.
+ * 2. A dedicated thread starts admission and polls client UDP sockets.
+ * 3. Allowed work is measured and reported before completion is published.
  * 4. The coroutine observes completion, resumes, and sends the HTTP response.
  *
  * Ownership: only the dedicated thread touches rl-c-client. Two references
@@ -34,15 +35,17 @@ typedef struct lwan_bridge lwan_bridge_t;
 typedef struct bridge_job {
     struct bridge_job *next;
     lwan_bridge_t *bridge;
-    rl_example_request_t request;
+    r_admission_request_t request;
+    r_admission_outcome_t outcome;
     atomic_uint references;
     atomic_bool done;
+    uint32_t observed_latency_ms;
+    bool protected_work_complete;
     int status;
-    bool allowed;
 } bridge_job_t;
 
 struct lwan_bridge {
-    rl_example_client_t client;
+    r_runtime_client_t runtime;
     pthread_t thread;
     pthread_mutex_t queue_mutex;
     bridge_job_t *queue_head;
@@ -52,6 +55,15 @@ struct lwan_bridge {
     bool stop;
 };
 
+static void wake_bridge(lwan_bridge_t *bridge) {
+    char byte = 0;
+    ssize_t written;
+    /* EAGAIN means the nonblocking pipe already contains a wakeup. */
+    do {
+        written = write(bridge->wake_pipe[1], &byte, 1);
+    } while (written < 0 && errno == EINTR);
+}
+
 static void release_job(void *data) {
     bridge_job_t *job = data;
     if (atomic_fetch_sub_explicit(
@@ -60,11 +72,20 @@ static void release_job(void *data) {
     }
 }
 
-/* Called only by the client thread.  Release publication makes status and
- * allowed visible before a Lwan coroutine observes done == true. */
-static void complete_job(bridge_job_t *job, int status, bool allowed) {
+/* Release publication makes result fields visible before the coroutine sees
+ * done == true. This function also releases the bridge thread's reference. */
+static void complete_job(
+    bridge_job_t *job,
+    int status,
+    const r_admission_outcome_t *outcome
+) {
     job->status = status;
-    job->allowed = allowed;
+    if (outcome) {
+        job->outcome = *outcome;
+    } else {
+        memset(&job->outcome, 0, sizeof(job->outcome));
+        job->outcome.decision = R_ADMISSION_ERROR;
+    }
     atomic_store_explicit(&job->done, true, memory_order_release);
     release_job(job); /* Release the client thread's reference. */
 }
@@ -80,10 +101,34 @@ static void remove_active(lwan_bridge_t *bridge, bridge_job_t *job) {
     }
 }
 
-static void on_rate_limit(void *user, int status, bool allowed) {
+static int perform_protected_work(void *user) {
+    bridge_job_t *job = user;
+    /* Replace this with the database/API operation the route protects. */
+    job->protected_work_complete = true;
+    return RCLIENT_OK;
+}
+
+static void on_admission(
+    void *user,
+    int status,
+    const r_admission_outcome_t *outcome
+) {
     bridge_job_t *job = user;
     remove_active(job->bridge, job);
-    complete_job(job, status, allowed);
+    if (status == RCLIENT_OK && outcome->allowed) {
+        int report_status = r_runtime_admission_run_and_report(
+            &job->bridge->runtime,
+            &job->request,
+            perform_protected_work,
+            job,
+            &job->observed_latency_ms
+        );
+        if (report_status != RCLIENT_OK) {
+            fprintf(stderr, "latency report failed: %s (%d)\n",
+                r_runtime_status_name(report_status), report_status);
+        }
+    }
+    complete_job(job, status, outcome);
 }
 
 static bridge_job_t *take_queue(lwan_bridge_t *bridge) {
@@ -101,16 +146,21 @@ static void start_queued_jobs(lwan_bridge_t *bridge) {
         bridge_job_t *next = job->next;
         job->next = bridge->active;
         bridge->active = job;
-        int status = rl_example_check(
-            &bridge->client,
+        r_admission_config_t config;
+        r_client_admission_config_defaults(&config);
+        config.bucket_name = "lwan-example";
+        config.service_name = "lwan-protected-service";
+        config.metrics_label = "lwan-example";
+        int status = r_client_admission_start(
+            bridge->runtime.handle,
             &job->request,
-            "lwan-example",
-            on_rate_limit,
+            &config,
+            on_admission,
             job
         );
         if (status != RCLIENT_OK) {
             remove_active(bridge, job);
-            complete_job(job, status, false);
+            complete_job(job, status, NULL);
         }
         job = next;
     }
@@ -126,7 +176,8 @@ static int next_timeout(lwan_bridge_t *bridge) {
     int timeout_ms = 1000;
     for (bridge_job_t *job = bridge->active; job; job = job->next) {
         uint64_t delay_ms = 0;
-        if (rl_example_request_delay_ms(&job->request, &delay_ms) != RCLIENT_OK) {
+        if (r_runtime_admission_delay_ms(&job->request, &delay_ms)
+            != RCLIENT_OK) {
             return 0;
         }
         int candidate = delay_ms > INT_MAX ? INT_MAX : (int)delay_ms;
@@ -143,12 +194,15 @@ static int expire_requests(lwan_bridge_t *bridge) {
         /* A timeout can complete and unlink this job, so save next first. */
         bridge_job_t *next = job->next;
         uint64_t delay_ms = 0;
-        int status = rl_example_request_delay_ms(&job->request, &delay_ms);
+        int status = r_runtime_admission_delay_ms(&job->request, &delay_ms);
         if (status != RCLIENT_OK) {
             return status;
         }
         if (delay_ms == 0) {
-            status = rl_example_request_on_timeout(&bridge->client, &job->request);
+            status = r_runtime_admission_on_timeout(
+                &bridge->runtime,
+                &job->request
+            );
             if (status != RCLIENT_OK) {
                 return status;
             }
@@ -175,14 +229,14 @@ static void fail_all_jobs(lwan_bridge_t *bridge, int status) {
     bridge_job_t *job = take_queue(bridge);
     while (job) {
         bridge_job_t *next = job->next;
-        complete_job(job, status, false);
+        complete_job(job, status, NULL);
         job = next;
     }
     while (bridge->active) {
         job = bridge->active;
         bridge->active = job->next;
-        rl_example_request_cancel(&bridge->client, &job->request);
-        complete_job(job, status, false);
+        r_runtime_admission_cancel(&bridge->runtime, &job->request);
+        complete_job(job, status, NULL);
     }
 }
 
@@ -193,9 +247,9 @@ static void *bridge_loop(void *user) {
         struct pollfd poll_fds[3] = {
             {.fd = bridge->wake_pipe[0], .events = POLLIN},
         };
-        size_t socket_count = rl_example_socket_count(&bridge->client);
+        size_t socket_count = r_runtime_socket_count(&bridge->runtime);
         for (size_t i = 0; i < socket_count; i++) {
-            poll_fds[i + 1].fd = rl_example_socket_at(&bridge->client, i);
+            poll_fds[i + 1].fd = r_runtime_socket_at(&bridge->runtime, i);
             poll_fds[i + 1].events = POLLIN;
         }
 
@@ -226,8 +280,8 @@ static void *bridge_loop(void *user) {
                 break;
             }
             if ((poll_fds[i + 1].revents & POLLIN) != 0) {
-                loop_status = rl_example_client_on_readable(
-                    &bridge->client,
+                loop_status = r_runtime_client_on_readable(
+                    &bridge->runtime,
                     poll_fds[i + 1].fd
                 );
                 if (loop_status != RCLIENT_OK) {
@@ -259,17 +313,17 @@ static int set_nonblocking(int file_descriptor) {
 
 static int bridge_start(
     lwan_bridge_t *bridge,
-    const rl_example_options_t *options
+    const r_runtime_options_t *options
 ) {
     memset(bridge, 0, sizeof(*bridge));
     bridge->wake_pipe[0] = -1;
     bridge->wake_pipe[1] = -1;
-    int status = rl_example_client_init(&bridge->client, options);
+    int status = r_runtime_client_init(&bridge->runtime, options);
     if (status != RCLIENT_OK) {
         return status;
     }
     if (pthread_mutex_init(&bridge->queue_mutex, NULL) != 0) {
-        rl_example_client_destroy(&bridge->client);
+        r_runtime_client_destroy(&bridge->runtime);
         return RCLIENT_ERR_IO;
     }
     if (pipe(bridge->wake_pipe) != 0
@@ -281,7 +335,7 @@ static int bridge_start(
             close(bridge->wake_pipe[1]);
         }
         pthread_mutex_destroy(&bridge->queue_mutex);
-        rl_example_client_destroy(&bridge->client);
+        r_runtime_client_destroy(&bridge->runtime);
         return RCLIENT_ERR_IO;
     }
     return RCLIENT_OK;
@@ -289,13 +343,12 @@ static int bridge_start(
 
 static void bridge_stop(lwan_bridge_t *bridge) {
     mark_bridge_stopped(bridge);
-    char byte = 0;
-    (void)write(bridge->wake_pipe[1], &byte, 1);
+    wake_bridge(bridge);
     pthread_join(bridge->thread, NULL);
     close(bridge->wake_pipe[0]);
     close(bridge->wake_pipe[1]);
     pthread_mutex_destroy(&bridge->queue_mutex);
-    rl_example_client_destroy(&bridge->client);
+    r_runtime_client_destroy(&bridge->runtime);
 }
 
 static bridge_job_t *submit_job(lwan_bridge_t *bridge) {
@@ -310,7 +363,7 @@ static bridge_job_t *submit_job(lwan_bridge_t *bridge) {
     pthread_mutex_lock(&bridge->queue_mutex);
     if (bridge->stop) {
         pthread_mutex_unlock(&bridge->queue_mutex);
-        complete_job(job, RCLIENT_ERR_IO, false);
+        complete_job(job, RCLIENT_ERR_IO, NULL);
         return job;
     }
     if (bridge->queue_tail) {
@@ -321,8 +374,7 @@ static bridge_job_t *submit_job(lwan_bridge_t *bridge) {
     bridge->queue_tail = job;
     pthread_mutex_unlock(&bridge->queue_mutex);
 
-    char byte = 0;
-    (void)write(bridge->wake_pipe[1], &byte, 1);
+    wake_bridge(bridge);
     return job;
 }
 
@@ -355,7 +407,12 @@ static enum lwan_http_status limited(
             unavailable_body, sizeof(unavailable_body) - 1);
         return HTTP_UNAVAILABLE;
     }
-    if (!job->allowed) {
+    if (job->outcome.latency_limited && !job->outcome.rate_limited) {
+        lwan_strbuf_set_static(response->buffer,
+            unavailable_body, sizeof(unavailable_body) - 1);
+        return HTTP_UNAVAILABLE;
+    }
+    if (!job->outcome.allowed) {
         lwan_strbuf_set_static(response->buffer,
             denied_body, sizeof(denied_body) - 1);
         /* Lwan's public status table omits 429; an unknown status asserts. */
@@ -367,8 +424,8 @@ static enum lwan_http_status limited(
 }
 
 int main(void) {
-    rl_example_options_t options;
-    if (rl_example_options_from_env(&options) != RCLIENT_OK) {
+    r_runtime_options_t options;
+    if (r_runtime_options_from_env(&options) != RCLIENT_OK) {
         fprintf(stderr, "set RATELIMITLY_TENANT and RATELIMITLY_AUTH_KEY\n");
         return EXIT_FAILURE;
     }
@@ -377,7 +434,7 @@ int main(void) {
     int status = bridge_start(&bridge, &options);
     if (status != RCLIENT_OK) {
         fprintf(stderr, "bridge initialization failed: %s (%d)\n",
-            rl_example_status_name(status), status);
+            r_runtime_status_name(status), status);
         return EXIT_FAILURE;
     }
     const struct lwan_url_map routes[] = {

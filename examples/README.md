@@ -424,22 +424,17 @@ sockets, and its state must outlive every H2O watcher.
 
 ### Lwan
 
-**Model.** `lwan.c` keeps client state off Lwan's small coroutine stacks. A
-dedicated thread owns the client and UDP sockets; handlers enqueue checks and
-yield with `lwan_request_sleep()` until completion. Reference-counted jobs
-remain valid if an HTTP peer disconnects during a check.
+**Model.** [`lwan/main.c`](lwan/main.c) keeps client state off Lwan's small
+coroutine stacks. A dedicated thread owns the runtime and UDP sockets; handlers
+enqueue combined admission checks and yield with `lwan_request_sleep()` until
+completion. Reference-counted jobs remain valid after disconnect, and admitted
+protected work is measured and reported on the bridge.
 
 Build Lwan, then compile against its generated configuration and static library:
 
 ```sh
-LWAN=/path/to/lwan
-LWAN_BUILD=/path/to/lwan-build
-cc -I../include -Icommon -I"$LWAN/src/lib" \
-  -include "$LWAN_BUILD/lwan-build-config.h" \
-  lwan.c common/rl_example.c ../librclient.a \
-  -Wl,--whole-archive "$LWAN_BUILD/src/lib/liblwan.a" \
-  -Wl,--no-whole-archive -lcrypto -lresolv -lz -lzstd -ldl -lm -pthread \
-  -o lwan-example
+cd lwan
+make LWAN_ROOT=/path/to/lwan LWAN_BUILD=/path/to/lwan/build
 ./lwan-example
 curl -i http://127.0.0.1:8080/limited
 ```
