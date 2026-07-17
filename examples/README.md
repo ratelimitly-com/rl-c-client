@@ -14,6 +14,7 @@ those comments before transplanting the integration into an application.
 | libev | Compact event loop | `ev_io` watchers plus a one-shot `ev_timer` |
 | sd-event | systemd event loop | `sd_event_add_io` plus monotonic time source |
 | kqueue | Native macOS/BSD readiness | Direct `kevent` wait plus request deadline |
+| libdispatch | Serial dispatch queue | Read sources plus a one-shot timer source |
 | libhv | Native event loop | `hio_t` readiness plus `htimer_t` |
 | liburing | Linux completion ring | `IORING_OP_POLL_ADD` through liburing |
 | epoll | Linux readiness API | Direct `epoll_wait` with a request deadline |
@@ -247,6 +248,20 @@ make
 
 **Production note.** Treat `EV_ERROR` and terminal `EV_EOF` as watcher errors,
 and close the kqueue before destroying runtime-owned sockets.
+
+### libdispatch
+
+**Model.** `libdispatch/main.c` serializes client calls on a private queue,
+using read sources for UDP sockets and a timer source for admission deadlines.
+
+```sh
+cd libdispatch
+make
+./libdispatch-example
+```
+
+**Production note.** Cancel sources and serialize runtime teardown on the same
+queue. A semaphore gives this teaching program a finite shutdown path.
 
 ### libhv
 
