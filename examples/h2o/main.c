@@ -20,16 +20,17 @@
 #include <h2o/http1.h>
 #include <h2o/http2.h>
 
-#include "common/rl_example.h"
+#include "r_client_runtime.h"
+#include "r_client_workflow.h"
 
 /*
  * Flow
  * ----
  * 1. H2O watches duplicates of the rl-c-client UDP descriptors.
- * 2. GET /limited allocates check state from the H2O request pool.
+ * 2. GET /limited allocates admission state from the H2O request pool.
  * 3. A one-shot H2O timer advances the current request deadline.
  * 4. UDP readiness lets the adapter consume datagrams from original sockets.
- * 5. Completion sends HTTP 200, 429, or 503.
+ * 5. Admission runs measured protected work and maps both decisions to HTTP.
  *
  * Ownership: H2O closes duplicate watcher descriptors; the adapter owns the
  * originals. A request-pool disposer cancels abandoned checks. Compatibility
@@ -45,7 +46,10 @@ typedef struct h2o_rl_handler {
 typedef struct pending_request {
     h2o_app_t *app;
     h2o_req_t *http_request;
-    rl_example_request_t request;
+    r_admission_request_t request;
+    r_admission_outcome_t outcome;
+    char response_body[96];
+    uint32_t observed_latency_ms;
 #if H2O_VERSION_MAJOR == 2 && H2O_VERSION_MINOR < 3
     h2o_timeout_t timeout;
     h2o_timeout_entry_t timer;
@@ -68,7 +72,7 @@ struct h2o_app {
     h2o_socket_t *listener;
     socket_watcher_t watchers[2];
     size_t watcher_count;
-    rl_example_client_t client;
+    r_runtime_client_t runtime;
 };
 
 static volatile sig_atomic_t stop_requested;
@@ -101,7 +105,21 @@ static void send_text_response(
     h2o_send_inline(request, body, strlen(body));
 }
 
-static void send_result(pending_request_t *pending, int status, bool allowed) {
+static int prepare_protected_response(void *user) {
+    pending_request_t *pending = user;
+    /* Replace this with the application operation the endpoint protects. */
+    int length = snprintf(pending->response_body,
+        sizeof(pending->response_body), "allowed (protected work complete)\n");
+    return length > 0 && (size_t)length < sizeof(pending->response_body)
+        ? RCLIENT_OK
+        : RCLIENT_ERR_IO;
+}
+
+static void send_result(
+    pending_request_t *pending,
+    int status,
+    const r_admission_outcome_t *outcome
+) {
     h2o_req_t *request = pending->http_request;
     if (!request) {
         return;
@@ -113,14 +131,41 @@ static void send_result(pending_request_t *pending, int status, bool allowed) {
             "rate-limit service unavailable\n");
         return;
     }
-    send_text_response(request,
-        allowed ? 200 : 429,
-        allowed ? "OK" : "Too Many Requests",
-        allowed ? "allowed\n" : "denied\n");
+    if (outcome->rate_limited && outcome->latency_limited) {
+        send_text_response(request, 429, "Too Many Requests",
+            "denied by resource limit and latency guard\n");
+    } else if (outcome->latency_limited) {
+        send_text_response(request, 503, "Service Unavailable",
+            "denied by latency guard\n");
+    } else if (!outcome->allowed) {
+        send_text_response(request, 429, "Too Many Requests",
+            "denied by resource rate limit\n");
+    } else {
+        send_text_response(request, 200, "OK", pending->response_body);
+    }
 }
 
-static void on_rate_limit(void *user, int status, bool allowed) {
-    send_result(user, status, allowed);
+static void on_admission(
+    void *user,
+    int status,
+    const r_admission_outcome_t *outcome
+) {
+    pending_request_t *pending = user;
+    pending->outcome = *outcome;
+    if (status == RCLIENT_OK && outcome->allowed) {
+        int report_status = r_runtime_admission_run_and_report(
+            &pending->app->runtime,
+            &pending->request,
+            prepare_protected_response,
+            pending,
+            &pending->observed_latency_ms
+        );
+        if (report_status != RCLIENT_OK) {
+            fprintf(stderr, "latency report failed: %s (%d)\n",
+                r_runtime_status_name(report_status), report_status);
+        }
+    }
+    send_result(pending, status, outcome);
 }
 
 #if H2O_VERSION_MAJOR == 2 && H2O_VERSION_MINOR < 3
@@ -133,19 +178,22 @@ static void on_timeout(h2o_timer_t *timer) {
         timer,
         timer
     );
-    int status = rl_example_request_on_timeout(&pending->app->client, &pending->request);
+    int status = r_runtime_admission_on_timeout(
+        &pending->app->runtime,
+        &pending->request
+    );
     if (status != RCLIENT_OK) {
-        rl_example_request_cancel(&pending->app->client, &pending->request);
-        send_result(pending, status, false);
+        r_runtime_admission_cancel(&pending->app->runtime, &pending->request);
+        send_result(pending, status, &pending->outcome);
     } else if (pending->request.active && arm_timer(pending) != 0) {
-        rl_example_request_cancel(&pending->app->client, &pending->request);
-        send_result(pending, RCLIENT_ERR_IO, false);
+        r_runtime_admission_cancel(&pending->app->runtime, &pending->request);
+        send_result(pending, RCLIENT_ERR_IO, &pending->outcome);
     }
 }
 
 static int arm_timer(pending_request_t *pending) {
     uint64_t delay_ms = 0;
-    int status = rl_example_request_delay_ms(&pending->request, &delay_ms);
+    int status = r_runtime_admission_delay_ms(&pending->request, &delay_ms);
     if (status != RCLIENT_OK) {
         return -1;
     }
@@ -176,7 +224,7 @@ static void dispose_pending(void *data) {
 #endif
     /* The pool can disappear because of success, error, or peer disconnect. */
     if (pending->request.active) {
-        rl_example_request_cancel(&pending->app->client, &pending->request);
+        r_runtime_admission_cancel(&pending->app->runtime, &pending->request);
     }
     pending->http_request = NULL;
 }
@@ -204,18 +252,25 @@ static int on_http_request(h2o_handler_t *handler, h2o_req_t *request) {
     h2o_timer_init(&pending->timer, on_timeout);
 #endif
 
-    int status = rl_example_check(
-        &pending->app->client,
+    r_admission_config_t config;
+    r_client_admission_config_defaults(&config);
+    config.bucket_name = "h2o-example";
+    config.service_name = "h2o-protected-service";
+    config.metrics_label = "h2o-example";
+    int status = r_client_admission_start(
+        pending->app->runtime.handle,
         &pending->request,
-        "h2o-example",
-        on_rate_limit,
+        &config,
+        on_admission,
         pending
     );
     if (status != RCLIENT_OK || arm_timer(pending) != 0) {
         if (pending->request.active) {
-            rl_example_request_cancel(&pending->app->client, &pending->request);
+            r_runtime_admission_cancel(&pending->app->runtime, &pending->request);
         }
-        send_result(pending, status != RCLIENT_OK ? status : RCLIENT_ERR_IO, false);
+        send_result(pending,
+            status != RCLIENT_OK ? status : RCLIENT_ERR_IO,
+            &pending->outcome);
     }
     return 0;
 }
@@ -226,10 +281,13 @@ static void on_udp_readable(h2o_socket_t *socket, const char *error) {
         fprintf(stderr, "H2O UDP watcher failed: %s\n", error);
         return;
     }
-    int status = rl_example_client_on_readable(&watcher->app->client, watcher->client_fd);
+    int status = r_runtime_client_on_readable(
+        &watcher->app->runtime,
+        watcher->client_fd
+    );
     if (status != RCLIENT_OK) {
         fprintf(stderr, "Ratelimitly UDP ingress failed: %s (%d)\n",
-            rl_example_status_name(status), status);
+            r_runtime_status_name(status), status);
     }
 }
 
@@ -302,11 +360,11 @@ static void shutdown_context(h2o_app_t *app, h2o_evloop_t *loop) {
 }
 
 static int create_udp_watchers(h2o_app_t *app) {
-    size_t socket_count = rl_example_socket_count(&app->client);
+    size_t socket_count = r_runtime_socket_count(&app->runtime);
     for (size_t i = 0; i < socket_count; i++) {
         socket_watcher_t *watcher = &app->watchers[i];
         watcher->app = app;
-        watcher->client_fd = rl_example_socket_at(&app->client, i);
+        watcher->client_fd = r_runtime_socket_at(&app->runtime, i);
         /* H2O closes its wrapper; dup keeps adapter ownership independent. */
         int duplicate_fd = dup(watcher->client_fd);
         if (duplicate_fd < 0) {
@@ -329,17 +387,17 @@ static int create_udp_watchers(h2o_app_t *app) {
 }
 
 int main(void) {
-    rl_example_options_t options;
-    if (rl_example_options_from_env(&options) != RCLIENT_OK) {
+    r_runtime_options_t options;
+    if (r_runtime_options_from_env(&options) != RCLIENT_OK) {
         fprintf(stderr, "set RATELIMITLY_TENANT and RATELIMITLY_AUTH_KEY\n");
         return EXIT_FAILURE;
     }
 
     h2o_app_t app = {0};
-    int client_status = rl_example_client_init(&app.client, &options);
+    int client_status = r_runtime_client_init(&app.runtime, &options);
     if (client_status != RCLIENT_OK) {
         fprintf(stderr, "client initialization failed: %s (%d)\n",
-            rl_example_status_name(client_status), client_status);
+            r_runtime_status_name(client_status), client_status);
         return EXIT_FAILURE;
     }
     h2o_config_init(&app.config);
@@ -360,7 +418,7 @@ int main(void) {
     if (!loop) {
         fprintf(stderr, "failed to create H2O event loop\n");
         h2o_config_dispose(&app.config);
-        rl_example_client_destroy(&app.client);
+        r_runtime_client_destroy(&app.runtime);
         return EXIT_FAILURE;
     }
     h2o_context_init(&app.context, loop, &app.config);
@@ -371,7 +429,7 @@ int main(void) {
         shutdown_context(&app, loop);
         h2o_config_dispose(&app.config);
         h2o_evloop_destroy(loop);
-        rl_example_client_destroy(&app.client);
+        r_runtime_client_destroy(&app.runtime);
         return EXIT_FAILURE;
     }
 
@@ -382,6 +440,13 @@ int main(void) {
     while (!stop_requested) {
         loop_status = h2o_evloop_run(loop, 1000);
         if (loop_status != 0) {
+            if (stop_requested) {
+                loop_status = 0;
+                break;
+            }
+            if (errno == EINTR) {
+                continue;
+            }
             fprintf(stderr, "H2O event loop failed: %d\n", loop_status);
             break;
         }
@@ -390,6 +455,6 @@ int main(void) {
     shutdown_context(&app, loop);
     h2o_config_dispose(&app.config);
     h2o_evloop_destroy(loop);
-    rl_example_client_destroy(&app.client);
+    r_runtime_client_destroy(&app.runtime);
     return loop_status == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

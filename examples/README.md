@@ -405,15 +405,15 @@ activity; both MHD and the client can move their nearest deadline.
 
 ### H2O
 
-**Model.** `h2o.c` wraps duplicate UDP descriptors with
-`H2O_SOCKET_FLAG_DONT_READ`, so H2O reports readiness while the common adapter
+**Model.** [`h2o/main.c`](h2o/main.c) wraps duplicate UDP descriptors with
+`H2O_SOCKET_FLAG_DONT_READ`, so H2O reports readiness while the public runtime
 consumes datagrams from the original sockets. Request-pool destructors cancel
-abandoned checks, and one-shot H2O timers enforce deadlines.
+abandoned checks, one-shot H2O timers enforce deadlines, and admitted protected
+work is measured and reported to the latency tracker.
 
 ```sh
-cc -I../include -Icommon h2o.c common/rl_example.c ../librclient.a \
-  $(pkg-config --cflags --libs libh2o-evloop) \
-  -lcrypto -lresolv -pthread -o h2o-example
+cd h2o
+make
 ./h2o-example
 curl -i http://127.0.0.1:8000/limited
 ```
