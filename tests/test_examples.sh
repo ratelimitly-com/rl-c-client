@@ -15,14 +15,33 @@ fail() {
 }
 
 [[ -f "$MANIFEST" ]] || fail "missing examples/manifest.txt"
+[[ -d "$ROOT/examples/latency_tracker" ]] \
+  || fail "latency_tracker does not have its own directory"
 
 while IFS='|' read -r name kind marker; do
   [[ -z "$name" || "$name" == \#* ]] && continue
-  source_file="$ROOT/examples/$name.c"
-  [[ -f "$source_file" ]] || fail "missing examples/$name.c"
-
-  grep -Fq -- '#include "common/rl_example.h"' "$source_file" \
-    || fail "$name does not use shared public adapter"
+  example_dir="$ROOT/examples/$name"
+  if [[ -d "$example_dir" ]]; then
+    source_file="$example_dir/main.c"
+    for required in main.c README.md CMakeLists.txt Makefile; do
+      [[ -f "$example_dir/$required" ]] \
+        || fail "$name is missing $required"
+    done
+    if grep -Fq -- 'common/rl_example' "$source_file"; then
+      fail "$name still depends on examples/common"
+    fi
+    grep -Fq -- '#include "r_client_runtime.h"' "$source_file" \
+      || fail "$name does not use the public runtime"
+    grep -Fq -- '#include "r_client_workflow.h"' "$source_file" \
+      || fail "$name does not use the admission workflow"
+    grep -Fq -- 'r_client_admission_report_latency(' "$source_file" \
+      || fail "$name does not report protected-work latency"
+  else
+    source_file="$ROOT/examples/$name.c"
+    [[ -f "$source_file" ]] || fail "missing examples/$name.c"
+    grep -Fq -- '#include "common/rl_example.h"' "$source_file" \
+      || fail "$name does not use shared public adapter"
+  fi
   if grep -En -- '#include[[:space:]]+[<"].*src/' "$source_file" >/dev/null; then
     fail "$name includes private src header"
   fi
@@ -51,11 +70,11 @@ while IFS='|' read -r name kind marker; do
       ;;
     workflow)
       for symbol in \
-        'r_client_check_rate_limit_async_borrowed(' \
-        'r_client_report_latency(' \
-        'rl_example_client_on_readable(' \
-        'rl_example_request_delay_ms(' \
-        'rl_example_request_on_timeout('; do
+        'r_client_admission_start(' \
+        'r_client_admission_report_latency(' \
+        'r_runtime_client_on_readable(' \
+        'r_client_admission_deadline_ms(' \
+        'r_client_admission_on_timeout('; do
         grep -Fq -- "$symbol" "$source_file" \
           || fail "$name does not wire $symbol"
       done
@@ -110,5 +129,7 @@ grep -Fq -- '`CLOCK_MONOTONIC`' "$IO_GUIDE" \
 grep -Fq -- 'clock_gettime(CLOCK_REALTIME' "$COMMON_ADAPTER" \
   || fail "shared adapter does not provide Unix-epoch client time"
 grep -Fq -- 'clock_gettime(CLOCK_MONOTONIC' \
-  "$ROOT/examples/latency_tracker.c" \
+  "$ROOT/examples/latency_tracker/main.c" \
+  || grep -Fq -- 'r_runtime_monotonic_time_ms(' \
+    "$ROOT/examples/latency_tracker/main.c" \
   || fail "latency workflow does not use monotonic duration time"

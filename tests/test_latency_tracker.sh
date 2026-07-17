@@ -49,7 +49,8 @@ RESPONDER_PID=""
 grep -q '"event":"rate_request".*"guards":1.*"resources":1' \
   "$TMP_DIR/responder.out"
 grep -q '"event":"latency_report".*"reports":1' "$TMP_DIR/responder.out"
-grep -q '^guard passed: current=' "$TMP_DIR/example.out"
+grep -q '^guard passed: resource and latency checks admitted the work' \
+  "$TMP_DIR/example.out"
 grep -q '^latency reported: service=example-inventory-backend observed=' \
   "$TMP_DIR/example.out"
 

@@ -109,8 +109,8 @@ tests/test_responder: tests/test_responder.c tools/r_test_responder_protocol.o l
 tests/test_example_common: tests/test_example_common.c examples/common/rl_example.c librclient.a
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -Iexamples/common $^ -o $@ -lcrypto -lresolv -pthread
 
-tests/test_latency_tracker: examples/latency_tracker.c examples/common/rl_example.c librclient.a
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -Iexamples/common $^ -o $@ -lcrypto -lresolv -pthread
+tests/test_latency_tracker: examples/latency_tracker/main.c librclient.a
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $^ -o $@ -lcrypto -lresolv -pthread
 
 clean:
 	rm -f $(LIB_OBJS) $(TEST_RESPONDER_OBJS) $(TEST_BINS) librclient.a librclient.so $(PERF_BIN) $(TEST_RESPONDER_BIN)
