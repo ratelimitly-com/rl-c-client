@@ -28,6 +28,7 @@ TEST_RESPONDER_OBJS := \
 
 LIB_OBJS = \
 	src/r_client.o \
+	src/r_client_workflow.o \
 	src/r_protocol.o \
 	src/r_crypto.o \
 	src/r_policy.o
@@ -36,6 +37,7 @@ TEST_BINS = \
 	tests/test_protocol \
 	tests/test_client_quota \
 	tests/test_public_api \
+	tests/test_workflow \
 	tests/test_responder \
 	tests/test_example_common \
 	tests/test_latency_tracker
@@ -73,6 +75,7 @@ test: $(TEST_BINS) $(TEST_RESPONDER_BIN)
 	./tests/test_protocol
 	./tests/test_client_quota
 	./tests/test_public_api
+	./tests/test_workflow
 	./tests/test_responder
 	bash ./tests/test_responder_cli.sh
 	bash ./tests/test_example_common.sh
@@ -87,6 +90,9 @@ tests/test_client_quota: tests/test_client_quota.c librclient.a
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $^ -o $@ -lcrypto -lresolv -pthread
 
 tests/test_public_api: tests/test_public_api.c librclient.a
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $^ -o $@ -lcrypto -lresolv -pthread
+
+tests/test_workflow: tests/test_workflow.c librclient.a
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $^ -o $@ -lcrypto -lresolv -pthread
 
 tests/test_responder: tests/test_responder.c tools/r_test_responder_protocol.o librclient.a
