@@ -198,6 +198,10 @@ response, create a request handle, or require a deadline watcher. Report
 storage is borrowed only for the duration of the call because the packet is
 serialized synchronously.
 
+All reports in a call are framed into one datagram. A batch too large to fit
+returns `RCLIENT_ERR_PROTOCOL` and sends nothing, so split large batches across
+calls; 30 reports per call fits under either auth mode.
+
 Reports whose `buffer_size` exceeds the credential quota are filtered. If all
 reports are filtered, the function returns `RCLIENT_OK` without sending. Other
 failures include `RCLIENT_ERR_DNS` when no server is available and

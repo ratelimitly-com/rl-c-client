@@ -260,7 +260,10 @@ int r_client_check_rate_limit_async_borrowed(
     r_client_req_t **out_req
 );
 
-// Fire-and-forget latency reporting.
+// Fire-and-forget latency reporting. Reports are framed into a single
+// datagram, so a batch too large to fit is rejected with
+// RCLIENT_ERR_PROTOCOL and nothing is sent; split large batches across
+// calls (30 reports per call is always within capacity).
 int r_client_report_latency(
     r_client_t *client,
     const r_service_latency_report_t *reports,

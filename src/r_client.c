@@ -1902,6 +1902,12 @@ int r_client_report_latency(
             }
             return RCLIENT_ERR_AUTH;
         }
+        if (pos + 4 + 32 + pdu_len > sizeof(packet)) {
+            if (owns_filtered_reports) {
+                free(filtered_reports);
+            }
+            return RCLIENT_ERR_PROTOCOL;
+        }
         r_write_le16(packet + pos, R_TLV_AUTH_COOKIE);
         r_write_le16(packet + pos + 2, 36);
         pos += 4;
@@ -1920,6 +1926,12 @@ int r_client_report_latency(
         size_t cipher_len = 0;
         uint8_t nonce[12];
         uint8_t tag[16];
+        if (pos + 4 + 12 + 16 + pdu_len > sizeof(packet)) {
+            if (owns_filtered_reports) {
+                free(filtered_reports);
+            }
+            return RCLIENT_ERR_PROTOCOL;
+        }
         r_write_le16(packet + pos, R_TLV_AUTH_AES);
         r_write_le16(packet + pos + 2, 32);
         if (r_encrypt_pdu_aes_gcm(
@@ -1940,6 +1952,12 @@ int r_client_report_latency(
             return RCLIENT_ERR_AUTH;
         }
         pos += 4;
+        if (pos + 12 + 16 + cipher_len > sizeof(packet)) {
+            if (owns_filtered_reports) {
+                free(filtered_reports);
+            }
+            return RCLIENT_ERR_PROTOCOL;
+        }
         memcpy(packet + pos, nonce, 12);
         pos += 12;
         memcpy(packet + pos, tag, 16);
