@@ -500,9 +500,10 @@ supporting several kernel versions or sharing a ring with other operations.
 ## HTTP framework examples
 
 Unless a section says otherwise, these examples listen on port 8000. Send
-`GET /limited` to run a check. Non-GET requests are rejected before starting a
-check, and an abandoned request is cancelled where the framework exposes a
-reliable disconnect lifecycle.
+`GET /limited` to run a check. Method filtering follows each framework, and
+some teaching routes also accept other methods; production code should reject
+unsupported methods before starting admission. An abandoned request is
+cancelled where the framework exposes a reliable disconnect lifecycle.
 
 ### Mongoose
 
