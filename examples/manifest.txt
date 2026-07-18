@@ -1,0 +1,25 @@
+# name|kind|framework API marker
+latency_tracker|workflow|r_client_admission_report_latency(
+libuv|loop|uv_run(
+libevent|loop|event_base_dispatch(
+glib|loop|g_main_loop_run(
+libev|loop|ev_run(
+sd_event|loop|sd_event_loop(
+kqueue|loop|kevent(
+libdispatch|loop|dispatch_source_create(
+win32|loop|WSAWaitForMultipleEvents(
+libhv|loop|hloop_run(
+liburing|loop|io_uring_queue_init(
+epoll|loop|epoll_wait(
+io_uring|loop|__NR_io_uring_setup
+mongoose|framework|mg_http_listen(
+civetweb|framework|mg_set_request_handler(
+libmicrohttpd|framework|MHD_suspend_connection(
+h2o|framework|h2o_create_handler(
+lwan|framework|lwan_set_url_map(
+libreactor|framework|reactor_loop(
+facil_io|framework|http_listen(
+onion|framework|onion_url_add_with_data(
+kore|framework|kore_task_create(
+ulfius|framework|ulfius_add_endpoint_by_val(
+llhttp|parser|llhttp_execute(

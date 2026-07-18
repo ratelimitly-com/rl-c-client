@@ -1,0 +1,11 @@
+# name|shard|binary-or-module|http-port|metrics-label|resource-deny-status|launcher
+mongoose|a|examples/mongoose/mongoose-example|8000|mongoose-example|429|direct
+civetweb|a|examples/civetweb/civetweb-example|8000|civetweb-example|429|direct
+libmicrohttpd|a|examples/libmicrohttpd/libmicrohttpd-example|8000|libmicrohttpd-example|429|direct
+ulfius|a|examples/ulfius/ulfius-example|8000|ulfius-example|429|direct
+h2o|b|examples/h2o/h2o-example|8000|h2o-example|429|direct
+lwan|b|examples/lwan/lwan-example|8080|lwan-example|403|direct
+libreactor|b|examples/libreactor/libreactor-example|8000|libreactor-example|429|direct
+facil_io|c|examples/facil_io/facil-io-example|8000|facil.io-example|429|direct
+onion|c|examples/onion/onion-example|8000|onion-example|429|direct
+kore|c|examples/kore/kore-example.so|8000|kore-example|429|kore

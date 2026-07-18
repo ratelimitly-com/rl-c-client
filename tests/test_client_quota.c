@@ -17,6 +17,7 @@ typedef struct test_ctx {
     uint8_t last_packet[R_MAX_PACKET_SIZE];
     size_t last_packet_len;
     size_t send_count;
+    char last_srv_name[256];
     r_dns_srv_cb pending_srv_cb;
     void *pending_srv_user;
     r_dns_addr_cb pending_addr_cb;
@@ -53,8 +54,9 @@ static int test_resolve_srv(
     r_dns_srv_cb cb,
     void *user
 ) {
-    (void)ctx;
-    (void)name;
+    test_ctx_t *test = (test_ctx_t *)ctx;
+    assert(strlen(name) < sizeof(test->last_srv_name));
+    strcpy(test->last_srv_name, name);
     if (out_req_id) {
         *out_req_id = 1u;
     }
@@ -283,6 +285,135 @@ static r_client_t *make_aes_client(test_ctx_t *ctx) {
     assert(rc == RCLIENT_OK);
     assert(client != NULL);
     return client;
+}
+
+static void test_client_derives_production_tenant_from_key(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    r_io_ops_t io = {
+        .ctx = &ctx,
+        .udp_send = test_udp_send,
+        .now_ms = test_now_ms,
+        .log = NULL,
+        .on_steering_feedback = NULL,
+    };
+    r_resolver_ops_t resolver = {
+        .ctx = &ctx,
+        .resolve_srv = test_resolve_srv,
+        .resolve_addrs = test_resolve_addrs,
+        .cancel = test_cancel,
+    };
+    r_client_config_t config;
+    memset(&config, 0, sizeof(config));
+    config.tenant.auth.secret = SAMPLE_AES_KEY_TENANT_3;
+
+    r_client_t *client = NULL;
+    assert(r_client_create(&config, &io, &resolver, &client) == RCLIENT_OK);
+    assert(client != NULL);
+    assert(strcmp(
+        ctx.last_srv_name,
+        "_ratelimitly._udp.c-3.p0.ratelimitly.com"
+    ) == 0);
+
+    r_service_latency_report_t report;
+    memset(&report, 0, sizeof(report));
+    memcpy(report.service_id, "default-tenant", 14);
+    report.observed_latency = 10;
+    report.ttl_ms = 1000;
+    report.max_samples = 10;
+    report.buffer_size = 10;
+    report.min_sample_threshold = 1;
+    assert(r_client_report_latency(client, &report, 1) == RCLIENT_OK);
+
+    r_tenant_header_t tenant;
+    size_t auth_pos = 0;
+    assert(r_parse_tenant_header(
+        ctx.last_packet,
+        ctx.last_packet_len,
+        &tenant,
+        &auth_pos
+    ) == RCLIENT_OK);
+    assert(tenant.key_id == 3u);
+
+    uint16_t auth_type = 0;
+    size_t auth_size = 0;
+    const uint8_t *auth_body = NULL;
+    size_t auth_body_len = 0;
+    size_t pdu_pos = 0;
+    assert(r_parse_auth_tlv_header(
+        ctx.last_packet,
+        ctx.last_packet_len,
+        auth_pos,
+        &auth_type,
+        &auth_size,
+        &auth_body,
+        &auth_body_len,
+        &pdu_pos
+    ) == RCLIENT_OK);
+    assert(auth_type == R_TLV_AUTH_AES);
+
+    r_client_destroy(client);
+}
+
+static void test_client_preserves_explicit_tenant_override(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    r_io_ops_t io = {
+        .ctx = &ctx,
+        .udp_send = test_udp_send,
+        .now_ms = test_now_ms,
+        .log = NULL,
+        .on_steering_feedback = NULL,
+    };
+    r_resolver_ops_t resolver = {
+        .ctx = &ctx,
+        .resolve_srv = test_resolve_srv,
+        .resolve_addrs = test_resolve_addrs,
+        .cancel = test_cancel,
+    };
+    r_client_config_t config;
+    memset(&config, 0, sizeof(config));
+    config.tenant.dns_name = "custom.example";
+    config.tenant.auth.secret = SAMPLE_AES_KEY_TENANT_3;
+
+    r_client_t *client = NULL;
+    assert(r_client_create(&config, &io, &resolver, &client) == RCLIENT_OK);
+    assert(client != NULL);
+    assert(strcmp(ctx.last_srv_name, "_ratelimitly._udp.custom.example") == 0);
+    r_client_destroy(client);
+}
+
+static void test_client_rejects_explicit_key_metadata_mismatch(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    r_io_ops_t io = {
+        .ctx = &ctx,
+        .udp_send = test_udp_send,
+        .now_ms = test_now_ms,
+        .log = NULL,
+        .on_steering_feedback = NULL,
+    };
+    r_resolver_ops_t resolver = {
+        .ctx = &ctx,
+        .resolve_srv = test_resolve_srv,
+        .resolve_addrs = test_resolve_addrs,
+        .cancel = test_cancel,
+    };
+    r_client_config_t config;
+    memset(&config, 0, sizeof(config));
+    config.tenant.auth.secret = SAMPLE_AES_KEY_TENANT_3;
+    config.tenant.key_id = 2u;
+
+    r_client_t *client = NULL;
+    assert(r_client_create(&config, &io, &resolver, &client)
+        == RCLIENT_ERR_CONFIG);
+    assert(client == NULL);
+
+    config.tenant.key_id = 0u;
+    config.tenant.auth.type = R_AUTH_COOKIE;
+    assert(r_client_create(&config, &io, &resolver, &client)
+        == RCLIENT_ERR_CONFIG);
+    assert(client == NULL);
 }
 
 static r_resource_request_t sample_resource(void) {
@@ -678,6 +809,9 @@ static void test_destroy_handles_dns_cancel_callback(void) {
 }
 
 int main(void) {
+    test_client_derives_production_tenant_from_key();
+    test_client_preserves_explicit_tenant_override();
+    test_client_rejects_explicit_key_metadata_mismatch();
     test_check_rate_limit_rejects_oversized_guard();
     test_report_latency_filters_oversized_reports();
     test_report_latency_requires_udp_send();

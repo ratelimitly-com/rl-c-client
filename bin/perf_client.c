@@ -999,7 +999,7 @@ static bool perf_parse_retry_resend(const char *value, r_resend_policy_t *out) {
 static perf_config_t perf_config_from_args(int argc, char **argv) {
     perf_config_t cfg;
     memset(&cfg, 0, sizeof(cfg));
-    cfg.srv_domain = "rl.glar.com";
+    cfg.srv_domain = NULL;
     cfg.auth_bech32 = NULL;
     cfg.auth_type = (r_auth_type_t)0;
     cfg.tenant_id = 0;
@@ -1098,7 +1098,7 @@ static void perf_print_help(void) {
     printf("RateLimitly Performance Client\n\n");
     printf("Usage: perf_client [OPTIONS]\n\n");
     printf("Options:\n");
-    printf("  --srv=<domain>          DNS SRV lookup domain (default: rl.glar.com)\n");
+    printf("  --srv=<domain>          Override key-derived production DNS domain\n");
     printf("  --clients=<n>           Concurrent clients (default: 10)\n");
     printf("  --requests=<n>          Requests per client (default: 1000)\n");
     printf("  --duration=<secs>       Run for duration instead of request count\n");
@@ -1116,7 +1116,7 @@ static void perf_print_help(void) {
     printf("Examples:\n");
     printf("  perf_client --clients=50 --requests=10000 --auth=rl-aes1...\n");
     printf("  perf_client --duration=60 --auth=rl-aes1...\n");
-    printf("  perf_client --srv=rl1.glar.com --duration=30 --clients=50 --auth=rl-aes1...\n");
+    printf("  perf_client --srv=custom.example.com --duration=30 --clients=50 --auth=rl-aes1...\n");
     printf("  perf_client --attempt-timeout-ms=750 --retry-attempts=2 --retry-on=timeout --auth=rl-aes1...\n");
 }
 
@@ -1153,6 +1153,17 @@ int main(int argc, char **argv) {
     }
 
     perf_config_t cfg = perf_config_from_args(argc, argv);
+    char default_srv_domain[R_CLIENT_DEFAULT_TENANT_DNS_CAPACITY];
+    if (!cfg.srv_domain) {
+        if (r_client_format_default_tenant_dns(
+                cfg.tenant_id,
+                default_srv_domain,
+                sizeof(default_srv_domain)) != RCLIENT_OK) {
+            fprintf(stderr, "[ERROR] Failed to derive tenant DNS from --auth\n");
+            return 1;
+        }
+        cfg.srv_domain = default_srv_domain;
+    }
     perf_dns_cache_t dns_cache;
     if (perf_dns_cache_init(&dns_cache, cfg.srv_domain) != 0) {
         fprintf(stderr, "[ERROR] Failed to pre-resolve DNS for %s\n", cfg.srv_domain);

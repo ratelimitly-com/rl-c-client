@@ -12,18 +12,31 @@ permissions:
 
 jobs:
   c-client:
-    name: C client
-    runs-on: ubuntu-latest
+    name: C client (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends build-essential libssl-dev
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install openssl@3
+          echo "OPENSSL_PREFIX=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
 
       - name: Build libraries
         run: make
@@ -33,3 +46,468 @@ jobs:
 
       - name: Build perf client
         run: make perf_client
+
+  production-p0-smoke:
+    name: Production P0 protocol smoke
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' ||
+       (github.event_name == 'workflow_dispatch' &&
+        github.actor == 'edescourtis'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: rl-c-client-production-p0
+      cancel-in-progress: false
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential libssl-dev
+
+      - name: Prove key-only rate and latency behavior
+        env:
+          RATELIMITLY_AUTH_KEY: ${{ secrets.RATELIMITLY_AUTH_KEY }}
+          RATELIMITLY_P0_TEST_NAMESPACE: ci-${{ github.run_id }}-${{ github.run_attempt }}
+        run: bash tests/test_production_p0.sh
+
+  linux-one-shot-examples:
+    name: Linux one-shot examples
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    concurrency:
+      group: >-
+        ${{
+          github.ref == 'refs/heads/main' &&
+          'rl-c-client-production-one-shot' ||
+          format('{0}-{1}-linux-one-shot', github.workflow, github.ref)
+        }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install packaged dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake git libssl-dev pkg-config \
+            libuv1-dev libevent-dev libglib2.0-dev libev-dev \
+            libsystemd-dev liburing-dev
+
+      - name: Build pinned libhv and llhttp
+        env:
+          LIBHV_COMMIT: 71770e04becaa149e0ef8ffc4d3900c5466ddddb
+          LLHTTP_COMMIT: f831650b4f693bc1b4a6fe08f1b8ae25196e9f6a
+        run: |
+          prefix="${{ runner.temp }}/example-deps"
+
+          checkout_pinned() {
+            name=$1
+            repository=$2
+            commit=$3
+            directory="${{ runner.temp }}/$name"
+            git init -q "$directory"
+            git -C "$directory" remote add origin "$repository"
+            git -C "$directory" fetch -q --depth 1 origin "$commit"
+            git -C "$directory" checkout -q --detach FETCH_HEAD
+          }
+
+          checkout_pinned \
+            libhv https://github.com/ithewei/libhv.git "$LIBHV_COMMIT"
+          cmake \
+            -S "${{ runner.temp }}/libhv" \
+            -B "${{ runner.temp }}/libhv-build" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$prefix" \
+            -DBUILD_SHARED=ON \
+            -DBUILD_STATIC=OFF \
+            -DBUILD_EXAMPLES=OFF
+          cmake --build "${{ runner.temp }}/libhv-build" --parallel 2
+          cmake --install "${{ runner.temp }}/libhv-build"
+
+          checkout_pinned \
+            llhttp https://github.com/nodejs/llhttp.git "$LLHTTP_COMMIT"
+          cmake \
+            -S "${{ runner.temp }}/llhttp" \
+            -B "${{ runner.temp }}/llhttp-build" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$prefix" \
+            -DCMAKE_INSTALL_LIBDIR=lib \
+            -DLLHTTP_BUILD_SHARED_LIBS=OFF \
+            -DLLHTTP_BUILD_STATIC_LIBS=ON
+          cmake --build "${{ runner.temp }}/llhttp-build" --parallel 2
+          cmake --install "${{ runner.temp }}/llhttp-build"
+
+          {
+            echo "LIBHV_PREFIX=$prefix"
+            echo "PKG_CONFIG_PATH=$prefix/lib/pkgconfig"
+            echo "LD_LIBRARY_PATH=$prefix/lib"
+          } >> "$GITHUB_ENV"
+
+      - name: Build Linux one-shot examples
+        run: bash tests/build_linux_one_shot_examples.sh
+
+      - name: Run rate-limit and latency scenarios
+        run: bash tests/test_linux_one_shot_examples.sh
+
+      - name: Run examples against production P0
+        if: >-
+          github.ref == 'refs/heads/main' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'workflow_dispatch' &&
+            github.actor == 'edescourtis'))
+        env:
+          RATELIMITLY_AUTH_KEY: ${{ secrets.RATELIMITLY_AUTH_KEY }}
+        run: bash tests/test_production_p0_one_shot_examples.sh
+
+  linux-http-examples:
+    name: Linux HTTP examples (shard ${{ matrix.shard }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    concurrency:
+      group: >-
+        ${{
+          github.ref == 'refs/heads/main' &&
+          format('rl-c-client-production-http-{0}', matrix.shard) ||
+          format(
+            '{0}-{1}-linux-http-{2}',
+            github.workflow,
+            github.ref,
+            matrix.shard
+          )
+        }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - a
+          - b
+          - c
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install packaged dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf automake build-essential cmake curl git libtool \
+            libbrotli-dev libh2o-evloop-dev libmicrohttpd-dev \
+            liborcania-dev libssl-dev libulfius-dev libzstd-dev \
+            pkg-config zlib1g-dev
+
+      - name: Build pinned framework dependencies
+        env:
+          MONGOOSE_COMMIT: c288ac1f38424ffdd4d2fd5e1893fd4962642db3
+          CIVETWEB_COMMIT: d7ba35bbb649209c66e582d5a0244ba988a15159
+          LWAN_COMMIT: 0927e3eb8f08ab8a4e238bcb7cc2388f6082163b
+          LIBREACTOR_COMMIT: 64afa5364c445736317e44e820a85f09aa88dfc0
+          FACIL_IO_COMMIT: 512a354dbd31e1895647df852d1565f9d408ed91
+          ONION_COMMIT: 46ed564fe1b91d2d253e2f968db233fcc22eeaae
+          KORE_COMMIT: ba9bc3b56e24c3652f4cd808463ad45f78579ba8
+        run: |
+          source_root="${{ runner.temp }}/http-frameworks"
+          install_root="${{ runner.temp }}/http-framework-install"
+          mkdir -p "$source_root" "$install_root"
+
+          checkout_pinned() {
+            name=$1
+            repository=$2
+            commit=$3
+            directory="$source_root/$name"
+            git init -q "$directory"
+            git -C "$directory" remote add origin "$repository"
+            git -C "$directory" fetch -q --depth 1 origin "$commit"
+            git -C "$directory" checkout -q --detach FETCH_HEAD
+            test "$(git -C "$directory" rev-parse HEAD)" = "$commit"
+          }
+
+          case "${{ matrix.shard }}" in
+            a)
+              checkout_pinned mongoose \
+                https://github.com/cesanta/mongoose.git "$MONGOOSE_COMMIT"
+              checkout_pinned civetweb \
+                https://github.com/civetweb/civetweb.git "$CIVETWEB_COMMIT"
+              {
+                echo "MONGOOSE_ROOT=$source_root/mongoose"
+                echo "CIVETWEB_ROOT=$source_root/civetweb"
+              } >> "$GITHUB_ENV"
+              ;;
+            b)
+              checkout_pinned lwan \
+                https://github.com/lpereira/lwan.git "$LWAN_COMMIT"
+              cmake \
+                -S "$source_root/lwan" \
+                -B "$source_root/lwan-build" \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DENABLE_BROTLI=OFF \
+                -DENABLE_ZSTD=OFF \
+                -DMTUNE_NATIVE=OFF
+              cmake --build "$source_root/lwan-build" --parallel 2
+
+              checkout_pinned libreactor \
+                https://github.com/fredrikwidlund/libreactor.git \
+                "$LIBREACTOR_COMMIT"
+              (
+                cd "$source_root/libreactor"
+                ./autogen.sh
+                ./configure --prefix="$install_root/libreactor"
+                make -j2
+                make install
+              )
+              {
+                echo "LWAN_ROOT=$source_root/lwan"
+                echo "LWAN_BUILD=$source_root/lwan-build"
+                echo "PKG_CONFIG_PATH=$install_root/libreactor/lib/pkgconfig"
+              } >> "$GITHUB_ENV"
+              ;;
+            c)
+              checkout_pinned facil.io \
+                https://github.com/boazsegev/facil.io.git "$FACIL_IO_COMMIT"
+              make -C "$source_root/facil.io" -j2 lib
+
+              checkout_pinned onion \
+                https://github.com/davidmoreno/onion.git "$ONION_COMMIT"
+              cmake \
+                -S "$source_root/onion" \
+                -B "$source_root/onion-build" \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_INSTALL_PREFIX="$install_root/onion" \
+                -DONION_EXAMPLES=OFF \
+                -DONION_USE_BINDINGS_CPP=OFF \
+                -DONION_USE_GC=OFF \
+                -DONION_USE_JPEG=OFF \
+                -DONION_USE_PAM=OFF \
+                -DONION_USE_PNG=OFF \
+                -DONION_USE_REDIS=OFF \
+                -DONION_USE_SQLITE3=OFF \
+                -DONION_USE_SSL=OFF \
+                -DONION_USE_SYSTEMD=OFF \
+                -DONION_USE_TESTS=OFF \
+                -DONION_USE_XML2=OFF
+              cmake --build "$source_root/onion-build" --parallel 2
+              cmake --install "$source_root/onion-build"
+
+              checkout_pinned kore \
+                https://github.com/jorisvink/kore.git "$KORE_COMMIT"
+              make -C "$source_root/kore" -j2 TASKS=1 TLS_BACKEND=none
+              {
+                echo "FACIL_ROOT=$source_root/facil.io"
+                echo "ONION_ROOT=$install_root/onion"
+                echo "KORE_ROOT=$source_root/kore"
+              } >> "$GITHUB_ENV"
+              ;;
+          esac
+
+      - name: Build Linux HTTP examples
+        run: bash tests/build_linux_http_examples.sh "${{ matrix.shard }}"
+
+      - name: Run rate-limit and latency HTTP scenarios
+        run: bash tests/test_linux_http_examples.sh "${{ matrix.shard }}"
+
+      - name: Run HTTP frameworks against production P0
+        if: >-
+          github.ref == 'refs/heads/main' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'workflow_dispatch' &&
+            github.actor == 'edescourtis'))
+        env:
+          RATELIMITLY_AUTH_KEY: ${{ secrets.RATELIMITLY_AUTH_KEY }}
+        run: bash tests/test_production_p0_http_examples.sh "${{ matrix.shard }}"
+
+  win32-example:
+    name: Win32 example (MinGW + Wine)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    concurrency:
+      group: >-
+        ${{
+          github.ref == 'refs/heads/main' &&
+          'rl-c-client-production-win32' ||
+          format('{0}-{1}-win32-wine', github.workflow, github.ref)
+        }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install cross-build and Wine dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake libssl-dev mingw-w64 perl wine64
+          test -x /usr/lib/wine/wine64
+          test -x /usr/lib/wine/wineserver64
+
+      - name: Build static Windows OpenSSL
+        env:
+          OPENSSL_TAG: openssl-3.5.7
+          OPENSSL_PREFIX: ${{ runner.temp }}/openssl-mingw64
+        run: |
+          git clone --depth 1 --branch "$OPENSSL_TAG" \
+            https://github.com/openssl/openssl.git \
+            "${{ runner.temp }}/openssl-src"
+          cd "${{ runner.temp }}/openssl-src"
+          ./Configure mingw64 \
+            --cross-compile-prefix=x86_64-w64-mingw32- \
+            --prefix="$OPENSSL_PREFIX" \
+            --libdir=lib \
+            no-shared no-tests no-apps
+          make -s -j2
+          make -s install_sw
+
+      - name: Cross-build one reusable Win32 executable
+        env:
+          MINGW_OPENSSL_PREFIX: ${{ runner.temp }}/openssl-mingw64
+        run: |
+          cmake -S examples/win32 -B build-mingw \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=Windows \
+            -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
+            -DOPENSSL_ROOT_DIR="$MINGW_OPENSSL_PREFIX" \
+            -DOPENSSL_USE_STATIC_LIBS=TRUE
+          cmake --build build-mingw --parallel 2
+          test -s build-mingw/win32-example.exe
+          grep -Eq \
+            "^(LIB_EAY|OPENSSL_CRYPTO_LIBRARY(_RELEASE)?):FILEPATH=$MINGW_OPENSSL_PREFIX/lib/libcrypto\\.a$" \
+            build-mingw/CMakeCache.txt
+          grep -Fxq \
+            "OPENSSL_INCLUDE_DIR:PATH=$MINGW_OPENSSL_PREFIX/include" \
+            build-mingw/CMakeCache.txt
+          x86_64-w64-mingw32-objdump \
+            -f build-mingw/win32-example.exe > build-mingw/pe-header.txt
+          grep -Fq 'file format pei-x86-64' build-mingw/pe-header.txt
+          x86_64-w64-mingw32-objdump \
+            -p build-mingw/win32-example.exe > build-mingw/pe-imports.txt
+          if grep -Eiq 'DLL Name: .*lib(crypto|ssl).*\.dll' \
+              build-mingw/pe-imports.txt; then
+            echo 'Win32 example unexpectedly imports an OpenSSL DLL' >&2
+            exit 1
+          fi
+
+      - name: Cross-build and run Win32 integration
+        env:
+          MINGW_OPENSSL_PREFIX: ${{ runner.temp }}/openssl-mingw64
+          WINDOWS_EXAMPLE_BINARY: ${{ github.workspace }}/build-mingw/win32-example.exe
+          WINDOWS_RUNNER: /usr/lib/wine/wine64
+        run: |
+          bash tests/test_windows_responder.sh
+          bash tests/test_windows_example.sh
+
+      - name: Run Wine Win32 example against production P0
+        if: >-
+          github.ref == 'refs/heads/main' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'workflow_dispatch' &&
+            github.actor == 'edescourtis'))
+        env:
+          RATELIMITLY_AUTH_KEY: ${{ secrets.RATELIMITLY_AUTH_KEY }}
+          WINE_SERVER: /usr/lib/wine/wineserver64
+        run: |
+          bash tests/test_production_p0_win32_wine.sh \
+            "${{ github.workspace }}/build-mingw/win32-example.exe" \
+            /usr/lib/wine/wine64
+
+  win32-msvc:
+    name: Win32 example (MSVC)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    concurrency:
+      group: >-
+        ${{
+          github.ref == 'refs/heads/main' &&
+          'rl-c-client-production-win32' ||
+          format('{0}-{1}-win32-msvc', github.workflow, github.ref)
+        }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install OpenSSL for MSVC
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install openssl:x64-windows
+
+      - name: Fetch pinned Mongoose release
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch 7.22 `
+            https://github.com/cesanta/mongoose.git `
+            "$env:RUNNER_TEMP/mongoose"
+
+      - name: Configure with Visual Studio
+        shell: pwsh
+        run: |
+          cmake -S examples/win32 -B build-msvc -A x64 `
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows
+
+          $compilerFile = Get-ChildItem build-msvc/CMakeFiles `
+            -Filter CMakeCCompiler.cmake -Recurse | Select-Object -First 1
+          if (-not $compilerFile) {
+            throw "CMake did not write C compiler metadata"
+          }
+          $compilerDefinition = Select-String -Path $compilerFile.FullName `
+            -Pattern 'set\(CMAKE_C_COMPILER_ID "([^"]+)"\)' | Select-Object -First 1
+          if (-not $compilerDefinition) {
+            throw "CMake did not record a C compiler ID"
+          }
+          $CMAKE_C_COMPILER_ID = $compilerDefinition.Matches[0].Groups[1].Value
+          if ($CMAKE_C_COMPILER_ID -ne "MSVC") {
+            throw "Expected MSVC, found $CMAKE_C_COMPILER_ID"
+          }
+
+      - name: Build with strict Microsoft warnings
+        shell: pwsh
+        run: |
+          cmake --build build-msvc --config Release --parallel
+
+          cmake -S examples/mongoose -B build-msvc-mongoose -A x64 `
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows `
+            "-DMONGOOSE_ROOT=$env:RUNNER_TEMP/mongoose"
+          cmake --build build-msvc-mongoose --config Release --parallel
+
+      - name: Run native admission scenarios
+        shell: pwsh
+        run: |
+          & tests/test_windows_native_example.ps1 `
+            -ExamplePath build-msvc/Release/win32-example.exe `
+            -ResponderPath build-msvc/Release/r-test-responder.exe
+
+      - name: Start the portable framework executable
+        shell: pwsh
+        run: |
+          $mongooseOutput = & build-msvc-mongoose/Release/mongoose-example.exe 2>&1
+          if ($LASTEXITCODE -ne 1) {
+            throw "Expected Mongoose missing-configuration exit code 1, got $LASTEXITCODE"
+          }
+          if ($mongooseOutput -notmatch 'set RATELIMITLY_AUTH_KEY; RATELIMITLY_TENANT is optional') {
+            throw "Mongoose executable did not reach configuration validation"
+          }
+          # The missing-configuration exit code was expected and validated.
+          exit 0
+
+      - name: Run native Win32 example against production P0
+        if: >-
+          github.ref == 'refs/heads/main' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'workflow_dispatch' &&
+            github.actor == 'edescourtis'))
+        shell: pwsh
+        env:
+          RATELIMITLY_AUTH_KEY: ${{ secrets.RATELIMITLY_AUTH_KEY }}
+        run: |
+          & tests/test_production_p0_win32_example.ps1 `
+            -ExamplePath build-msvc/Release/win32-example.exe

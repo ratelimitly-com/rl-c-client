@@ -4,6 +4,11 @@
 starts threads. The embedding application owns the event loop and passes network,
 time, timer, and DNS events into the client.
 
+Working integrations for common loops and HTTP frameworks live in
+[`examples/`](examples/README.md). This document defines the host contract;
+examples show framework-specific descriptor, timer, callback, and shutdown
+ownership.
+
 ## Responsibilities
 
 The host application must provide:
@@ -76,6 +81,24 @@ r_client_on_timeout(client, req, now_ms);
 Retries may update the next deadline. Hosts should ask for the next deadline
 after timeout handling if the request is still active.
 
+## Clock domains
+
+Client control time uses Unix-epoch milliseconds throughout:
+
+- `r_io_ops_t.now_ms` returns current Unix-epoch milliseconds;
+- `r_client_request_deadline_ms` returns an absolute value in that domain; and
+- `r_client_on_timeout` receives current time in that same domain.
+
+Convert an absolute deadline into a relative host-loop delay by subtracting a
+fresh `now_ms` value and clamping expired deadlines to zero. Do not pass a raw
+relative timeout to `r_client_on_timeout`.
+
+Protected-work latency uses a separate duration clock. Measure it with
+`CLOCK_MONOTONIC` or the event loop's equivalent, so wall-clock correction
+cannot create negative or inflated samples. Convert only the elapsed duration
+to `r_service_latency_report_t.observed_latency`; never feed that monotonic
+clock value into `r_io_ops_t.now_ms`.
+
 ## Borrowed Buffers
 
 `r_client_check_rate_limit_async_borrowed` avoids copying resources, guards, and
@@ -84,6 +107,20 @@ request callback fires or the request is canceled.
 
 This is the preferred path for embedders that already have per-request memory
 with a lifetime that extends to callback completion.
+
+## Latency reports
+
+`r_client_report_latency` serializes and sends reports during the call. It
+creates no in-flight request, response callback, or request timer. Event-loop
+integrations therefore need no new read watcher or deadline path for reports;
+the existing UDP send hook is sufficient.
+
+Report only work that actually ran after a matching latency guard passed. Use
+the same service ID and tracker settings in guard and report. Log send failures,
+but do not change an HTTP response outcome after protected work completed.
+
+See the [latency tracking workflow](examples/README.md#latency-tracking-workflow)
+for runnable pass/report and deny/no-report behavior.
 
 ## Steering Feedback
 

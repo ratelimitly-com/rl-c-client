@@ -1,0 +1,12 @@
+# name|binary|output profile|metrics label
+latency_tracker|examples/latency_tracker/latency-tracker-example|latency|latency-tracker-example
+libuv|examples/libuv/libuv-example|loop|libuv-example
+libevent|examples/libevent/libevent-example|loop|libevent-example
+glib|examples/glib/glib-example|loop|glib-example
+libev|examples/libev/libev-example|loop|libev-example
+sd_event|examples/sd_event/sd-event-example|loop|sd-event-example
+libhv|examples/libhv/libhv-example|loop|libhv-example
+liburing|examples/liburing/liburing-example|loop|liburing-example
+epoll|examples/epoll/epoll-example|loop|epoll-example
+io_uring|examples/io_uring/io-uring-example|loop|io-uring-example
+llhttp|examples/llhttp/llhttp-example|parser|llhttp-example

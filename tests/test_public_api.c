@@ -69,10 +69,44 @@ static void test_hash_id_known_vector(void) {
     assert(memcmp(id, expected, sizeof(expected)) == 0);
 }
 
+static void test_format_default_tenant_dns(void) {
+    char dns_name[R_CLIENT_DEFAULT_TENANT_DNS_CAPACITY];
+    assert(r_client_format_default_tenant_dns(
+        UINT64_C(2213169720275691601),
+        dns_name,
+        sizeof(dns_name)
+    ) == RCLIENT_OK);
+    assert(strcmp(
+        dns_name,
+        "c-2213169720275691601.p0.ratelimitly.com"
+    ) == 0);
+
+    assert(r_client_format_default_tenant_dns(
+        UINT64_MAX,
+        dns_name,
+        sizeof(dns_name)
+    ) == RCLIENT_OK);
+    assert(strcmp(
+        dns_name,
+        "c-18446744073709551615.p0.ratelimitly.com"
+    ) == 0);
+
+    char too_small[4] = "bad";
+    assert(r_client_format_default_tenant_dns(
+        3u,
+        too_small,
+        sizeof(too_small)
+    ) == RCLIENT_ERR_CONFIG);
+    assert(too_small[0] == '\0');
+    assert(r_client_format_default_tenant_dns(3u, NULL, 0u)
+        == RCLIENT_ERR_CONFIG);
+}
+
 int main(void) {
     test_parse_cookie_key();
     test_parse_aes_key();
     test_reject_invalid_key();
     test_hash_id_known_vector();
+    test_format_default_tenant_dns();
     return 0;
 }

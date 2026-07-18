@@ -22,23 +22,37 @@ endif
 BIN_DIR := bin
 PERF_BIN := $(BIN_DIR)/perf_client
 TEST_RESPONDER_BIN := $(BIN_DIR)/r_test_responder
+PRODUCTION_P0_PROBE_BIN := $(BIN_DIR)/production_p0_probe
 TEST_RESPONDER_OBJS := \
 	tools/r_test_responder.o \
 	tools/r_test_responder_protocol.o
 
 LIB_OBJS = \
 	src/r_client.o \
+	src/r_client_runtime.o \
+	src/r_client_workflow.o \
 	src/r_protocol.o \
 	src/r_crypto.o \
 	src/r_policy.o
 
-.PHONY: all clean test perf_client test-responder
+TEST_BINS = \
+	tests/test_protocol \
+	tests/test_client_quota \
+	tests/test_public_api \
+	tests/test_workflow \
+	tests/test_runtime \
+	tests/test_responder \
+	tests/test_latency_tracker
+
+.PHONY: all clean test perf_client production-p0-probe test-responder
 
 all: librclient.a librclient.so
 
 perf_client: $(PERF_BIN)
 
 test-responder: $(TEST_RESPONDER_BIN)
+
+production-p0-probe: $(PRODUCTION_P0_PROBE_BIN)
 
 $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
@@ -53,7 +67,8 @@ librclient.a: $(LIB_OBJS)
 	$(AR) rcs $@ $(LIB_OBJS)
 
 librclient.so: $(LIB_OBJS)
-	$(CC) $(LDFLAGS) -shared -o $@ $(LIB_OBJS) -lcrypto
+	$(CC) $(LDFLAGS) -shared -o $@ $(LIB_OBJS) \
+		-lcrypto -lresolv -pthread
 
 src/%.o: src/%.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -fPIC -c $< -o $@
@@ -61,12 +76,21 @@ src/%.o: src/%.c
 tools/%.o: tools/%.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-test: tests/test_protocol tests/test_client_quota tests/test_public_api tests/test_responder $(TEST_RESPONDER_BIN)
+test: $(TEST_BINS) $(TEST_RESPONDER_BIN)
 	./tests/test_protocol
 	./tests/test_client_quota
 	./tests/test_public_api
+	./tests/test_workflow
 	./tests/test_responder
 	bash ./tests/test_responder_cli.sh
+	bash ./tests/test_runtime.sh
+	bash ./tests/test_latency_tracker.sh
+	bash ./tests/test_examples.sh
+	bash ./tests/test_windows_headers.sh
+	bash ./tests/test_windows_core.sh
+	bash ./tests/test_windows_runtime.sh
+	bash ./tests/test_windows_responder.sh
+	bash ./tests/test_windows_example.sh
 
 tests/test_protocol: tests/test_protocol.c src/r_protocol.o src/r_crypto.o
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $^ -o $@ -lcrypto
@@ -77,8 +101,28 @@ tests/test_client_quota: tests/test_client_quota.c librclient.a
 tests/test_public_api: tests/test_public_api.c librclient.a
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $^ -o $@ -lcrypto -lresolv -pthread
 
+tests/test_workflow: tests/test_workflow.c librclient.a
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $^ -o $@ -lcrypto -lresolv -pthread
+
+tests/test_runtime: tests/test_runtime.c librclient.a
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $^ -o $@ -lcrypto -lresolv -pthread
+
 tests/test_responder: tests/test_responder.c tools/r_test_responder_protocol.o librclient.a
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $^ -o $@ -lcrypto -lresolv -pthread
 
+tests/test_latency_tracker: examples/latency_tracker/main.c librclient.a
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $^ -o $@ -lcrypto -lresolv -pthread
+
+$(PRODUCTION_P0_PROBE_BIN): tests/production_p0_probe.c librclient.a | $(BIN_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Werror $(LDFLAGS) $^ -o $@ -lcrypto -lresolv -pthread
+
 clean:
-	rm -f $(LIB_OBJS) $(TEST_RESPONDER_OBJS) librclient.a librclient.so tests/test_protocol tests/test_client_quota tests/test_public_api tests/test_responder $(PERF_BIN) $(TEST_RESPONDER_BIN)
+	rm -f \
+		$(LIB_OBJS) \
+		$(TEST_RESPONDER_OBJS) \
+		$(TEST_BINS) \
+		librclient.a \
+		librclient.so \
+		$(PERF_BIN) \
+		$(TEST_RESPONDER_BIN) \
+		$(PRODUCTION_P0_PROBE_BIN)

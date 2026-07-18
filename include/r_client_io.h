@@ -4,7 +4,17 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+typedef int r_socklen_t;
+#else
 #include <sys/socket.h>
+typedef socklen_t r_socklen_t;
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -12,7 +22,7 @@ extern "C" {
 
 typedef struct r_addr {
     struct sockaddr_storage sa;
-    socklen_t len;
+    r_socklen_t len;
 } r_addr_t;
 
 typedef enum r_log_level {
