@@ -348,17 +348,16 @@ jobs:
             "-DMONGOOSE_ROOT=$env:RUNNER_TEMP/mongoose"
           cmake --build build-msvc-mongoose --config Release --parallel
 
-      - name: Start the native executable
+      - name: Run native admission scenarios
         shell: pwsh
         run: |
-          $output = & build-msvc/Release/win32-example.exe 2>&1
-          if ($LASTEXITCODE -ne 1) {
-            throw "Expected missing-configuration exit code 1, got $LASTEXITCODE"
-          }
-          if ($output -notmatch 'set RATELIMITLY_AUTH_KEY; RATELIMITLY_TENANT is optional') {
-            throw "Native executable did not reach configuration validation"
-          }
+          & tests/test_windows_native_example.ps1 `
+            -ExamplePath build-msvc/Release/win32-example.exe `
+            -ResponderPath build-msvc/Release/r-test-responder.exe
 
+      - name: Start the portable framework executable
+        shell: pwsh
+        run: |
           $mongooseOutput = & build-msvc-mongoose/Release/mongoose-example.exe 2>&1
           if ($LASTEXITCODE -ne 1) {
             throw "Expected Mongoose missing-configuration exit code 1, got $LASTEXITCODE"
@@ -367,5 +366,4 @@ jobs:
             throw "Mongoose executable did not reach configuration validation"
           }
           # The missing-configuration exit code was expected and validated.
-          # Do not let PowerShell propagate it as the step's final status.
           exit 0

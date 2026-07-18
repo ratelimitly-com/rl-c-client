@@ -84,8 +84,12 @@ cmake --build build --config Release
 CMake compiles the client and the example with the same selected compiler. This
 avoids mixing a MinGW `librclient.a` with Visual Studio's incompatible `.lib`
 format and C runtime. Both targets build with `/W4 /WX`; warnings fail the build.
-The repository's `windows-latest` job performs this native MSVC build and starts
-the executable before the separate MinGW/Wine integration test runs.
+The same project builds `r-test-responder.exe` from the repository fixture
+sources. The `windows-latest` job uses both MSVC-built executables for allow,
+resource-deny, and latency-deny scenarios. It checks the exact tracker fields,
+one matching report only on allow, and a post-exit drain for forbidden or
+duplicate reports. The separate MinGW/Wine job provides a second ABI/toolchain
+check of the same behavior.
 
 ## Platform support
 

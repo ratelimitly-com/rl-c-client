@@ -17,6 +17,7 @@ PERF_SOURCE="$ROOT/bin/perf_client.c"
 LINUX_ONE_SHOT_MATRIX="$ROOT/tests/linux-one-shot-examples.txt"
 LINUX_HTTP_MATRIX="$ROOT/tests/linux-http-examples.txt"
 MACOS_LOCAL_MATRIX="$ROOT/tests/macos-local-examples.txt"
+WINDOWS_NATIVE_RUNNER="$ROOT/tests/test_windows_native_example.ps1"
 
 fail() {
   echo "test_examples: $*" >&2
@@ -30,6 +31,8 @@ fail() {
   || fail "missing executable Linux HTTP example matrix"
 [[ -f "$MACOS_LOCAL_MATRIX" ]] \
   || fail "missing local-only macOS example matrix"
+[[ -f "$WINDOWS_NATIVE_RUNNER" ]] \
+  || fail "missing native Windows behavioral runner"
 grep -Fq -- 'bash tests/test_linux_one_shot_examples.sh' "$CI_WORKFLOW" \
   || fail "CI does not execute Linux one-shot examples"
 grep -Fq -- 'bash tests/test_linux_http_examples.sh' "$CI_WORKFLOW" \
@@ -84,6 +87,14 @@ if grep -Fq -- '--max-packets' "$ROOT/tests/test_windows_example.sh"; then
 fi
 grep -Fq -- 'runs-on: windows-latest' "$CI_WORKFLOW" \
   || fail "CI does not validate the Win32 example on native Windows"
+grep -Fq -- 'tests/test_windows_native_example.ps1' "$CI_WORKFLOW" \
+  || fail "native Windows CI does not run admission scenarios"
+for scenario in guard-pass deny guard-deny; do
+  grep -Fq -- "Name = \"$scenario\"" "$WINDOWS_NATIVE_RUNNER" \
+    || fail "native Windows behavioral runner omits $scenario"
+done
+grep -Fq -- 'matches_previous_guard' "$WINDOWS_NATIVE_RUNNER" \
+  || fail "native Windows runner does not pair reports with guards"
 grep -Fq -- 'CMAKE_C_COMPILER_ID -ne "MSVC"' "$CI_WORKFLOW" \
   || fail "native Windows CI does not verify the Microsoft C compiler"
 grep -Fq -- 'cmake -S examples/mongoose' "$CI_WORKFLOW" \
