@@ -159,6 +159,20 @@ tests, from the repository root:
 make test
 ```
 
+CI also builds every Linux one-shot integration against its real event-loop or
+parser dependency. [`tests/linux-one-shot-examples.txt`](../tests/linux-one-shot-examples.txt)
+is the executable matrix. Each binary runs against the authenticated synthetic
+responder in three deterministic scenarios:
+
+- admitted resource and latency guards: protected work runs and one matching
+  latency observation is emitted;
+- resource denial: protected work and latency reporting remain absent; and
+- latency-guard denial: protected work and latency reporting remain absent.
+
+The responder checks tracker TTL, sample limits, buffer size, threshold, and
+that the report uses the same private service identity as the preceding guard.
+Service IDs and credentials never appear in test logs.
+
 ## Latency tracking workflow
 
 [`latency_tracker/main.c`](latency_tracker/main.c) demonstrates both halves of

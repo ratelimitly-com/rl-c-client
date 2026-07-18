@@ -25,11 +25,12 @@ flowchart TD
 
 ## Build and run
 
-Install libhv, build `librclient.a`, then choose a build system:
+Install libhv, build `librclient.a`, then choose a build system. CI pins and
+tests libhv v1.3.4. For a non-system install, pass its prefix to Make:
 
 ```sh
 make -C ../..
-make
+make LIBHV_PREFIX=/path/to/libhv-install
 ./libhv-example
 ```
 

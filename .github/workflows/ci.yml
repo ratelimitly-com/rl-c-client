@@ -47,6 +47,79 @@ jobs:
       - name: Build perf client
         run: make perf_client
 
+  linux-one-shot-examples:
+    name: Linux one-shot examples
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install packaged dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake git libssl-dev pkg-config \
+            libuv1-dev libevent-dev libglib2.0-dev libev-dev \
+            libsystemd-dev liburing-dev
+
+      - name: Build pinned libhv and llhttp
+        env:
+          LIBHV_COMMIT: 71770e04becaa149e0ef8ffc4d3900c5466ddddb
+          LLHTTP_COMMIT: f831650b4f693bc1b4a6fe08f1b8ae25196e9f6a
+        run: |
+          prefix="${{ runner.temp }}/example-deps"
+
+          checkout_pinned() {
+            name=$1
+            repository=$2
+            commit=$3
+            directory="${{ runner.temp }}/$name"
+            git init -q "$directory"
+            git -C "$directory" remote add origin "$repository"
+            git -C "$directory" fetch -q --depth 1 origin "$commit"
+            git -C "$directory" checkout -q --detach FETCH_HEAD
+          }
+
+          checkout_pinned \
+            libhv https://github.com/ithewei/libhv.git "$LIBHV_COMMIT"
+          cmake \
+            -S "${{ runner.temp }}/libhv" \
+            -B "${{ runner.temp }}/libhv-build" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$prefix" \
+            -DBUILD_SHARED=ON \
+            -DBUILD_STATIC=OFF \
+            -DBUILD_EXAMPLES=OFF
+          cmake --build "${{ runner.temp }}/libhv-build" --parallel 2
+          cmake --install "${{ runner.temp }}/libhv-build"
+
+          checkout_pinned \
+            llhttp https://github.com/nodejs/llhttp.git "$LLHTTP_COMMIT"
+          cmake \
+            -S "${{ runner.temp }}/llhttp" \
+            -B "${{ runner.temp }}/llhttp-build" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$prefix" \
+            -DCMAKE_INSTALL_LIBDIR=lib \
+            -DLLHTTP_BUILD_SHARED_LIBS=OFF \
+            -DLLHTTP_BUILD_STATIC_LIBS=ON
+          cmake --build "${{ runner.temp }}/llhttp-build" --parallel 2
+          cmake --install "${{ runner.temp }}/llhttp-build"
+
+          {
+            echo "LIBHV_PREFIX=$prefix"
+            echo "PKG_CONFIG_PATH=$prefix/lib/pkgconfig"
+            echo "LD_LIBRARY_PATH=$prefix/lib"
+          } >> "$GITHUB_ENV"
+
+      - name: Build Linux one-shot examples
+        run: bash tests/build_linux_one_shot_examples.sh
+
+      - name: Run rate-limit and latency scenarios
+        run: bash tests/test_linux_one_shot_examples.sh
+
   win32-example:
     name: Win32 example (MinGW + Wine)
     runs-on: ubuntu-latest
