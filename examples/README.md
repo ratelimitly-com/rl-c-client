@@ -742,6 +742,16 @@ and error-handling details.
 
 | Term | Meaning |
 | --- | --- |
+| README | Folder-level guide that explains how to build, run, adapt, and test one integration. |
+| GLib | Portable core library whose main loop drives one event-loop example. |
+| GIO | GLib input/output APIs, including the `GIOChannel` socket wrapper used by that example. |
+| CivetWeb | Embedded C HTTP server used by a dedicated bridge-thread example. |
+| GNU | Free-software project under which libmicrohttpd is developed. |
+| H2O | Event-driven C HTTP server whose embeddable loop drives one example. |
+| POSIX | Portable Operating System Interface family used by the Unix-focused examples. |
+| CrossOver | Commercial macOS compatibility environment that can run Windows executables in managed Wine bottles. |
+| IPv4 | Internet Protocol version 4, one address family for the runtime's UDP sockets. |
+| IPv6 | Internet Protocol version 6, the other address family for the runtime's UDP sockets. |
 | admission | Combined resource and latency decision made before protected work starts. |
 | protected work | Application operation—such as a database call or response build—that runs only after admission. |
 | rate bucket | Stable resource identity whose quota is consumed by matching requests. |
