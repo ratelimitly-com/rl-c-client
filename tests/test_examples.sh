@@ -13,6 +13,7 @@ H2O_CMAKE="$ROOT/examples/h2o/CMakeLists.txt"
 LWAN_MAKEFILE="$ROOT/examples/lwan/Makefile"
 LWAN_CMAKE="$ROOT/examples/lwan/CMakeLists.txt"
 GLIB_SOURCE="$ROOT/examples/glib/main.c"
+KORE_SOURCE="$ROOT/examples/kore/main.c"
 PERF_SOURCE="$ROOT/bin/perf_client.c"
 LINUX_ONE_SHOT_MATRIX="$ROOT/tests/linux-one-shot-examples.txt"
 LINUX_HTTP_MATRIX="$ROOT/tests/linux-http-examples.txt"
@@ -111,6 +112,8 @@ done
 if grep -Fq -- '--max-packets' "$ROOT/tests/test_windows_example.sh"; then
   fail "Win32 responder exits before late-packet assertions"
 fi
+grep -Fq -- 'KORE_SYSCALL_ALLOW(connect)' "$KORE_SOURCE" \
+  || fail "Kore seccomp blocks key-derived production DNS"
 grep -Fq -- 'runs-on: windows-latest' "$CI_WORKFLOW" \
   || fail "CI does not validate the Win32 example on native Windows"
 grep -Fq -- 'tests/test_windows_native_example.ps1' "$CI_WORKFLOW" \

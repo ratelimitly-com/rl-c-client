@@ -15,12 +15,14 @@
 #if defined(__linux__)
 #include <kore/seccomp.h>
 
-/* Kore workers install a seccomp filter.  The base filter already permits
- * poll, sendto, recvfrom, fcntl, and file lookup; the adapter additionally
- * creates and binds its IPv4/IPv6 UDP sockets. */
+/* Kore workers install a seccomp filter. The base filter already permits
+ * poll, sendto, recvfrom, fcntl, and file lookup. The adapter additionally
+ * creates and binds its IPv4/IPv6 UDP sockets. glibc's resolver connects its
+ * UDP socket to a nameserver, so key-derived SRV discovery also needs connect. */
 KORE_SECCOMP_FILTER("ratelimitly",
     KORE_SYSCALL_ALLOW_ARG(socket, 0, AF_INET),
     KORE_SYSCALL_ALLOW_ARG(socket, 0, AF_INET6),
+    KORE_SYSCALL_ALLOW(connect),
     KORE_SYSCALL_ALLOW(bind),
     KORE_SYSCALL_ALLOW(getsockname)
 );

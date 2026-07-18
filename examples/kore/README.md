@@ -71,10 +71,11 @@ Each task owns its runtime, sockets, admission state, and polling loop. Kore own
 audit but creates a client and resolver context for every exchange; high-volume
 services should use one long-lived task with a channel-fed queue.
 
-Linux Kore workers use seccomp. The module declares socket creation, bind, and
-`getsockname`; Kore's base filter supplies poll, UDP send/receive, fcntl, and
-lookup syscalls. Reconcile this list with the exact Kore build and resolver used
-by a hardened deployment.
+Linux Kore workers use seccomp. The module declares socket creation, `connect`,
+bind, and `getsockname`; Kore's base filter supplies poll, UDP send/receive,
+fcntl, and file-lookup syscalls. `connect` is required because glibc performs
+DNS queries over a connected UDP socket. Reconcile this list with the exact
+Kore build and resolver used by a hardened deployment.
 
 ## Platform support
 
@@ -86,5 +87,7 @@ is outside Kore's supported module model.
 
 - [Kore API documentation](https://docs.kore.io/4.2.3/api.html) covers
   requests, tasks, channels, and module lifecycle.
+- [Kore seccomp documentation](https://docs.kore.io/4.0.0/api/seccomp.html)
+  explains how application modules extend the worker allow-list.
 - [Kore upstream source](https://github.com/jorisvink/kore) documents platform
   support and current framework behavior.
