@@ -7,6 +7,7 @@ README="${R_EXAMPLE_README_PATH:-$ROOT/examples/README.md}"
 ROOT_README="$ROOT/README.md"
 API_GUIDE="$ROOT/docs/api.md"
 IO_GUIDE="$ROOT/IO_ABSTRACTION.md"
+CLOUD_CI_GUIDE="$ROOT/docs/cloud-server-ci-plan.md"
 CI_WORKFLOW="$ROOT/.github/workflows/ci.yml"
 H2O_MAKEFILE="$ROOT/examples/h2o/Makefile"
 H2O_CMAKE="$ROOT/examples/h2o/CMakeLists.txt"
@@ -72,12 +73,55 @@ require_main_only_concurrency() {
   || fail "missing executable Wine P0 runner behavioral test"
 [[ -f "$PRODUCTION_P0_WIN32_NATIVE_RUNNER" ]] \
   || fail "missing native Win32 production P0 runner"
+[[ -f "$CLOUD_CI_GUIDE" ]] \
+  || fail "missing production P0 CI guide"
+for required_text in \
+  'Status: implemented' \
+  'repository secret' \
+  'key-derived tenant' \
+  'trusted main' \
+  'synthetic-only' \
+  '11 one-shot' \
+  '10 HTTP' \
+  'native MSVC' \
+  'MinGW/Wine' \
+  '37 ms' \
+  'positive token deficit' \
+  'does not prove that production accepted' \
+  'kqueue and libdispatch remain local-only' \
+  'server binary' \
+  'fire-and-forget' \
+  'layered'; do
+  grep -Fiq -- "$required_text" "$CLOUD_CI_GUIDE" \
+    || fail "production P0 CI guide omits: $required_text"
+done
+grep -Fq -- '```mermaid' "$CLOUD_CI_GUIDE" \
+  || fail "production P0 CI guide has no architecture diagram"
+for stale_text in \
+  'lease broker' \
+  'RATELIMITLY_EXAMPLE_SERVER_ID' \
+  'short-lived tenant'; do
+  if grep -Fiq -- "$stale_text" "$CLOUD_CI_GUIDE"; then
+    fail "production P0 CI guide retains stale design: $stale_text"
+  fi
+done
+if grep -Eq -- \
+    'c-[0-9]{8,}|s-[0-9]{6,}|rl-(aes|hmac)[A-Za-z0-9_-]{32,}' \
+    "$CLOUD_CI_GUIDE"; then
+  fail "production P0 CI guide contains a concrete credential or endpoint"
+fi
 grep -Fxq -- '/bin/production_p0_probe' "$ROOT/.gitignore" \
   || fail "production P0 build artifact is not ignored"
 grep -Fq -- 'bash tests/test_linux_one_shot_examples.sh' "$CI_WORKFLOW" \
   || fail "CI does not execute Linux one-shot examples"
 grep -Fq -- 'bash tests/test_linux_http_examples.sh' "$CI_WORKFLOW" \
   || fail "CI does not execute Linux HTTP examples"
+grep -Fq -- '## CI validation layers' "$README" \
+  || fail "examples README does not explain layered CI validation"
+grep -Fq -- '../docs/cloud-server-ci-plan.md' "$README" \
+  || fail "examples README does not link the production P0 CI guide"
+[[ $(grep -Fc -- '```mermaid' "$README") -ge 2 ]] \
+  || fail "examples README has no CI validation diagram"
 expected_linux_one_shot=$'latency_tracker\nlibuv\nlibevent\nglib\nlibev\nsd_event\nlibhv\nliburing\nepoll\nio_uring\nllhttp'
 actual_linux_one_shot="$(sed -n '/^[^#]/s/|.*//p' "$LINUX_ONE_SHOT_MATRIX")"
 [[ "$actual_linux_one_shot" == "$expected_linux_one_shot" ]] \

@@ -189,6 +189,36 @@ Each server runs in its own process group. The harness drains UDP after the
 response and again during shutdown, so worker processes cannot hide duplicate
 or forbidden late reports from the responder assertions.
 
+## CI validation layers
+
+The example suite separates deterministic integration behavior from real P0
+compatibility. Pull requests and forks receive only the synthetic responder;
+trusted `main` pushes and owner-dispatched `main` runs add production checks.
+
+```mermaid
+flowchart LR
+    Change["Pull request or fork"] --> Synthetic["Per-example synthetic scenarios"]
+    Main["Trusted main"] --> Synthetic
+    Main --> Live["Per-example production P0 admission"]
+    Main --> Probe["Dedicated P0 semantic probe"]
+    Synthetic --> Contract["Allow, rate deny, latency deny, and paired report"]
+    Live --> Compatibility["Real discovery, authentication, work, and report send"]
+    Probe --> Readback["Exact latency read-back and positive-deficit rate outcome"]
+```
+
+| Layer | Scope | What it proves |
+| --- | --- | --- |
+| Synthetic responder | 11 Linux one-shot, 10 Linux HTTP, and Win32 | Every example wires one resource and one latency guard, blocks denied work, and reports exactly once only after admission. |
+| Per-example P0 | The same 22 CI-eligible integrations; Win32 under Wine and native MSVC | Key-derived production discovery, authenticated admission, protected work, and a locally successful fire-and-forget report path. |
+| Dedicated P0 probe | Names unique to the CI run | Production reads back exactly 37 ms and returns a one-token rate-limited outcome with a positive deficit. |
+| Local macOS | kqueue and libdispatch | The same deterministic contract on a developer Mac; no production credential. |
+
+The per-example P0 lane does not claim server acknowledgement of every latency
+datagram: latency reporting is fire-and-forget. Server-observed semantics belong
+to the dedicated read-back probe. See the
+[production P0 CI guide](../docs/cloud-server-ci-plan.md) for trust boundaries,
+credential handling, concurrency, exact coverage, and failure interpretation.
+
 kqueue and libdispatch are intentionally verified only on a developer Mac.
 They are absent from the CI workflow; run their strict builds and the same
 allow/resource-deny/latency-deny contract locally with:

@@ -1,520 +1,285 @@
-# Cloud-Hosted Server Integration Test Plan
+# Production P0 Example Integration CI
 
-Status: proposed
+Status: implemented
 
 ## Decision
 
-Run a dedicated, non-production Ratelimitly server in the cloud and test every
-example against it from GitHub Actions. Keep the server source, image, and
-binary private. Do not build, download, or publish the server from the public
-`rl-c-client` repository.
+The example suite uses the existing production P0 service for trusted CI runs.
+GitHub Actions supplies `RATELIMITLY_AUTH_KEY` from a CI-only repository secret.
+The client decodes the key ID, builds the key-derived tenant name, performs SRV
+discovery under P0, and resolves the selected server. The workflow does not
+store a concrete tenant, host, port, or server identity.
 
-Put a small HTTPS lease broker in front of server administration. GitHub
-Actions authenticates to the broker with OpenID Connect (OIDC). The broker
-creates a short-lived, low-privilege tenant for each CI shard and returns only
-the information needed by the examples.
+The public repository never checks out, downloads, builds, or publishes the
+private server binary or source. CI interacts only with the public DNS and UDP
+data plane exposed to normal clients.
+
+Live traffic is restricted to trusted main pushes and manual runs of `main` by
+`edescourtis`. Pull requests, forks, and feature-branch dispatches are
+synthetic-only. This prevents code that has not reached the trusted branch from
+receiving the production credential.
 
 ```mermaid
-flowchart LR
-    CI["GitHub Actions<br/>Linux, macOS, and Windows"] -->|"GitHub OIDC token"| Broker["CI lease broker"]
-    Broker -->|"Temporary tenant, key, endpoint, and server ID"| CI
-    CI -->|"Authenticated UDP requests"| Server["Dedicated cloud RL server"]
-    Broker -->|"Register tenant, read metrics, remove tenant"| Server
-    PrivateCI["Private rl deployment pipeline"] -->|"Deploy pinned private image"| Server
+flowchart TD
+    Change["Pull request, fork, or feature branch"] --> Synthetic["Authenticated synthetic responder tests"]
+    Main["Trusted main push or owner dispatch"] --> Synthetic
+    Main --> Examples["22 production P0 example integrations"]
+    Main --> Probe["Dedicated production protocol probe"]
+    Examples --> LocalProof["Real discovery, admission, work, and local report-send success"]
+    Probe --> ServerProof["Server-observed 37 ms latency and rate-limited outcome"]
+    Mac["Developer Mac"] --> MacOnly["Local kqueue and libdispatch scenarios"]
 ```
 
-## Goals
+## Why the validation is layered
 
-- Exercise all examples against the real `rl` server protocol in CI.
-- Prove every example sends both a rate-limit request and a latency report.
-- Cover Linux, macOS, native Windows with Microsoft compilers, and MinGW/Wine.
-- Keep private server source and binaries out of public CI artifacts and logs.
-- Support concurrent pull-request runs without shared counters or rate buckets.
-- Avoid long-lived server or administrator credentials in GitHub.
-- Keep failures diagnosable, bounded, and reproducible.
+No single check proves every useful property safely and deterministically. The
+suite combines three layers:
 
-## Non-goals
+1. The synthetic responder proves each example's observable packet behavior
+   and all allow/deny branches without depending on cloud state.
+2. Each production example proves key-derived discovery, authenticated P0
+   admission, protected work, and a successful local latency-report send path.
+3. A dedicated production probe proves server-observable rate and latency
+   semantics with isolated names.
 
-- Replacing deterministic protocol tests that use the synthetic responder.
-- Load, soak, capacity, failover, or production availability testing.
-- Giving public pull-request code any server-administration capability.
-- Testing the production Ratelimitly deployment.
+This distinction matters because `r_client_report_latency()` is
+fire-and-forget. A successful return proves that the client encoded and sent the
+datagram; it is not a server acknowledgement. Therefore, an individual
+production example run does not prove that production accepted its report. The
+dedicated probe closes that protocol-level gap by reading the reported value
+back through a later admission request.
 
-## Trust and Security Model
+## Event and trust policy
 
-Treat all pull-request code, build scripts, and produced binaries as untrusted.
-Any credential visible to an example may be copied or deliberately misused.
-The design must remain safe under that assumption.
+| Trigger | Revision trusted? | Synthetic tests | Production P0 | Secret exposed to a test step? |
+| --- | --- | --- | --- | --- |
+| Pull request, including a fork | No | Yes | No | No |
+| Feature-branch push | No | Workflow is not triggered | No | No |
+| Feature-branch dispatch | No | Yes | No | No |
+| Push to `main` | Yes | Yes | Yes | Only the bounded live steps |
+| Manual dispatch of `main` by `edescourtis` | Yes | Yes | Yes | Only the bounded live steps |
+| Manual dispatch of `main` by another actor | Revision is trusted, actor is not authorized | Yes | No | No |
 
-The lease broker must:
+The workflow uses read-only repository contents permission. Production step
+conditions are evaluated before the repository secret is attached to the step.
+There is no `pull_request_target` or privileged follow-up workflow that executes
+pull-request code with the key.
 
-- Validate the GitHub OIDC issuer and a broker-specific audience.
-- Require the expected repository ID, repository owner, event, and trusted
-  reusable-workflow identity.
-- Prefer immutable repository IDs over repository names alone.
-- Issue one random, never-reused tenant and key per matrix shard.
-- Apply a short expiry, low quotas, issuance limits, and infrastructure-level
-  packet/QPS limits.
-- Never return the server administrator key.
-- Never expose global server metrics or unrestricted server logs.
-- Keep a lease database and remove expired tenants even when CI is cancelled.
+## Coverage
 
-Use the `pull_request` event. Never combine `pull_request_target` or a
-privileged `workflow_run` job with checkout or execution of untrusted pull
-request code.
+### Linux one-shot matrix
 
-OIDC removes the need for a long-lived cloud credential in GitHub, but the
-tenant key returned by the broker is still visible to the test process.
-Therefore, tenant isolation, low quotas, short expiry, and garbage collection
-are mandatory.
+The 11 one-shot entries run on Ubuntu:
 
-If GitHub withholds OIDC tokens from a forked pull request, keep synthetic tests
-on that pull request and run the live suite after maintainer approval or after
-merge. Do not weaken the trust policy to make fork execution work.
+- latency tracker
+- libuv
+- libevent
+- GLib/GIO
+- libev
+- sd-event
+- libhv
+- liburing
+- pure epoll
+- pure io_uring
+- llhttp
 
-References:
+The executable source of truth is
+[`tests/linux-one-shot-examples.txt`](../tests/linux-one-shot-examples.txt).
 
-- [GitHub Actions OIDC reference](https://docs.github.com/en/actions/reference/security/oidc)
-- [GitHub Actions secure-use reference](https://docs.github.com/en/actions/reference/security/secure-use)
+### Linux HTTP matrix
 
-## Cloud Fixture
+The 10 HTTP integrations run in three Ubuntu shards:
 
-### Deployment
+- Mongoose
+- CivetWeb
+- GNU libmicrohttpd
+- Ulfius
+- H2O
+- Lwan
+- libreactor
+- facil.io
+- Onion
+- Kore
 
-Deploy from the private `rl` repository into a private image registry and a
-dedicated CI environment. The public repository receives no registry access.
+The executable source of truth is
+[`tests/linux-http-examples.txt`](../tests/linux-http-examples.txt). Each row
+records its shard, executable, local HTTP port, metrics label, expected
+resource-denial status, and launch model.
 
-The deployment should:
+### Windows matrix
 
-- Run a pinned, recorded `rl` commit for pull-request tests.
-- Use the normal UDP data plane with a dedicated public hostname and port.
-- Use a stable DNS name even when the underlying instance changes.
-- Restrict administrative traffic to the lease broker.
-- Export health, lease count, cleanup failures, packet rate, and error metrics
-  to private monitoring.
-- Retain sanitized operational logs for a short period.
-- Publish its deployed revision and current server epoch through the broker.
+The Win32 example has two independent production lanes:
 
-Run a separate scheduled compatibility workflow against the newest deployed
-`rl/main`. This detects protocol drift without making pull-request results
-depend on a moving server revision.
+- a 64-bit MinGW executable runs through MinGW/Wine on Ubuntu; and
+- a native MSVC executable runs on `windows-latest`.
 
-### Server Epoch
+The Wine build uses a Windows-targeted static OpenSSL archive, checks the PE
+architecture, and rejects dynamic OpenSSL imports. The native lane verifies
+that CMake selected the Microsoft C compiler and also builds a portable
+Mongoose example with MSVC.
 
-The real server identity changes when the server restarts, and in-memory test
-tenants are lost. The broker must associate every lease with a server epoch.
+### macOS scope
 
-On an epoch change:
-
-1. Invalidate all outstanding leases.
-2. Refuse their metric and cleanup operations with an explicit
-   `epoch_changed` result.
-3. Let CI retry the entire affected shard once with a new lease.
-4. Never continue counter assertions across epochs.
-
-### Lease API
-
-Exact names may change during implementation, but the behavior should remain
-stable.
-
-#### Create
-
-`POST /v1/leases`
-
-- Authenticate with a GitHub OIDC bearer token.
-- Derive repository and workflow identity from the token, not request fields.
-- Accept a bounded shard name such as `linux-one-shot` or `windows-msvc`.
-- Allow at most one active lease for a run ID, run attempt, and shard tuple.
-
-Example response:
-
-```json
-{
-  "lease_id": "01J...",
-  "expires_at": "2026-07-18T12:30:00Z",
-  "server_revision": "3fc876d...",
-  "server_epoch": "epoch-...",
-  "tenant": "ci-...ratelimitly.invalid",
-  "auth_key": "rl-aes1...",
-  "host": "udp-ci.example.net",
-  "port": 38080,
-  "server_id": 123456789
-}
-```
-
-Recommended lease duration: 30 minutes, extendable once to a hard maximum of
-45 minutes. Use random tenant IDs and AES keys. Never reuse tenant IDs.
-
-Recommended initial tenant limits:
-
-- 64 rate buckets
-- 64 latency services
-- 64 metric labels
-- 32 latency-buffer entries
-- 300 ms deduplication TTL
-- Enough request allowance for one shard, with a small safety margin
-
-These are tenant resource limits, not infrastructure abuse protection. Enforce
-independent packet and request ceilings before traffic reaches the server.
-
-#### Metrics
-
-`GET /v1/leases/{lease_id}/metrics`
-
-Return only metrics belonging to the leased tenant. Do not return the
-administrator key, other tenants, global counters, memory contents, or raw
-server logs.
-
-The response must contain enough information to prove, per example:
-
-- One accepted rate-limit request.
-- One successful decision.
-- One accepted latency report.
-- No new authentication failure.
-- No new protocol parse error.
-
-Metric reads must tolerate eventual processing of the fire-and-forget latency
-report. CI should poll with a short deadline and fail with the last sanitized
-metric snapshot.
-
-#### Delete
-
-`DELETE /v1/leases/{lease_id}`
-
-Remove the tenant and verify removal. CI calls this from an `always()` cleanup
-job. Broker garbage collection remains authoritative because workflows can be
-cancelled or runners can disappear before cleanup.
-
-## Required Client Runtime Change
-
-The fixed-endpoint example runtime currently constructs a synthetic server
-target with server ID `1`. The real server rejects a response when its identity
-does not match the client target.
-
-Add:
-
-```text
-RATELIMITLY_EXAMPLE_SERVER_ID=<unsigned server identity>
-```
-
-The lease broker returns the current value. Preserve ID `1` as the default so
-existing synthetic-responder tests remain compatible.
-
-RED tests must cover:
-
-- A valid non-`1` server ID.
-- Missing value falling back to `1`.
-- Empty, malformed, signed, and trailing-character input.
-- Overflow and platform-width behavior.
-- Clean behavior on POSIX and Win32/MSVC builds.
-
-Relevant code:
-
-- [`src/r_client_runtime.c`](../src/r_client_runtime.c)
-- [`include/r_client_runtime.h`](../include/r_client_runtime.h)
-- [`tests/test_responder.py`](../tests/test_responder.py)
-
-## CI Environment Contract
-
-After acquiring a lease, the test harness exports:
+The core library still builds and runs its unit tests on `macos-latest`.
+Platform-specific kqueue and libdispatch remain local-only because that was the
+chosen CI boundary. On a developer Mac, run:
 
 ```sh
-RATELIMITLY_TENANT="$LEASE_TENANT"
-RATELIMITLY_AUTH_KEY="$LEASE_AUTH_KEY"
-RATELIMITLY_EXAMPLE_SERVER_HOST="$LEASE_HOST"
-RATELIMITLY_EXAMPLE_SERVER_PORT="$LEASE_PORT"
-RATELIMITLY_EXAMPLE_SERVER_ID="$LEASE_SERVER_ID"
+bash tests/test_macos_examples.sh
 ```
 
-Mask the tenant key before placing it in the environment. Never print the
-environment wholesale. Redact the key from command traces and uploaded logs.
-
-Before executing examples, perform a bounded protocol preflight. Fail as a
-fixture error when DNS, UDP reachability, lease validity, server revision, or
-server epoch is wrong. Keep fixture failures distinct from example failures.
-
-## Example Coverage Matrix
-
-Every entry in [`examples/manifest.txt`](../examples/manifest.txt) must be
-assigned to at least one live-server shard. A contract test fails when an entry
-is missing or an unknown entry appears.
-
-### Linux one-shot shard
-
-Runner: `ubuntu-24.04`
-
-- `latency_tracker`
-- `libuv`
-- `libevent`
-- `glib`
-- `libev`
-- `sd_event`
-- `libhv`
-- `liburing`
-- `epoll`
-- `io_uring`
-- `llhttp`
-
-Each executable runs with a bounded timeout. Expected output must show an
-allowed decision and a latency-report path. After every executable, poll the
-lease metrics and assert exact per-example deltas.
-
-### Linux HTTP shard A
-
-Runner: `ubuntu-24.04`
-
-- `mongoose`
-- `civetweb`
-- `libmicrohttpd`
-- `ulfius`
-
-### Linux HTTP shard B
-
-Runner: `ubuntu-24.04`
-
-- `h2o`
-- `lwan`
-- `libreactor`
-
-### Linux HTTP shard C
-
-Runner: `ubuntu-24.04`
-
-- `facil_io`
-- `onion`
-- `kore`
-
-For every HTTP framework:
-
-1. Start the framework with logs redirected to a per-example file.
-2. Poll a local readiness endpoint instead of sleeping a fixed duration.
-3. Request `/limited` and require HTTP 200 plus the documented allowed body.
-4. Poll tenant metrics for the rate request and latency report.
-5. Send `TERM`, wait with a deadline, then use `KILL` only as fallback.
-
-Run HTTP examples sequentially inside each shard because several use the same
-local port. Separate shards may run concurrently because each receives a
-different tenant lease.
-
-### macOS native shard
-
-Runner: `macos-latest`
-
-- `kqueue`
-- `libdispatch`
-
-This shard exercises native event-loop behavior while using the same remote
-UDP fixture.
-
-### Windows MSVC shard
-
-Runner: `windows-latest`
-
-- Build the `win32` example using Microsoft C/C++ tools.
-- Run the resulting executable natively against the cloud fixture.
-- Assert both rate and latency behavior through tenant metrics.
-
-This is the primary Win32 live integration test.
-
-### MinGW/Wine compatibility shard
-
-Runner: `ubuntu-24.04`
-
-- Cross-compile the `win32` example with MinGW.
-- Run it under Wine against the same cloud fixture contract.
-- Keep this as additional toolchain/compatibility coverage, not a substitute
-  for native MSVC execution.
-
-Use the Dell runner only if GitHub's hosted Linux kernel demonstrably blocks
-the `io_uring` example. Cloud-hosting the Ratelimitly server does not change the
-local kernel requirements of an event-loop example.
-
-## Assertions
-
-### Client-side assertions
-
-- Process exits successfully.
-- No unbounded waits or background processes remain.
-- One-shot examples print their documented allowed and latency messages.
-- HTTP examples return HTTP 200 from `/limited` with the documented body.
-- No example silently falls back to a synthetic endpoint.
-
-### Server-side assertions
-
-For each example, require lease-scoped deltas:
-
-- rate requests: `+1`
-- successful rate decisions: `+1`
-- accepted latency reports: `+1`
-- authentication failures: unchanged
-- parse errors: unchanged
-
-Use unique per-example bucket, service, or metric labels when the protocol
-allows them. Never prove success using global server counters on the shared
-cloud instance.
-
-### Failure artifacts
-
-Upload only sanitized artifacts:
-
-- example stdout/stderr
-- build logs
-- HTTP response status and body
-- final lease-scoped metric snapshot
-- fixture error category and server revision/epoch
-
-Do not upload tenant keys, OIDC tokens, administrator traffic, private server
-logs, binaries, core dumps, or environment dumps.
-
-## Existing Synthetic Tests Remain Required
-
-Keep the local responder suite for deterministic coverage of:
-
-- Allowed and denied decisions.
-- Malformed or mismatched replies.
-- Timeouts and retry behavior.
-- Server-ID validation.
-- No latency report after a denied decision.
-- Win32 behavior without external network availability.
-
-The cloud suite proves real client/server compatibility. It must not replace
-fast, deterministic failure-path tests.
-
-## Reliability Rules
-
-- Pin all GitHub Actions to immutable commit SHAs.
-- Pin framework versions or source commits.
-- Reject a fixture whose deployed server revision differs from the expected
-  pull-request revision.
-- Give every network operation a deadline.
-- Retry lease creation and metric propagation only for classified transient
-  failures.
-- Do not hide example failures with blanket command retries.
-- Retry a complete shard at most once after a confirmed server-epoch change.
-- Use GitHub concurrency controls to cancel superseded runs while relying on
-  broker garbage collection for tenant cleanup.
-- Add external health monitoring so an unavailable fixture is detected before
-  many unrelated pull requests fail.
-
-## TDD and Commit Discipline
-
-For every logical change:
-
-1. Add or modify the smallest relevant test.
-2. Run it and record the expected RED result.
-3. Implement only that behavior.
-4. Run focused and regression tests until GREEN.
-5. Commit the test and implementation together as one logical change.
-
-Never commit a deliberately red tree. Never combine unrelated changes. One
-change equals one commit.
-
-Proposed client-repository commits:
-
-1. `feat(runtime): configure fixed server identity`
-2. `test(integration): define cloud fixture contract`
-3. `test(integration): exercise one-shot examples`
-4. `test(integration): exercise HTTP examples`
-5. `ci(examples): add Linux cloud shards`
-6. `ci(examples): add macOS cloud shard`
-7. `ci(examples): add native MSVC cloud shard`
-8. `ci(examples): add MinGW Wine cloud shard`
-9. `docs(ci): document cloud integration tests`
-
-Proposed private server/infrastructure commits should also remain atomic:
-
-1. OIDC validation and lease authorization.
-2. Tenant lease creation with quotas and expiry metadata.
-3. Lease-scoped metric projection.
-4. Verified tenant removal and retrying garbage collection.
-5. Private pinned server deployment.
-6. Monitoring, alerts, and scheduled compatibility workflow.
-
-Each repository must remain GREEN after every commit.
-
-## Rollout
-
-### Phase 1: Runtime compatibility
-
-- Add configurable fixed server identity using RED/GREEN TDD.
-- Extend the synthetic responder tests with a real, non-`1` identity.
-- Verify POSIX, MinGW/Wine, and MSVC builds.
-
-### Phase 2: Private cloud fixture
-
-- Deploy pinned server revision privately.
-- Implement OIDC lease authorization.
-- Implement isolated tenant provisioning, scoped metrics, cleanup, and GC.
-- Validate restart/epoch behavior and abuse limits.
-
-### Phase 3: Harness
-
-- Add a provider-neutral client test harness consuming the lease contract.
-- Add manifest completeness tests.
-- Add one-shot and HTTP execution drivers with bounded cleanup.
-- Prove harness failure categories using a fake broker or contract fixture.
-
-### Phase 4: Platform CI
-
-- Enable Linux shards.
-- Enable macOS shard.
-- Enable native MSVC shard.
-- Enable MinGW/Wine shard.
-- Use the Dell runner for `io_uring` only if hosted-runner evidence requires it.
-
-### Phase 5: Drift detection
-
-- Keep pull-request tests pinned.
-- Add scheduled testing against newest compatible server deployment.
-- Alert on server/client protocol drift without destabilizing pull requests.
-
-## Acceptance Criteria
-
-- All 24 manifest examples build in their supported environment.
-- All 24 examples pass against the real cloud server.
-- Every live example proves one successful rate-limit request and one accepted
-  latency report through lease-scoped server metrics.
-- Win32 passes natively with MSVC and additionally under MinGW/Wine.
-- Concurrent CI shards cannot affect one another's buckets or assertions.
-- Cancelled workflows leave no permanent tenants.
-- Server restarts produce explicit fixture errors and safe whole-shard retry.
-- No server source, image, binary, administrator key, or private server log is
-  exposed by public CI.
-- Fork pull requests never receive durable credentials or privileged access.
-- Synthetic denial and malformed-response coverage remains GREEN.
-- CI documentation explains local, cloud, fork, retry, and failure behavior.
-
-## Inputs Needed Before Implementation
-
-- Cloud provider and region.
-- Public UDP hostname and port.
-- HTTPS hostname for the lease broker.
-- Expected maximum concurrent CI shards.
-- Repository ID and trusted reusable-workflow identity for OIDC policy.
-- Initial pinned `rl` server revision.
-- Desired retention period for sanitized fixture metrics and logs.
-
-These choices affect deployment configuration, not the client-side lease
-contract or test harness design.
-
-## Rejected Alternatives
-
-### Public server bundle
-
-Rejected because publishing a bundle exposes the private server binary.
-
-### Private-repository checkout from public pull-request CI
-
-Rejected because it requires privileged repository credentials in a workflow
-that executes untrusted code.
-
-### Shared static tenant and key
-
-Rejected because the key becomes effectively public, concurrent runs interfere
-with one another, exact metrics become nondeterministic, and cleanup is weak.
-
-### `pull_request_target` with secrets
-
-Rejected because privileged workflow context must never execute untrusted pull
-request code.
-
+That local matrix executes the same deterministic admitted, resource-denied,
+and latency-denied behaviors. It does not use the production secret.
+
+## What is proved for every example
+
+### Deterministic responder layer
+
+Every Linux matrix entry and the Win32 integration runs against the repository's
+authenticated synthetic UDP responder. Each example must demonstrate:
+
+- exactly one rate-request event containing one resource and one latency guard;
+- the documented metrics label, guard threshold, and tracker TTL, sample,
+  buffer, and activation settings;
+- an admitted result that runs protected work and emits exactly one
+  latency-report event paired with the preceding guard;
+- a resource denial that does not run or report protected work;
+- a latency-guard denial that does not run or report protected work; and
+- no duplicate or forbidden late latency-report events after response and
+  shutdown drains.
+
+The HTTP harness also verifies the framework's documented status mapping and
+that an unprotected readiness route emits no Ratelimitly traffic. This is the
+per-example proof that both the rate limiter and latency tracker are wired
+correctly.
+
+### Per-example production layer
+
+Each of the 22 CI-eligible examples then starts with only the authentication key
+and no tenant or fixed-endpoint override. The live runner requires:
+
+- successful key-derived P0 DNS discovery and authenticated admission;
+- an allowed decision from the real service;
+- exact protected-work and measured-latency output for one-shot and Win32
+  examples;
+- an allowed protected-work response from each HTTP framework; and
+- no local latency-report error before clean, bounded shutdown.
+
+This layer deliberately does not force every shared production bucket into a
+denial state. Deterministic tests cover that branch per example without making
+cloud tests race or leave disruptive counters behind.
+
+### Dedicated production protocol layer
+
+[`tests/production_p0_probe.c`](../tests/production_p0_probe.c) uses names scoped
+to the GitHub run and attempt. It performs two independent proofs:
+
+1. Admit a latency-guarded request, report exactly 37 ms, then poll fresh
+   admissions until the server returns that exact current latency.
+2. Configure a one-token, 60-second rate bucket, require the first request to
+   pass, and require the immediate second outcome to set `rate_limited`, carry a
+   positive token deficit, and leave `latency_limited` clear.
+
+This probe is the server-observed semantic check. Its unique names avoid stale
+state without requiring administrative APIs or access to private server logs.
+
+## Shared production state and concurrency
+
+The repository credential identifies shared production state, so repeated runs
+of the same fixed example identities must not overlap. CI uses non-cancelling
+concurrency groups:
+
+- one group for the dedicated protocol probe;
+- one group for the one-shot matrix;
+- one group per HTTP shard; and
+- one shared group for Wine and native Windows.
+
+These groups are intentionally not one global lock. The HTTP shards use distinct
+framework bucket and service names and can run concurrently. A feature-branch
+dispatch uses a revision-specific non-production group, so it cannot delay a
+trusted production run.
+
+Example latency trackers retain samples for ten seconds. Matrix runners wait 11
+seconds before their first live request, which lets state from a cancelled or
+failed predecessor expire. They wait once per matrix rather than once per
+example because each example owns distinct bucket and service identities.
+
+## Credential handling
+
+The key is never placed in a command argument, committed file, artifact, or
+fixed endpoint. The runners reject and unset `RATELIMITLY_TENANT`,
+`RATELIMITLY_EXAMPLE_SERVER_HOST`, and
+`RATELIMITLY_EXAMPLE_SERVER_PORT` so live tests cannot silently bypass
+key-derived discovery.
+
+Handling differs by platform because process APIs differ:
+
+- HTTP shards remove the key from the exported environment, retain it in a
+  non-exported shell variable, pass it over descriptor 3, close that descriptor
+  immediately, and add it only to the framework child.
+- Wine uses a fresh 64-bit prefix, gives the key only to the Wine launch/client
+  process tree, disables core dumps, sanitizes diagnostics, and stops the
+  bounded wineserver tree before deleting the prefix.
+- Native Windows creates an explicit `ProcessStartInfo` environment for the
+  MSVC child, removes discovery overrides, and clears the key from that object
+  immediately after `CreateProcess` copies it.
+- The Linux one-shot matrix consumes the step environment directly; its bounded
+  child diagnostics redact both the exact key and credential-shaped text.
+- The dedicated probe also consumes the step environment directly and emits
+  only fixed, non-secret phase/status diagnostics. Its wrapper has no general
+  output sanitizer, so documentation does not claim one for that lane.
+
+HTTP and Wine runners fail closed if core dumps cannot be disabled. All live
+runners enforce process deadlines and avoid printing the environment wholesale.
+Any runner that replays child or dependency output sanitizes it first.
+
+## Failure interpretation
+
+| Failure | Likely layer | First evidence to inspect |
+| --- | --- | --- |
+| Synthetic allow/deny assertion | Example integration | Scenario name and sanitized responder records |
+| DNS or admission timeout across many examples | Production fixture or network | First failing matrix and runtime status |
+| One framework times out while peers pass | Framework lifecycle or sandbox | Framework log and forced-shutdown result |
+| Local latency-report error | Example/runtime send path | Sanitized framework stderr |
+| Exact 37 ms read-back fails | Server latency semantics | Dedicated probe's last observed value |
+| Second one-token request is not rate-limited | Server rate semantics or stale identity | Dedicated probe's rate/deficit fields |
+
+A broad production outage can make trusted-main CI red even when deterministic
+tests pass. That is expected: the production layer is a compatibility smoke
+test, not a hermetic unit test. The deterministic layer remains the primary
+diagnostic for example regressions.
+
+## Relevant files
+
+| Purpose | File |
+| --- | --- |
+| Workflow and trust conditions | [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) |
+| One-shot deterministic matrix | [`tests/test_linux_one_shot_examples.sh`](../tests/test_linux_one_shot_examples.sh) |
+| HTTP deterministic matrix | [`tests/test_linux_http_examples.sh`](../tests/test_linux_http_examples.sh) |
+| One-shot production runner | [`tests/test_production_p0_one_shot_examples.sh`](../tests/test_production_p0_one_shot_examples.sh) |
+| HTTP production matrix | [`tests/test_production_p0_http_examples.sh`](../tests/test_production_p0_http_examples.sh) |
+| Per-framework production runner | [`tests/run_production_p0_http_example.sh`](../tests/run_production_p0_http_example.sh) |
+| Native Windows production runner | [`tests/test_production_p0_win32_example.ps1`](../tests/test_production_p0_win32_example.ps1) |
+| Wine production runner | [`tests/test_production_p0_win32_wine.sh`](../tests/test_production_p0_win32_wine.sh) |
+| Dedicated semantic probe | [`tests/test_production_p0.sh`](../tests/test_production_p0.sh) |
+| CI and documentation contract | [`tests/test_examples.sh`](../tests/test_examples.sh) |
+
+## Maintenance checklist
+
+When adding or changing an example:
+
+1. Add it to exactly one deterministic matrix and preserve allow, resource
+   denial, latency denial, paired-report, and late-packet assertions.
+2. Add the corresponding trusted-main production invocation when the platform
+   is CI-eligible.
+3. Give it stable, unique bucket, service, and metrics names.
+4. Keep the key out of arguments and diagnostics; preserve the platform's
+   bounded cleanup path.
+5. Update the coverage counts and this proof boundary.
+6. Run RED/GREEN contract tests before the implementation change and keep the
+   change in one focused commit.
+
+When rotating the CI key, update only the `RATELIMITLY_AUTH_KEY` repository
+secret. Do not add the derived tenant or resolved server endpoints to the
+workflow. A key change naturally selects new key-derived state, so the next
+trusted run should be treated as a fresh compatibility check.
