@@ -102,8 +102,8 @@ grep -Fq -- 'bash tests/test_production_p0.sh' "$CI_WORKFLOW" \
 grep -Fq -- 'RATELIMITLY_AUTH_KEY: ${{ secrets.RATELIMITLY_AUTH_KEY }}' \
   "$CI_WORKFLOW" \
   || fail "production P0 CI does not consume the repository secret"
-grep -Fq -- "github.actor == 'edescourtis'" "$CI_WORKFLOW" \
-  || fail "production P0 manual dispatch is not restricted to edescourtis"
+grep -Fq -- "github.ref == 'refs/heads/main'" "$CI_WORKFLOW" \
+  || fail "production P0 CI is not restricted to main"
 grep -Fq -- 'cancel-in-progress: false' "$CI_WORKFLOW" \
   || fail "production P0 CI does not serialize shared-tenant tests"
 grep -Fq -- 'unset RATELIMITLY_TENANT' "$PRODUCTION_P0_RUNNER" \

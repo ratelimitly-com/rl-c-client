@@ -50,9 +50,9 @@ jobs:
   production-p0-smoke:
     name: Production P0 protocol smoke
     if: >-
-      github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch' &&
-       github.actor == 'edescourtis')
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' ||
+       github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     concurrency:
