@@ -1,5 +1,18 @@
 # Integration examples
 
+> **Prerequisites.** You can read C and know the basic purpose of an event
+> loop or HTTP server. This guide defines the Ratelimitly workflow, ownership
+> models, platform boundaries, and framework-specific terms it uses.
+
+## TL;DR
+
+The [24 self-contained integrations](manifest.txt) each combine a resource
+rate-limit check with a latency guard, run only admitted work, and report that
+work's measured latency; choose by ownership model and platform, then check the
+[test-evidence table](#ci-validation-layers).
+
+## What this guide covers
+
 These examples show how to drive `rl-c-client` from common C event loops, HTTP
 servers, and parsers. They use only the public client headers under `include/`.
 Each source file starts with a numbered flow and an ownership summary; read
@@ -9,14 +22,20 @@ those comments before transplanting the integration into an application.
 
 ```mermaid
 flowchart LR
-    Host["Host event loop or HTTP framework"] --> Admission["Resource limit + latency guard"]
-    Admission --> Runtime["rl-c-client UDP runtime"]
-    Runtime --> Decision{"Admitted?"}
-    Decision -->|No| Reject["Reject without latency sample"]
-    Decision -->|Yes| Work["Run protected work"]
-    Work --> Measure["Measure with monotonic clock"]
-    Measure --> Report["Report one latency sample"]
+    Host["Host event loop or HTTP framework"]:::neutral --> Admission["Start resource limit<br/>+ latency guard"]:::neutral
+    Admission --> Runtime["Public runtime<br/>nonblocking UDP + DNS"]:::neutral
+    Runtime --> Service["Ratelimitly service<br/>evaluates admission"]:::neutral
+    Service --> Callback["Completion callback"]:::neutral
+    Callback --> Decision{"Allowed?"}:::neutral
+    Decision -->|No| Reject["Reject without work<br/>or latency sample"]:::danger
+    Decision -->|Yes| Work["Run protected work"]:::success
+    Work --> Measure["Measure with monotonic clock"]:::success
+    Measure --> Report["Send one latency sample"]:::success
     Report --> Runtime
+
+    classDef neutral fill:#EAECEF,stroke:#7D8590,color:#1A1A1A;
+    classDef danger fill:#FCE8E6,stroke:#B0413E,color:#1A1A1A;
+    classDef success fill:#E6F4EA,stroke:#1E7E45,color:#1A1A1A;
 ```
 
 | Example | Integration model | Main technique |
@@ -59,7 +78,7 @@ more narrowly; choose the linked native or portable alternative instead.
 | [Latency tracker](latency_tracker/) | Yes | Yes | — | POSIX `poll`; use Win32 for the same workflow on Windows. |
 | [libuv](libuv/) | Yes | Yes | Yes | Uses `uv_poll_init_socket` to preserve WinSock handles. |
 | [libevent](libevent/) | Yes | Yes | Yes | Keeps sockets in `evutil_socket_t`. |
-| [GLib/GIO](glib/) | Yes | Yes | Yes | Selects the Unix or Win32 `GIOChannel` constructor. |
+| [GLib/GIO](glib/) | Yes | Yes | Conditional | GLib exposes a Win32 socket constructor, but this source still needs a native handle-width proof and Windows execution test. |
 | [libev](libev/) | Yes | Yes | — | This source targets libev's Unix fd backends. |
 | [sd-event](sd_event/) | Yes | — | — | libsystemd API. |
 | [kqueue](kqueue/) | — | Yes | — | Also applies to BSD hosts. |
@@ -68,7 +87,7 @@ more narrowly; choose the linked native or portable alternative instead.
 | [libhv](libhv/) | Yes | Yes | Conditional | Verify that the libhv build preserves 64-bit `SOCKET` width. |
 | [liburing](liburing/) | Yes | — | — | Linux io_uring wrapper. |
 | [epoll](epoll/) | Yes | — | — | Linux kernel readiness API. |
-| [io_uring](io_uring/) | Yes | — | — | Raw Linux UAPI and syscalls. |
+| [io_uring](io_uring/) | Yes | — | — | Raw Linux UAPI; `IORING_ENTER_EXT_ARG` requires Linux 5.11 or newer. |
 | [Mongoose](mongoose/) | Yes | Yes | Yes | Portable single-threaded server loop. |
 | [CivetWeb](civetweb/) | Yes | Yes | — | This bridge uses pthreads, `pipe`, and `poll`. |
 | [GNU libmicrohttpd](libmicrohttpd/) | Yes | Yes | — | This source uses the POSIX external-`select` model. |
@@ -242,8 +261,9 @@ latency-based load shedding:
 4. Perform protected work only when the combined resource and guard result
    passes.
 5. Measure only that work with `CLOCK_MONOTONIC`.
-6. Send the observation with `r_client_report_latency()` using the same service
-   id and tracker configuration.
+6. Send the observation with `r_client_admission_report_latency()`. The
+   admission object preserves the matching service ID and tracker configuration
+   and prevents a second report for the same admitted request.
 
 Never report latency for work rejected by the guard. No operation occurred, so
 a zero or synthetic sample would corrupt the service tracker. Likewise, do not
@@ -278,9 +298,12 @@ export RATELIMITLY_EXAMPLE_WORK_MS=25
 Passing output resembles:
 
 ```text
-guard passed: current=20 ms threshold=100 ms
-latency reported: service=example-inventory-backend observed=25 ms
+guard passed: resource and latency checks admitted the work
+latency reported: service=example-inventory-backend observed=<elapsed> ms
 ```
+
+`<elapsed>` is a monotonic measurement and can be greater than the configured
+sleep because scheduler delay is part of the elapsed time.
 
 The sleep represents a backend call only in this command-line demonstration.
 Production event loops should start the real asynchronous operation after the
@@ -404,7 +427,9 @@ passes the admission delay to `WSAWaitForMultipleEvents`.
 
 ```sh
 cd win32
-make CC=x86_64-w64-mingw32-gcc OPENSSL_PREFIX=/path/to/mingw/openssl
+make CC=x86_64-w64-mingw32-gcc \
+  RL_CLIENT_LIBRARY=/path/to/windows/librclient.a \
+  OPENSSL_PREFIX=/path/to/mingw/openssl
 ```
 
 **Production note.** Preserve pointer-width `SOCKET` values. Clear event
@@ -418,7 +443,7 @@ All client calls remain on the libhv loop thread.
 
 ```sh
 cd libhv
-make LIBHV_ROOT=/path/to/libhv
+make LIBHV_PREFIX=/path/to/libhv-install
 ./libhv-example
 ```
 
@@ -475,9 +500,10 @@ supporting several kernel versions or sharing a ring with other operations.
 ## HTTP framework examples
 
 Unless a section says otherwise, these examples listen on port 8000. Send
-`GET /limited` to run a check. Non-GET requests are rejected before starting a
-check, and an abandoned request is cancelled where the framework exposes a
-reliable disconnect lifecycle.
+`GET /limited` to run a check. Method filtering follows each framework, and
+some teaching routes also accept other methods; production code should reject
+unsupported methods before starting admission. An abandoned request is
+cancelled where the framework exposes a reliable disconnect lifecycle.
 
 ### Mongoose
 
@@ -711,3 +737,58 @@ never run or reported. The host owns TCP I/O, retained bytes, UDP readiness,
 deadlines, and the adapter allocation. See
 [`llhttp/README.md`](llhttp/README.md) for complete ownership, build, platform,
 and error-handling details.
+
+## Glossary
+
+| Term | Meaning |
+| --- | --- |
+| README | Folder-level guide that explains how to build, run, adapt, and test one integration. |
+| GLib | Portable core library whose main loop drives one event-loop example. |
+| GIO | GLib input/output APIs, including the `GIOChannel` socket wrapper used by that example. |
+| CivetWeb | Embedded C HTTP server used by a dedicated bridge-thread example. |
+| GNU | Free-software project under which libmicrohttpd is developed. |
+| H2O | Event-driven C HTTP server whose embeddable loop drives one example. |
+| POSIX | Portable Operating System Interface family used by the Unix-focused examples. |
+| CrossOver | Commercial macOS compatibility environment that can run Windows executables in managed Wine bottles. |
+| IPv4 | Internet Protocol version 4, one address family for the runtime's UDP sockets. |
+| IPv6 | Internet Protocol version 6, the other address family for the runtime's UDP sockets. |
+| admission | Combined resource and latency decision made before protected work starts. |
+| protected work | Application operation—such as a database call or response build—that runs only after admission. |
+| rate bucket | Stable resource identity whose quota is consumed by matching requests. |
+| latency guard | Admission check that can shed new work when recent tracked latency reaches a threshold. |
+| latency tracker | Server-side window of reported service durations used by a latency guard. |
+| fire-and-forget | Send with no acknowledgement callback; local success proves the datagram was handed to UDP, not that the server accepted it. |
+| P0 | Production Ratelimitly DNS tier derived from an API key unless a tenant DNS override is supplied. |
+| synthetic responder | Repository test server that returns deterministic allow, resource-deny, and latency-deny decisions without a production credential. |
+| one-shot example | Command-line integration that performs one admission workflow and exits, rather than serving HTTP continuously. |
+| SRV | DNS service record that returns target hostnames and ports. |
+| AAAA | DNS address record that maps a hostname to an IPv6 address. |
+| WinSock | Native Windows sockets API, whose socket handle is pointer-width on 64-bit Windows. |
+| MSVC | Microsoft Visual C/C++ compiler and native Windows toolchain. |
+| UAPI | Linux user-space API exposed by kernel headers, used directly by the raw io_uring example. |
+| ELF | Executable and Linkable Format used for Linux binaries and shared modules. |
+| EOF | End of file or stream; for a socket, the peer has ended its byte stream. |
+| BSD | Family of Unix-like operating systems that provides the kqueue API. |
+| GET | HTTP method used by the examples' read-only `/limited` route. |
+| MHD | Prefix used by GNU libmicrohttpd's public C API. |
+| IOChannel | GLib `GIOChannel` wrapper that presents a socket or file descriptor as an event source. |
+| backpressure | Pausing parsing or new work until an outstanding admission decision completes. |
+
+## References
+
+- [Example manifest](manifest.txt) is the source of truth for the 24 folders
+  listed in this guide.
+- [Linux one-shot matrix](../tests/linux-one-shot-examples.txt),
+  [Linux HTTP matrix](../tests/linux-http-examples.txt), and
+  [local macOS matrix](../tests/macos-local-examples.txt) define executable
+  coverage; [CI workflow](../.github/workflows/ci.yml) shows where each runs.
+- [Production semantic probe](../tests/production_p0_probe.c) defines the exact
+  latency read-back and rate-denial assertions summarized above.
+- [Admission workflow](../include/r_client_workflow.h) and
+  [public runtime](../include/r_client_runtime.h) define the shared client
+  mechanics used by every example.
+- [DNS SRV specification](https://www.rfc-editor.org/info/rfc2782/),
+  [Linux `io_uring_enter(2)`](https://man7.org/linux/man-pages/man2/io_uring_enter.2.html),
+  [GLib `GIOChannel`](https://docs.gtk.org/glib/struct.IOChannel.html), and
+  [Microsoft `SOCKET`](https://learn.microsoft.com/en-us/windows/win32/winsock/socket-data-type-2)
+  support the external platform claims called out in this guide.

@@ -1,16 +1,57 @@
 # Ratelimitly C Client
 
-`rl-c-client` is a small C11 client library for integrating applications,
-proxies, and event-loop-driven servers with Ratelimitly.
+> **Prerequisites.** You can read C and understand basic sockets, DNS, and
+> callback-driven event loops. Everything specific to Ratelimitly and this
+> client is explained here.
 
-The library is intentionally host-loop agnostic. It builds request packets,
-parses responses, tracks request deadlines, applies response-selection policy,
-and handles API key credentials. The embedding application owns sockets, DNS,
-timers, memory lifetime, and logging.
+## TL;DR
 
-Proxy modules and other high-throughput embedders typically provide UDP
-sockets, resolver callbacks, request timers, and use the borrowed request API to
-avoid per-request copies.
+`rl-c-client` is a C11 library that lets a host application combine resource
+rate limiting with latency-based admission, then report the protected work's
+latency without surrendering ownership of its event loop, sockets, or timers.
+
+## Architecture at a glance
+
+The optional public runtime supplies the common UDP and DNS plumbing used by
+the examples. Advanced embedders can instead provide the same I/O callbacks
+directly to the core client.
+
+```mermaid
+flowchart LR
+    Host["Host application<br/>owns loop and protected work"]:::neutral --> Admission["rl-c-client admission<br/>resource limit + latency guard"]:::neutral
+    Admission --> Runtime["Public runtime or host I/O<br/>DNS + nonblocking UDP"]:::neutral
+    Runtime --> Service["Ratelimitly service"]:::neutral
+    Service --> Decision{"Admission result"}:::neutral
+    Decision -->|Denied| Stop["Skip work<br/>do not report latency"]:::danger
+    Decision -->|Allowed| Work["Run and measure<br/>protected work"]:::success
+    Work --> Report["Report one latency sample"]:::success
+    Report --> Runtime
+
+    classDef neutral fill:#EAECEF,stroke:#7D8590,color:#1A1A1A;
+    classDef danger fill:#FCE8E6,stroke:#B0413E,color:#1A1A1A;
+    classDef success fill:#E6F4EA,stroke:#1E7E45,color:#1A1A1A;
+```
+
+## Choose the integration layer
+
+The repository exposes three layers. Pick the lowest layer whose ownership
+contract matches the host application; using the public runtime is optional.
+
+| Layer | What it owns | What the host still owns |
+| --- | --- | --- |
+| Core client (`r_client.h` + `r_client_io.h`) | Packets, authentication, request policy, deadlines, and response selection | UDP I/O, DNS callbacks, timers, and logging |
+| Admission workflow (`r_client_workflow.h`) | Coordination of one resource check plus one latency guard and the matching latency report | The core client's I/O plus protected-work timing and lifetime |
+| Public runtime (`r_client_runtime.h`) | Core client, nonblocking IPv4/IPv6 UDP sockets, and synchronous DNS discovery | Readiness watchers, deadline callbacks, application work, and logging policy |
+
+The normal asynchronous request API copies request inputs. The borrowed API
+avoids those copies, so its input buffers must remain valid until callback or
+cancellation. In both forms, copy any result data needed after the completion
+callback returns; the request handle and result arrays expire with that
+callback.
+
+Proxy modules and other high-throughput embedders commonly choose the core and
+borrowed APIs. The examples choose the workflow and public runtime so each
+framework README can focus on its readiness, timer, and shutdown rules.
 
 ## Features
 
@@ -51,6 +92,26 @@ Outputs:
 
 - `librclient.a`
 - `librclient.so`
+
+## Run the first combined example
+
+The latency-tracker example is the smallest executable path that performs both
+a resource rate-limit check and a latency guard, runs protected work only after
+admission, and reports one measured latency sample:
+
+```sh
+make
+make -C examples/latency_tracker
+RATELIMITLY_AUTH_KEY=rl-aes1... \
+  ./examples/latency_tracker/latency-tracker-example
+```
+
+For a credential-free deterministic run against the repository's synthetic
+responder, execute:
+
+```sh
+bash tests/test_latency_tracker.sh
+```
 
 Build the perf client:
 
@@ -173,9 +234,12 @@ cookie/AES material internally after validating the Bech32 credential.
 Do not log `info.secret`; it contains raw credential material for cookie and
 AES keys.
 
-## Event-Loop Model
+## Core event-loop model
 
-The client never blocks and does not create threads. The host application must:
+The core client never waits on a socket and does not create threads. Host I/O
+and resolver callbacks may complete synchronously, and the optional public
+runtime performs synchronous DNS during initialization or refresh. A custom
+core integration must:
 
 1. Provide `r_io_ops_t` with UDP send, current time, optional logging, and
    optional steering feedback.
@@ -228,6 +292,58 @@ Retry-related flags:
 - `--retry-resend=all|missing`
 - `--retry-total-timeout-ms=<n>`
 - `--retry-refresh-dns`
+
+## Glossary
+
+| Term | Meaning |
+| --- | --- |
+| C11 | 2011 revision of the C language standard required by this library. |
+| README | Repository overview document that introduces a project and links to its detailed guides. |
+| GLib | Portable core library whose main loop is used by one integration example. |
+| GIO | GLib input/output APIs, including the `GIOChannel` socket wrapper used by that example. |
+| CivetWeb | Embedded C HTTP server represented by one self-contained integration. |
+| GNU | Free-software project under which libmicrohttpd is developed. |
+| H2O | Event-driven C HTTP server represented by one self-contained integration. |
+| LICENSE | Repository file containing the terms under which the source may be used and redistributed. |
+| MIT | Permissive open-source license applied to this repository. |
+| admission | The combined decision made before protected work starts. An admission may contain resource limits, latency guards, or both. |
+| resource rate limit | A quota check for a named bucket, such as requests allowed per interval. |
+| bucket | Stable resource identity whose configured quota is consumed by matching requests. |
+| latency guard | A request to shed new work when the tracker's recent service latency reaches its configured threshold. |
+| latency tracker | Server-side sample window identified by a service ID and configured by threshold, lifetime, sample count, and buffer size. |
+| tenant | Isolated Ratelimitly account identified by metadata encoded in the API key. |
+| host loop | The application's existing event loop; it owns readiness callbacks and timers around the client. |
+| public runtime | Optional adapter that owns nonblocking UDP sockets and production DNS discovery while exposing readiness and deadlines to the host loop. |
+| SRV | DNS service record that locates a service by returning target hostnames and ports. |
+| AAAA | DNS address record that maps a hostname to an IPv6 address. |
+| IPv4 | Internet Protocol version 4, the widely deployed 32-bit network address format. |
+| IPv6 | Internet Protocol version 6, the modern network address format represented by an AAAA record. |
+| Bech32 credential | Checksummed, human-readable key encoding used for `rl-cookie...` and `rl-aes...` credentials. |
+| AES | Advanced Encryption Standard, the symmetric cipher used by `rl-aes...` credentials. |
+| GCM | Galois/Counter Mode, which adds authentication to AES encryption. |
+| POSIX | Portable Operating System Interface, the Unix-like APIs used by Linux and macOS builds. |
+| backpressure | Pausing new input or work until a downstream operation has capacity again. |
+| quorum | Minimum number of consistent server responses required before the client accepts a decision. |
+| steering feedback | Server hint that lets a host rebind a UDP source port for later requests. |
+
+## References
+
+- [Public API contract](docs/api.md) defines request lifetimes, callbacks,
+  decisions, and latency reporting.
+- [I/O abstraction](IO_ABSTRACTION.md) defines the host/client ownership
+  boundary for custom event-loop integrations.
+- [Integration examples](examples/README.md) compares supported event loops,
+  HTTP frameworks, parsers, and platforms.
+- [`r_client.h`](include/r_client.h), [`r_client_workflow.h`](include/r_client_workflow.h),
+  and [`r_client_runtime.h`](include/r_client_runtime.h) are the public source
+  contracts behind this overview.
+- [Core request lifetimes](include/r_client.h) (`include/r_client.h:192-260`)
+  and the [public-runtime ownership contract](include/r_client_runtime.h)
+  (`include/r_client_runtime.h:26-31`) were reverified at merged baseline
+  `05053b4` for this explanation.
+- [DNS SRV records](https://www.rfc-editor.org/info/rfc2782) and
+  [OpenSSL authenticated-encryption guidance](https://docs.openssl.org/3.0/man3/EVP_EncryptInit/)
+  provide the external definitions used above.
 
 ## Repository Status
 
