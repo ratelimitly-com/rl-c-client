@@ -427,7 +427,9 @@ passes the admission delay to `WSAWaitForMultipleEvents`.
 
 ```sh
 cd win32
-make CC=x86_64-w64-mingw32-gcc OPENSSL_PREFIX=/path/to/mingw/openssl
+make CC=x86_64-w64-mingw32-gcc \
+  RL_CLIENT_LIBRARY=/path/to/windows/librclient.a \
+  OPENSSL_PREFIX=/path/to/mingw/openssl
 ```
 
 **Production note.** Preserve pointer-width `SOCKET` values. Clear event
