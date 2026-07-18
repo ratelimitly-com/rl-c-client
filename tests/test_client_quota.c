@@ -601,6 +601,116 @@ static void test_report_latency_filters_oversized_reports(void) {
     r_client_destroy(client);
 }
 
+static void fill_latency_reports(r_service_latency_report_t *reports, size_t count) {
+    memset(reports, 0, count * sizeof(*reports));
+    for (size_t i = 0; i < count; i++) {
+        memcpy(reports[i].service_id, "svc", 3);
+        reports[i].observed_latency = 10;
+        reports[i].ttl_ms = 1000;
+        reports[i].max_samples = 10;
+        reports[i].buffer_size = 64;
+        reports[i].min_sample_threshold = 1;
+    }
+}
+
+/*
+ * Latency reports are framed into a fixed R_MAX_PACKET_SIZE buffer:
+ *   cookie: 40 (tenant) + 4 (auth TLV) + 32 (cookie) + 8 (PDU) + 4 + 36 * n
+ *   aes:    40 (tenant) + 4 (auth TLV) + 12 (nonce) + 16 (tag) + 8 + 4 + 36 * n
+ * so 30 reports fit under cookie auth and 31 under AES. r_build_latency_report_body
+ * only rejects at n >= 34, leaving a window where the framing memcpys would run past
+ * the packet buffer. Oversized batches must be rejected before any copy happens.
+ */
+#define LATENCY_COOKIE_MAX_REPORTS 30u
+#define LATENCY_AES_MAX_REPORTS 31u
+
+static void test_report_latency_accepts_largest_cookie_batch(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    r_client_t *client = make_client(&ctx);
+
+    r_service_latency_report_t reports[LATENCY_COOKIE_MAX_REPORTS];
+    fill_latency_reports(reports, LATENCY_COOKIE_MAX_REPORTS);
+
+    int rc = r_client_report_latency(client, reports, LATENCY_COOKIE_MAX_REPORTS);
+    assert(rc == RCLIENT_OK);
+    assert(ctx.send_count == 1);
+    /* Every report survived the buffer_size filter and landed in one packet. */
+    assert(ctx.last_packet_len == 88u + 36u * LATENCY_COOKIE_MAX_REPORTS);
+    assert(ctx.last_packet_len <= R_MAX_PACKET_SIZE);
+
+    r_client_destroy(client);
+}
+
+static void test_report_latency_rejects_oversized_cookie_batch(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    r_client_t *client = make_client(&ctx);
+
+    r_service_latency_report_t reports[LATENCY_COOKIE_MAX_REPORTS + 1u];
+    fill_latency_reports(reports, LATENCY_COOKIE_MAX_REPORTS + 1u);
+
+    int rc = r_client_report_latency(client, reports, LATENCY_COOKIE_MAX_REPORTS + 1u);
+    assert(rc == RCLIENT_ERR_PROTOCOL);
+    assert(ctx.send_count == 0);
+
+    r_client_destroy(client);
+}
+
+static void test_report_latency_rejects_oversized_batch_after_filtering(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    r_client_t *client = make_client(&ctx);
+
+    /* Reports above the buffer_size quota are dropped into a heap-allocated
+     * filtered copy, so the capacity rejection must release it too. Three of
+     * these 34 are filtered out, leaving 31 - one past cookie capacity. */
+    enum { TOTAL = LATENCY_COOKIE_MAX_REPORTS + 4u };
+    r_service_latency_report_t reports[TOTAL];
+    fill_latency_reports(reports, TOTAL);
+    reports[0].buffer_size = 65;
+    reports[1].buffer_size = 65;
+    reports[2].buffer_size = 65;
+
+    int rc = r_client_report_latency(client, reports, TOTAL);
+    assert(rc == RCLIENT_ERR_PROTOCOL);
+    assert(ctx.send_count == 0);
+
+    r_client_destroy(client);
+}
+
+static void test_report_latency_accepts_largest_aes_batch(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    r_client_t *client = make_aes_client(&ctx);
+
+    r_service_latency_report_t reports[LATENCY_AES_MAX_REPORTS];
+    fill_latency_reports(reports, LATENCY_AES_MAX_REPORTS);
+
+    int rc = r_client_report_latency(client, reports, LATENCY_AES_MAX_REPORTS);
+    assert(rc == RCLIENT_OK);
+    assert(ctx.send_count == 1);
+    assert(ctx.last_packet_len == 84u + 36u * LATENCY_AES_MAX_REPORTS);
+    assert(ctx.last_packet_len <= R_MAX_PACKET_SIZE);
+
+    r_client_destroy(client);
+}
+
+static void test_report_latency_rejects_oversized_aes_batch(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    r_client_t *client = make_aes_client(&ctx);
+
+    r_service_latency_report_t reports[LATENCY_AES_MAX_REPORTS + 1u];
+    fill_latency_reports(reports, LATENCY_AES_MAX_REPORTS + 1u);
+
+    int rc = r_client_report_latency(client, reports, LATENCY_AES_MAX_REPORTS + 1u);
+    assert(rc == RCLIENT_ERR_PROTOCOL);
+    assert(ctx.send_count == 0);
+
+    r_client_destroy(client);
+}
+
 static void test_report_latency_requires_udp_send(void) {
     test_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
@@ -814,6 +924,11 @@ int main(void) {
     test_client_rejects_explicit_key_metadata_mismatch();
     test_check_rate_limit_rejects_oversized_guard();
     test_report_latency_filters_oversized_reports();
+    test_report_latency_accepts_largest_cookie_batch();
+    test_report_latency_rejects_oversized_cookie_batch();
+    test_report_latency_rejects_oversized_batch_after_filtering();
+    test_report_latency_accepts_largest_aes_batch();
+    test_report_latency_rejects_oversized_aes_batch();
     test_report_latency_requires_udp_send();
     test_empty_aes_response_is_rejected_explicitly();
     test_callback_can_cancel_same_request_without_double_free();
