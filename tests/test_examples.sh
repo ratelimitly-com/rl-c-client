@@ -319,6 +319,8 @@ grep -Fq -- 'rate_limited' "$PRODUCTION_P0_SOURCE" \
   || fail "production P0 probe does not prove rate limiting"
 grep -Fq -- 'tokens_deficit == 0u' "$PRODUCTION_P0_SOURCE" \
   || fail "production P0 probe accepts an unproven rate denial"
+grep -Fq -- 'if (second_outcome.allowed' "$PRODUCTION_P0_SOURCE" \
+  || fail "production P0 probe accepts a contradictory allowed rate outcome"
 linux_one_shot_job=$(sed -n \
   '/^  linux-one-shot-examples:/,/^  linux-http-examples:/p' \
   "$CI_WORKFLOW")

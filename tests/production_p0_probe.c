@@ -352,7 +352,8 @@ static int prove_rate_limiter(
     if (status != RCLIENT_OK) {
         return status;
     }
-    if (!second_outcome.rate_limited
+    if (second_outcome.allowed
+            || !second_outcome.rate_limited
             || second_outcome.tokens_deficit == 0u
             || second_outcome.latency_limited) {
         fprintf(
