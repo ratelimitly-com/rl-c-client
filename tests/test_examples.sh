@@ -321,12 +321,16 @@ grep -Fq -- '$Stopped = $Process.WaitForExit(5000)' \
   || fail "native Win32 P0 runner does not verify tree-kill completion"
 grep -Fq -- 'taskkill.exe' "$PRODUCTION_P0_WIN32_NATIVE_RUNNER" \
   || fail "native Win32 P0 runner lacks the bounded taskkill fallback"
-grep -Fq -- '-Environment $ChildEnvironment' \
+grep -Fq -- '$env:RATELIMITLY_AUTH_KEY = $AuthKey' \
   "$PRODUCTION_P0_WIN32_NATIVE_RUNNER" \
-  || fail "native Win32 P0 runner does not explicitly pass the child credential"
-grep -Fq -- '$ChildEnvironment.Clear()' \
+  || fail "native Win32 P0 runner does not stage the child credential"
+grep -Fq -- 'Remove-Item Env:RATELIMITLY_AUTH_KEY' \
   "$PRODUCTION_P0_WIN32_NATIVE_RUNNER" \
-  || fail "native Win32 P0 runner retains the child environment overlay"
+  || fail "native Win32 P0 runner retains the child credential"
+if grep -Fq -- '-Environment $ChildEnvironment' \
+    "$PRODUCTION_P0_WIN32_NATIVE_RUNNER"; then
+  fail "native Win32 P0 runner uses the unreliable Start-Process overlay"
+fi
 grep -Fq -- 'Start-Sleep -Seconds 11' "$PRODUCTION_P0_WIN32_NATIVE_RUNNER" \
   || fail "native Win32 P0 runner does not expire stale tracker state"
 for variable in \
