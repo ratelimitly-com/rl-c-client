@@ -23,6 +23,7 @@ PRODUCTION_P0_RUNNER="$ROOT/tests/test_production_p0.sh"
 PRODUCTION_P0_ONE_SHOT_RUNNER="$ROOT/tests/test_production_p0_one_shot_examples.sh"
 PRODUCTION_P0_HTTP_MATRIX_RUNNER="$ROOT/tests/test_production_p0_http_examples.sh"
 PRODUCTION_P0_HTTP_RUNNER="$ROOT/tests/run_production_p0_http_example.sh"
+PRODUCTION_P0_WIN32_NATIVE_RUNNER="$ROOT/tests/test_production_p0_win32_example.ps1"
 
 fail() {
   echo "test_examples: $*" >&2
@@ -48,6 +49,8 @@ fail() {
   || fail "missing executable production P0 HTTP matrix runner"
 [[ -x "$PRODUCTION_P0_HTTP_RUNNER" ]] \
   || fail "missing executable production P0 HTTP example runner"
+[[ -f "$PRODUCTION_P0_WIN32_NATIVE_RUNNER" ]] \
+  || fail "missing native Win32 production P0 runner"
 grep -Fxq -- '/bin/production_p0_probe' "$ROOT/.gitignore" \
   || fail "production P0 build artifact is not ignored"
 grep -Fq -- 'bash tests/test_linux_one_shot_examples.sh' "$CI_WORKFLOW" \
@@ -199,6 +202,45 @@ bash -n \
 if grep -Eq -- 'c-2213169720275691601|s-408232124743711' \
     "$PRODUCTION_P0_HTTP_MATRIX_RUNNER" "$PRODUCTION_P0_HTTP_RUNNER"; then
   fail "HTTP P0 runner hard-codes one production endpoint"
+fi
+win32_msvc_job=$(sed -n '/^  win32-msvc:/,$p' "$CI_WORKFLOW")
+grep -Fq -- 'tests/test_production_p0_win32_example.ps1' \
+  <<<"$win32_msvc_job" \
+  || fail "native MSVC CI does not run the Win32 client against P0"
+grep -Fq -- 'RATELIMITLY_AUTH_KEY: ${{ secrets.RATELIMITLY_AUTH_KEY }}' \
+  <<<"$win32_msvc_job" \
+  || fail "native Win32 P0 step does not use the repository secret"
+grep -Fq -- "github.actor == 'edescourtis'" <<<"$win32_msvc_job" \
+  || fail "native Win32 manual production run is not restricted"
+grep -Fq -- "github.ref == 'refs/heads/codex/example-integrations'" \
+  <<<"$win32_msvc_job" \
+  || fail "native Win32 validation exception is not branch-scoped"
+grep -Fq -- 'rl-c-client-production-win32' <<<"$win32_msvc_job" \
+  || fail "native Win32 production state is not serialized"
+grep -Fq -- 'WaitForExit(60000)' "$PRODUCTION_P0_WIN32_NATIVE_RUNNER" \
+  || fail "native Win32 P0 runner lacks a 60-second deadline"
+grep -Fq -- '.Kill($true)' "$PRODUCTION_P0_WIN32_NATIVE_RUNNER" \
+  || fail "native Win32 P0 runner cannot kill the process tree"
+grep -Fq -- '$Stopped = $Process.WaitForExit(5000)' \
+  "$PRODUCTION_P0_WIN32_NATIVE_RUNNER" \
+  || fail "native Win32 P0 runner does not verify tree-kill completion"
+grep -Fq -- 'taskkill.exe' "$PRODUCTION_P0_WIN32_NATIVE_RUNNER" \
+  || fail "native Win32 P0 runner lacks the bounded taskkill fallback"
+grep -Fq -- 'Start-Sleep -Seconds 11' "$PRODUCTION_P0_WIN32_NATIVE_RUNNER" \
+  || fail "native Win32 P0 runner does not expire stale tracker state"
+for variable in \
+  RATELIMITLY_TENANT \
+  RATELIMITLY_EXAMPLE_SERVER_HOST \
+  RATELIMITLY_EXAMPLE_SERVER_PORT; do
+  grep -Fq -- "\"$variable\"" "$PRODUCTION_P0_WIN32_NATIVE_RUNNER" \
+    || fail "native Win32 P0 runner does not clear $variable"
+done
+grep -Fq -- 'inventory response prepared by Win32' \
+  "$PRODUCTION_P0_WIN32_NATIVE_RUNNER" \
+  || fail "native Win32 P0 runner does not assert protected work"
+if grep -Eq -- 'c-2213169720275691601|s-408232124743711' \
+    "$PRODUCTION_P0_WIN32_NATIVE_RUNNER"; then
+  fail "native Win32 P0 runner hard-codes one production endpoint"
 fi
 for scenario in guard-pass deny guard-deny; do
   grep -Fq -- "Name = \"$scenario\"" "$WINDOWS_NATIVE_RUNNER" \

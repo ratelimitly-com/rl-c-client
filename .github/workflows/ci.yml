@@ -374,6 +374,15 @@ jobs:
     name: Win32 example (MSVC)
     runs-on: windows-latest
     timeout-minutes: 30
+    concurrency:
+      group: >-
+        ${{
+          (github.ref == 'refs/heads/main' ||
+           github.event_name == 'workflow_dispatch') &&
+          'rl-c-client-production-win32' ||
+          format('{0}-{1}-win32-msvc', github.workflow, github.ref)
+        }}
+      cancel-in-progress: false
 
     steps:
       - name: Check out repository
@@ -443,3 +452,19 @@ jobs:
           }
           # The missing-configuration exit code was expected and validated.
           exit 0
+
+      - name: Run native Win32 example against production P0
+        if: >-
+          (github.ref == 'refs/heads/main' &&
+           (github.event_name == 'push' ||
+            (github.event_name == 'workflow_dispatch' &&
+             github.actor == 'edescourtis'))) ||
+          (github.ref == 'refs/heads/codex/example-integrations' &&
+           github.event_name == 'workflow_dispatch' &&
+           github.actor == 'edescourtis')
+        shell: pwsh
+        env:
+          RATELIMITLY_AUTH_KEY: ${{ secrets.RATELIMITLY_AUTH_KEY }}
+        run: |
+          & tests/test_production_p0_win32_example.ps1 `
+            -ExamplePath build-msvc/Release/win32-example.exe
