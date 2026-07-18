@@ -321,15 +321,19 @@ grep -Fq -- '$Stopped = $Process.WaitForExit(5000)' \
   || fail "native Win32 P0 runner does not verify tree-kill completion"
 grep -Fq -- 'taskkill.exe' "$PRODUCTION_P0_WIN32_NATIVE_RUNNER" \
   || fail "native Win32 P0 runner lacks the bounded taskkill fallback"
-grep -Fq -- '$env:RATELIMITLY_AUTH_KEY = $AuthKey' \
+grep -Fq -- '$StartInfo.Environment["RATELIMITLY_AUTH_KEY"] = $AuthKey' \
   "$PRODUCTION_P0_WIN32_NATIVE_RUNNER" \
-  || fail "native Win32 P0 runner does not stage the child credential"
-grep -Fq -- 'Remove-Item Env:RATELIMITLY_AUTH_KEY' \
+  || fail "native Win32 P0 runner does not construct an explicit child environment"
+grep -Fq -- '$StartInfo.Environment.Remove($Name)' \
   "$PRODUCTION_P0_WIN32_NATIVE_RUNNER" \
-  || fail "native Win32 P0 runner retains the child credential"
-if grep -Fq -- '-Environment $ChildEnvironment' \
+  || fail "native Win32 P0 child environment retains discovery overrides"
+grep -Fq -- '$Client.Start()' "$PRODUCTION_P0_WIN32_NATIVE_RUNNER" \
+  || fail "native Win32 P0 runner does not use direct process creation"
+grep -Fq -- 'ReadToEndAsync()' "$PRODUCTION_P0_WIN32_NATIVE_RUNNER" \
+  || fail "native Win32 P0 runner can deadlock on redirected output"
+if grep -Fq -- '-FilePath $ExamplePath' \
     "$PRODUCTION_P0_WIN32_NATIVE_RUNNER"; then
-  fail "native Win32 P0 runner uses the unreliable Start-Process overlay"
+  fail "native Win32 P0 runner still launches through Start-Process"
 fi
 grep -Fq -- 'Start-Sleep -Seconds 11' "$PRODUCTION_P0_WIN32_NATIVE_RUNNER" \
   || fail "native Win32 P0 runner does not expire stale tracker state"

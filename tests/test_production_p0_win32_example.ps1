@@ -23,9 +23,10 @@ if ([string]::IsNullOrEmpty($AuthKey)) {
 
 # A production smoke test must prove key-derived P0 discovery. Reject an
 # accidental override, then remove even an inherited empty value before the
-# executable starts. The authentication key is restored only for the native
-# process-creation call, then removed immediately. It is never a command
-# argument or inherited by this runner's sleep, diagnostics, or cleanup helpers.
+# executable starts. The authentication key is added only to an explicit child
+# environment block and removed from that block immediately after process
+# creation. It is never a command argument or inherited by this runner's sleep,
+# diagnostics, or cleanup helpers.
 $DiscoveryVariables = @(
     "RATELIMITLY_TENANT",
     "RATELIMITLY_EXAMPLE_SERVER_HOST",
@@ -59,6 +60,8 @@ New-Item -ItemType Directory -Path $TempRoot | Out-Null
 $StdoutPath = Join-Path $TempRoot "example.out"
 $StderrPath = Join-Path $TempRoot "example.err"
 $Client = $null
+$StdoutRead = $null
+$StderrRead = $null
 $Failure = $null
 
 function Stop-ClientTree {
@@ -172,21 +175,34 @@ try {
     Write-Host "$TestName`: draining stale production state (11 seconds)"
     Start-Sleep -Seconds 11
 
-    # Use ordinary Windows child inheritance for the credential. The
-    # Start-Process -Environment overlay is not consistently visible to native
-    # executables, while the process environment is copied by CreateProcess.
-    $env:RATELIMITLY_AUTH_KEY = $AuthKey
+    # Construct ProcessStartInfo directly. This makes the exact environment
+    # passed to CreateProcess auditable and avoids Start-Process's environment
+    # overlay, which was not visible to the native executable in CI.
+    $StartInfo = [Diagnostics.ProcessStartInfo]::new()
+    $StartInfo.FileName = $ExamplePath
+    $StartInfo.UseShellExecute = $false
+    $StartInfo.CreateNoWindow = $true
+    $StartInfo.RedirectStandardOutput = $true
+    $StartInfo.RedirectStandardError = $true
+    $StartInfo.Environment["RATELIMITLY_AUTH_KEY"] = $AuthKey
+    foreach ($Name in $DiscoveryVariables) {
+        [void]$StartInfo.Environment.Remove($Name)
+    }
+
+    $Client = [Diagnostics.Process]::new()
+    $Client.StartInfo = $StartInfo
     try {
-        $Client = Start-Process `
-            -FilePath $ExamplePath `
-            -RedirectStandardOutput $StdoutPath `
-            -RedirectStandardError $StderrPath `
-            -NoNewWindow `
-            -PassThru
+        if (-not $Client.Start()) {
+            throw "CreateProcess did not start the example"
+        }
+        # Drain both pipes concurrently. Waiting before starting these reads
+        # can deadlock when a child fills either redirected pipe.
+        $StdoutRead = $Client.StandardOutput.ReadToEndAsync()
+        $StderrRead = $Client.StandardError.ReadToEndAsync()
     }
     finally {
-        # Drop the credential as soon as CreateProcess has copied it.
-        Remove-Item Env:RATELIMITLY_AUTH_KEY -ErrorAction SilentlyContinue
+        # Drop the credential as soon as CreateProcess has copied the block.
+        [void]$StartInfo.Environment.Remove("RATELIMITLY_AUTH_KEY")
     }
 
     # Keep the network smoke bounded even if DNS, UDP, or shutdown wedges.
@@ -199,17 +215,21 @@ try {
     }
     $Client.WaitForExit()
 
+    $Stdout = $StdoutRead.GetAwaiter().GetResult()
+    $Stderr = $StderrRead.GetAwaiter().GetResult()
+    [IO.File]::WriteAllText($StdoutPath, $Stdout)
+    [IO.File]::WriteAllText($StderrPath, $Stderr)
+
     if ($Client.ExitCode -ne 0) {
         throw "example exited $($Client.ExitCode); expected 0"
     }
 
-    $Stdout = [IO.File]::ReadAllText($StdoutPath)
     $Expected = `
         '\Aallowed: inventory response prepared by Win32; latency=[0-9]+ ms(?:\r\n|\n)?\z'
     if (-not [regex]::IsMatch($Stdout, $Expected)) {
         throw "stdout was not the single documented allowed/latency line"
     }
-    if ((Get-Item -LiteralPath $StderrPath).Length -ne 0) {
+    if ($Stderr.Length -ne 0) {
         throw "example wrote unexpected stderr"
     }
 
