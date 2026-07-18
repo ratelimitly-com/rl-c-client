@@ -134,6 +134,7 @@ to a repository-wide 2.3 validation claim.
 | latency tracker | Server-side sample window updated by the post-work latency report. |
 | request pool | H2O-owned arena whose disposer releases pending request state when the HTTP request ends. |
 | duplicate descriptor | Second file descriptor for the same UDP socket; H2O owns the duplicate while the runtime owns and drains the original. |
+| CMake | Cross-platform build-system generator provided as an alternative to Make. |
 
 ## API references
 
