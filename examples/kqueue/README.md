@@ -1,9 +1,58 @@
 # Pure kqueue integration
 
-This example uses kqueue directly, without an event-loop library. It registers
-runtime-owned UDP sockets with `EVFILT_READ` and supplies each current admission
-delay as the `kevent` timeout. The request contains one resource rate limit and
-one latency guard; only admitted, completed work produces a latency report.
+> **Prerequisites.** You can read C and know what a UDP socket is. Building
+> requires macOS or BSD with kqueue, a C11 compiler, OpenSSL development files,
+> and Make or CMake. Everything else is explained here.
+
+## TL;DR
+
+`kqueue` drives a request containing a resource rate limit and a pre-work
+latency guard without an event-loop library. Allowed work is measured afterward
+and reported as one latency sample; denied, cancelled, or failed work produces
+no sample.
+
+## What this example teaches
+
+This example uses kqueue directly. It registers runtime-owned UDP sockets with
+`EVFILT_READ` and supplies the current admission delay as the `kevent` timeout.
+
+The rate limit and latency guard are submitted together. Only admitted,
+successfully completed work is measured and reported to the latency tracker.
+
+## Build and run
+
+On macOS or a BSD with kqueue, build the library and this folder:
+
+```sh
+make -C ../..
+make
+./kqueue-example
+```
+
+```sh
+cmake -S . -B build
+cmake --build build
+./build/kqueue-example
+```
+
+## Configuration
+
+`RATELIMITLY_AUTH_KEY` is required. With no overrides, the runtime decodes the
+key ID, derives `c-<key-id>.p0.ratelimitly.com`, and discovers
+`_ratelimitly._udp.c-<key-id>.p0.ratelimitly.com`.
+
+`RATELIMITLY_TENANT` optionally replaces the derived tenant DNS name. For a
+fixed development responder, set `RATELIMITLY_EXAMPLE_SERVER_HOST` and
+`RATELIMITLY_EXAMPLE_SERVER_PORT` together; setting only one is invalid. Leave
+all three overrides unset for key-derived P0 discovery.
+
+```sh
+export RATELIMITLY_AUTH_KEY='rl-aes1...'
+# Optional fixed development endpoint; set both or neither.
+export RATELIMITLY_EXAMPLE_SERVER_HOST=127.0.0.1
+export RATELIMITLY_EXAMPLE_SERVER_PORT=39082
+./kqueue-example
+```
 
 ## Control flow
 
@@ -22,46 +71,48 @@ flowchart TD
     Decision -->|Allowed| Work["Run work, measure, report latency"]
 ```
 
-## Build and run
+## Guard first, sample afterward
 
-On macOS or a BSD with kqueue:
+The latency guard checks existing server-side tracker history before work
+starts; it does not measure the operation awaiting admission. After both the
+rate limit and guard allow the request,
+`r_runtime_admission_run_and_report()` measures synchronous response
+construction and sends one post-work sample. Denied, cancelled, and failed
+work sends none.
 
-```sh
-make -C ../..
-make
-./kqueue-example
-```
+Synchronous work keeps this example focused on kqueue. Production code should
+start asynchronous, nonblocking work after admission, retain request identity
+and a monotonic start time, and report once from the successful completion
+callback.
 
-```sh
-cmake -S . -B build
-cmake --build build
-./build/kqueue-example
-```
+## Platform and verification
 
-From the repository root, run the strict local behavioral suite with
-`bash tests/test_macos_examples.sh`. It checks allow, resource denial, latency
-denial, and exact latency-report pairing against the synthetic responder. This
-macOS-only suite is deliberately not part of CI.
+kqueue is available on macOS and BSD, not natively on Linux or Windows. The
+repository's local macOS suite verifies allow, resource denial, latency denial,
+and exact request/report pairing against the synthetic responder. That suite is
+deliberately not run in CI, and this repository does not claim automated BSD or
+production P0 coverage for this example.
 
-Set `RATELIMITLY_AUTH_KEY`. The key defaults discovery to
-`_ratelimitly._udp.c-<key-id>.p0.ratelimitly.com`; optional
-`RATELIMITLY_TENANT` overrides it. Fixed responder variables are optional for
-local tests.
+Treat `EV_ERROR` and terminal `EV_EOF` as failures, recompute the relative
+timeout after every client transition, keep request storage alive through
+callback or cancellation, and close the kqueue descriptor before destroying
+runtime-owned sockets.
 
-## Platform support
+## Glossary
 
-kqueue is available on macOS and the BSD family. It is not a native Linux or
-Windows API; use epoll/io_uring on Linux and the Win32 example on Windows.
-
-## Production notes
-
-- Treat `EV_ERROR` and terminal `EV_EOF` results as watcher failures.
-- Drain readable datagram sockets to `EAGAIN`.
-- Recompute the relative timeout after every client transition.
-- Close the kqueue before destroying runtime-owned sockets.
-- Keep request storage alive until callback or explicit cancellation.
+| Term | Meaning |
+|---|---|
+| kqueue | macOS/BSD kernel facility for receiving events about registered objects. |
+| `EVFILT_READ` | kqueue filter that reports when a socket can be read. |
+| `kevent` | Function used to register filters and wait for returned events. |
+| admission deadline | Next time the client must advance timeout or retry state. |
+| latency sample | Post-work duration reported after successful admitted work. |
 
 ## API references
 
+- [Example source](main.c)
+- [Public runtime API](../../include/r_client_runtime.h)
+- [Combined admission workflow](../../include/r_client_workflow.h)
+- [Apple `kevent(2)` manual](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/kevent.2.html)
 - [FreeBSD `kqueue(2)` manual](https://man.freebsd.org/cgi/man.cgi?query=kevent&sektion=2)
-  defines filter registration, `EV_ERROR`, `EV_EOF`, and timeout behavior.
+- [Local macOS example suite](../../tests/test_macos_examples.sh)
