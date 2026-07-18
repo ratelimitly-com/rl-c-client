@@ -70,11 +70,15 @@ static void test_outcome_classification(void) {
     r_admission_outcome_t outcome = classify(true, 0u, true);
     assert(outcome.decision == R_ADMISSION_ALLOWED);
     assert(outcome.allowed);
+    assert(outcome.current_latency_ms == 75u);
+    assert(outcome.latency_threshold_ms == 100u);
 
     outcome = classify(false, 1u, true);
     assert(outcome.decision == R_ADMISSION_RATE_LIMITED);
     assert(outcome.rate_limited);
     assert(!outcome.latency_limited);
+    assert(outcome.current_latency_ms == 0u);
+    assert(outcome.latency_threshold_ms == 0u);
 
     outcome = classify(false, 0u, false);
     assert(outcome.decision == R_ADMISSION_LATENCY_LIMITED);
@@ -91,6 +95,22 @@ static void test_outcome_classification(void) {
     outcome = r_client_admission_classify(RCLIENT_ERR_TIMEOUT, NULL);
     assert(outcome.decision == R_ADMISSION_ERROR);
     assert(!outcome.allowed);
+
+    r_rate_limit_result_t malformed = {
+        .success = true,
+        .guard_count = 1u,
+        .guards = NULL,
+    };
+    outcome = r_client_admission_classify(RCLIENT_OK, &malformed);
+    assert(outcome.decision == R_ADMISSION_ERROR);
+
+    malformed = (r_rate_limit_result_t){
+        .success = false,
+        .resource_count = 1u,
+        .resources = NULL,
+    };
+    outcome = r_client_admission_classify(RCLIENT_OK, &malformed);
+    assert(outcome.decision == R_ADMISSION_ERROR);
 }
 
 int main(void) {

@@ -77,7 +77,15 @@ r_admission_outcome_t r_client_admission_classify(
     if (status != RCLIENT_OK || !result) {
         return outcome;
     }
+    if ((result->resource_count > 0u && !result->resources)
+        || (result->guard_count > 0u && !result->guards)) {
+        return outcome;
+    }
     if (result->success) {
+        if (result->guard_count > 0u) {
+            outcome.current_latency_ms = result->guards[0].current_latency_ms;
+            outcome.latency_threshold_ms = result->guards[0].threshold_ms;
+        }
         outcome.decision = R_ADMISSION_ALLOWED;
         outcome.allowed = true;
         return outcome;

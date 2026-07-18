@@ -43,6 +43,7 @@ typedef struct r_admission_outcome {
     bool allowed;
     bool rate_limited;
     bool latency_limited;
+    /* First guard when admitted; first failed guard when rejected. */
     uint32_t current_latency_ms;
     uint32_t latency_threshold_ms;
 } r_admission_outcome_t;
