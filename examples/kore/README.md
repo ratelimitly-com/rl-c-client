@@ -144,6 +144,7 @@ build support, not an automated HTTP scenario in this repository.
 | AAAA | DNS address record that maps a hostname to an IPv6 address. |
 | IPv6 | Internet Protocol version 6, the address format returned by a DNS AAAA record. |
 | ELF | Executable and Linkable Format used by Linux shared modules. |
+| CMake | Cross-platform build-system generator provided as an alternative to Make. |
 
 ## API references
 
