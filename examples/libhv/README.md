@@ -131,6 +131,8 @@ fire-and-forget report send, not server acknowledgement.
 | readiness | Notification that a socket can be drained without blocking. |
 | latency guard | The pre-work check against the tracker's existing samples. |
 | latency sample | One measured duration submitted after admitted work succeeds. |
+| CMake | Cross-platform build-system generator provided as an alternative to Make. |
+| MSVC | Microsoft Visual C/C++ compiler and native Windows toolchain. |
 
 ## API references
 
