@@ -236,9 +236,14 @@ win32_wine_job=$(sed -n '/^  win32-example:/,/^  win32-msvc:/p' "$CI_WORKFLOW")
 grep -Fq -- 'cmake -S examples/win32 -B build-mingw' \
   <<<"$win32_wine_job" \
   || fail "Wine CI does not create one reusable CMake cross-build"
-grep -Fq -- 'OPENSSL_CRYPTO_LIBRARY(_RELEASE)?:FILEPATH=' \
+grep -Fq -- '(LIB_EAY|OPENSSL_CRYPTO_LIBRARY(_RELEASE)?):FILEPATH=' \
   <<<"$win32_wine_job" \
-  || fail "Wine CI assumes one CMake OpenSSL cache variable spelling"
+  || fail "Wine CI does not accept supported CMake OpenSSL cache spellings"
+grep -Fq -- 'OPENSSL_INCLUDE_DIR:PATH=' <<<"$win32_wine_job" \
+  || fail "Wine CI does not verify the MinGW OpenSSL headers"
+grep -Fq -- "'DLL Name: .*lib(crypto|ssl).*\\.dll'" \
+  <<<"$win32_wine_job" \
+  || fail "Wine CI does not reject dynamic OpenSSL imports"
 grep -Fq -- \
   'WINDOWS_EXAMPLE_BINARY: ${{ github.workspace }}/build-mingw/win32-example.exe' \
   <<<"$win32_wine_job" \

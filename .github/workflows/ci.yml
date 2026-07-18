@@ -386,11 +386,21 @@ jobs:
           cmake --build build-mingw --parallel 2
           test -s build-mingw/win32-example.exe
           grep -Eq \
-            "^OPENSSL_CRYPTO_LIBRARY(_RELEASE)?:FILEPATH=$MINGW_OPENSSL_PREFIX/lib/libcrypto\\.a$" \
+            "^(LIB_EAY|OPENSSL_CRYPTO_LIBRARY(_RELEASE)?):FILEPATH=$MINGW_OPENSSL_PREFIX/lib/libcrypto\\.a$" \
+            build-mingw/CMakeCache.txt
+          grep -Fxq \
+            "OPENSSL_INCLUDE_DIR:PATH=$MINGW_OPENSSL_PREFIX/include" \
             build-mingw/CMakeCache.txt
           x86_64-w64-mingw32-objdump \
             -f build-mingw/win32-example.exe > build-mingw/pe-header.txt
           grep -Fq 'file format pei-x86-64' build-mingw/pe-header.txt
+          x86_64-w64-mingw32-objdump \
+            -p build-mingw/win32-example.exe > build-mingw/pe-imports.txt
+          if grep -Eiq 'DLL Name: .*lib(crypto|ssl).*\.dll' \
+              build-mingw/pe-imports.txt; then
+            echo 'Win32 example unexpectedly imports an OpenSSL DLL' >&2
+            exit 1
+          fi
 
       - name: Cross-build and run Win32 integration
         env:
