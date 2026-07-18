@@ -173,6 +173,20 @@ jobs:
     name: Linux HTTP examples (shard ${{ matrix.shard }})
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    concurrency:
+      group: >-
+        ${{
+          (github.ref == 'refs/heads/main' ||
+           github.event_name == 'workflow_dispatch') &&
+          format('rl-c-client-production-http-{0}', matrix.shard) ||
+          format(
+            '{0}-{1}-linux-http-{2}',
+            github.workflow,
+            github.ref,
+            matrix.shard
+          )
+        }}
+      cancel-in-progress: false
     strategy:
       fail-fast: false
       matrix:
@@ -302,6 +316,19 @@ jobs:
 
       - name: Run rate-limit and latency HTTP scenarios
         run: bash tests/test_linux_http_examples.sh "${{ matrix.shard }}"
+
+      - name: Run HTTP frameworks against production P0
+        if: >-
+          (github.ref == 'refs/heads/main' &&
+           (github.event_name == 'push' ||
+            (github.event_name == 'workflow_dispatch' &&
+             github.actor == 'edescourtis'))) ||
+          (github.ref == 'refs/heads/codex/example-integrations' &&
+           github.event_name == 'workflow_dispatch' &&
+           github.actor == 'edescourtis')
+        env:
+          RATELIMITLY_AUTH_KEY: ${{ secrets.RATELIMITLY_AUTH_KEY }}
+        run: bash tests/test_production_p0_http_examples.sh "${{ matrix.shard }}"
 
   win32-example:
     name: Win32 example (MinGW + Wine)

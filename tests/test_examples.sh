@@ -21,6 +21,8 @@ WINDOWS_NATIVE_RUNNER="$ROOT/tests/test_windows_native_example.ps1"
 PRODUCTION_P0_SOURCE="$ROOT/tests/production_p0_probe.c"
 PRODUCTION_P0_RUNNER="$ROOT/tests/test_production_p0.sh"
 PRODUCTION_P0_ONE_SHOT_RUNNER="$ROOT/tests/test_production_p0_one_shot_examples.sh"
+PRODUCTION_P0_HTTP_MATRIX_RUNNER="$ROOT/tests/test_production_p0_http_examples.sh"
+PRODUCTION_P0_HTTP_RUNNER="$ROOT/tests/run_production_p0_http_example.sh"
 
 fail() {
   echo "test_examples: $*" >&2
@@ -42,6 +44,10 @@ fail() {
   || fail "missing executable production P0 runner"
 [[ -x "$PRODUCTION_P0_ONE_SHOT_RUNNER" ]] \
   || fail "missing executable production P0 one-shot runner"
+[[ -x "$PRODUCTION_P0_HTTP_MATRIX_RUNNER" ]] \
+  || fail "missing executable production P0 HTTP matrix runner"
+[[ -x "$PRODUCTION_P0_HTTP_RUNNER" ]] \
+  || fail "missing executable production P0 HTTP example runner"
 grep -Fxq -- '/bin/production_p0_probe' "$ROOT/.gitignore" \
   || fail "production P0 build artifact is not ignored"
 grep -Fq -- 'bash tests/test_linux_one_shot_examples.sh' "$CI_WORKFLOW" \
@@ -147,6 +153,53 @@ grep -Eq -- \
   '^[[:space:]]*timeout --signal=TERM --kill-after=1s 29s ' \
   "$PRODUCTION_P0_ONE_SHOT_RUNNER" \
   || fail "one-shot P0 runner lacks its hard 30-second deadline"
+linux_http_job=$(sed -n \
+  '/^  linux-http-examples:/,/^  win32-example:/p' \
+  "$CI_WORKFLOW")
+grep -Fq -- \
+  'bash tests/test_production_p0_http_examples.sh "${{ matrix.shard }}"' \
+  <<<"$linux_http_job" \
+  || fail "Linux HTTP CI does not run frameworks against production P0"
+grep -Fq -- 'RATELIMITLY_AUTH_KEY: ${{ secrets.RATELIMITLY_AUTH_KEY }}' \
+  <<<"$linux_http_job" \
+  || fail "Linux HTTP production step does not use the repository secret"
+grep -Fq -- "github.actor == 'edescourtis'" <<<"$linux_http_job" \
+  || fail "Linux HTTP manual production run is not restricted"
+grep -Fq -- "github.ref == 'refs/heads/codex/example-integrations'" \
+  <<<"$linux_http_job" \
+  || fail "Linux HTTP validation exception is not branch-scoped"
+grep -Fq -- 'cancel-in-progress: false' <<<"$linux_http_job" \
+  || fail "Linux HTTP production runs are not serialized"
+grep -Fq -- 'unset RATELIMITLY_TENANT' "$PRODUCTION_P0_HTTP_MATRIX_RUNNER" \
+  || fail "HTTP P0 matrix does not force key-derived discovery"
+grep -Fq -- 'sleep 11' "$PRODUCTION_P0_HTTP_MATRIX_RUNNER" \
+  || fail "HTTP P0 matrix does not expire stale tracker state"
+grep -Fq -- 'exec setsid' "$PRODUCTION_P0_HTTP_RUNNER" \
+  || fail "HTTP P0 runner does not isolate framework process groups"
+grep -Fq -- '--max-time 15' "$PRODUCTION_P0_HTTP_RUNNER" \
+  || fail "HTTP P0 runner has no bounded protected request"
+grep -Eq -- \
+  '^[[:space:]]*exec timeout --signal=TERM --kill-after=5s 55s ' \
+  "$PRODUCTION_P0_HTTP_MATRIX_RUNNER" \
+  || fail "HTTP P0 matrix lacks a hard per-framework deadline"
+grep -Fq -- 'kill -KILL -- "-$process_group"' "$PRODUCTION_P0_HTTP_RUNNER" \
+  || fail "HTTP P0 runner cannot force-stop framework workers"
+grep -Fq -- "grep -Fq 'latency report failed'" "$PRODUCTION_P0_HTTP_RUNNER" \
+  || fail "HTTP P0 runner ignores local latency-report failures"
+grep -Fq -- 'unset RATELIMITLY_AUTH_KEY' "$PRODUCTION_P0_HTTP_RUNNER" \
+  || fail "HTTP P0 helper leaks the key to support processes"
+grep -Fq -- 'ulimit -c 0' "$PRODUCTION_P0_HTTP_RUNNER" \
+  || fail "HTTP P0 runner permits secret-bearing core dumps"
+grep -Fq -- 'assert_http_port_is_free' "$PRODUCTION_P0_HTTP_RUNNER" \
+  || fail "HTTP P0 runner can attach to an unrelated listener"
+bash -n \
+  "$PRODUCTION_P0_HTTP_MATRIX_RUNNER" \
+  "$PRODUCTION_P0_HTTP_RUNNER" \
+  || fail "HTTP P0 runner has invalid Bash syntax"
+if grep -Eq -- 'c-2213169720275691601|s-408232124743711' \
+    "$PRODUCTION_P0_HTTP_MATRIX_RUNNER" "$PRODUCTION_P0_HTTP_RUNNER"; then
+  fail "HTTP P0 runner hard-codes one production endpoint"
+fi
 for scenario in guard-pass deny guard-deny; do
   grep -Fq -- "Name = \"$scenario\"" "$WINDOWS_NATIVE_RUNNER" \
     || fail "native Windows behavioral runner omits $scenario"
