@@ -119,6 +119,7 @@ sockets, and keep client transitions on the main-context thread.
 | `SOCKET` | Pointer-width WinSock handle, which is not guaranteed to fit in GLib's `gint` parameter. |
 | latency guard | Pre-work policy check against existing samples for a service. |
 | latency sample | Post-work duration sent after admitted work succeeds. |
+| POSIX | Portable Operating System Interface family that defines Unix file-descriptor and socket conventions. |
 
 ## API references
 
