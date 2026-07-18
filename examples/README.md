@@ -261,8 +261,9 @@ latency-based load shedding:
 4. Perform protected work only when the combined resource and guard result
    passes.
 5. Measure only that work with `CLOCK_MONOTONIC`.
-6. Send the observation with `r_client_report_latency()` using the same service
-   id and tracker configuration.
+6. Send the observation with `r_client_admission_report_latency()`. The
+   admission object preserves the matching service ID and tracker configuration
+   and prevents a second report for the same admitted request.
 
 Never report latency for work rejected by the guard. No operation occurred, so
 a zero or synthetic sample would corrupt the service tracker. Likewise, do not
