@@ -8,7 +8,7 @@ ROOT_README="$ROOT/README.md"
 API_GUIDE="$ROOT/docs/api.md"
 IO_GUIDE="$ROOT/IO_ABSTRACTION.md"
 CLOUD_CI_GUIDE="$ROOT/docs/cloud-server-ci-plan.md"
-CI_WORKFLOW="$ROOT/.github/workflows/ci.yml"
+CI_WORKFLOW="${R_CI_WORKFLOW_PATH:-$ROOT/.github/workflows/ci.yml}"
 H2O_MAKEFILE="$ROOT/examples/h2o/Makefile"
 H2O_CMAKE="$ROOT/examples/h2o/CMakeLists.txt"
 LWAN_MAKEFILE="$ROOT/examples/lwan/Makefile"
@@ -28,6 +28,8 @@ PRODUCTION_P0_HTTP_RUNNER="$ROOT/tests/run_production_p0_http_example.sh"
 PRODUCTION_P0_WIN32_WINE_RUNNER="$ROOT/tests/test_production_p0_win32_wine.sh"
 PRODUCTION_P0_WIN32_WINE_TEST="$ROOT/tests/test_production_p0_win32_wine_runner.sh"
 PRODUCTION_P0_WIN32_NATIVE_RUNNER="$ROOT/tests/test_production_p0_win32_example.ps1"
+EXPECTED_PRODUCTION_GATE="github.ref=='refs/heads/main'&&(github.event_name=='push'||(github.event_name=='workflow_dispatch'&&github.actor=='edescourtis'))"
+PRODUCTION_SECRET_BINDING='RATELIMITLY_AUTH_KEY: ${{ secrets.RATELIMITLY_AUTH_KEY }}'
 
 fail() {
   echo "test_examples: $*" >&2
@@ -46,6 +48,89 @@ require_main_only_concurrency() {
       <<<"$concurrency_block"; then
     fail "$job_name routes feature dispatches through production concurrency"
   fi
+}
+
+count_fixed_occurrences() {
+  local needle=$1
+  local text=$2
+  awk -v needle="$needle" '
+    index($0, needle) { count++ }
+    END { print count + 0 }
+  ' <<<"$text"
+}
+
+require_production_job_gate() {
+  local job_name=$1
+  local step_name=$2
+  local expected_command=$3
+  local job_block=$4
+  local expression step_block step_count command_count secret_count
+  expression=$(awk '
+    $0 == "    if: >-" { capture = 1; next }
+    capture && /^    [A-Za-z_][A-Za-z_-]*:/ { exit }
+    capture { gsub(/[[:space:]]/, ""); printf "%s", $0 }
+  ' <<<"$job_block")
+  [[ "$expression" == "$EXPECTED_PRODUCTION_GATE" ]] \
+    || fail "$job_name does not use the exact trusted-main production gate"
+  step_count=$(awk -v target="      - name: $step_name" '
+    $0 == target { count++ }
+    END { print count + 0 }
+  ' <<<"$job_block")
+  [[ "$step_count" -eq 1 ]] \
+    || fail "$job_name must contain one production step: $step_name"
+  step_block=$(awk -v target="      - name: $step_name" '
+    $0 == target { capture = 1 }
+    capture && $0 != target && /^      - / { exit }
+    capture { print }
+  ' <<<"$job_block")
+  command_count=$(count_fixed_occurrences "$expected_command" "$job_block")
+  secret_count=$(count_fixed_occurrences \
+    "$PRODUCTION_SECRET_BINDING" "$job_block")
+  [[ "$command_count" -eq 1 ]] \
+    || fail "$job_name must contain exactly one production command"
+  [[ "$secret_count" -eq 1 ]] \
+    || fail "$job_name must contain exactly one production secret binding"
+  grep -Fq -- "$PRODUCTION_SECRET_BINDING" <<<"$step_block" \
+    || fail "$job_name production command does not receive the repository secret"
+  grep -Fq -- "$expected_command" <<<"$step_block" \
+    || fail "$job_name gate is not bound to its production command"
+}
+
+require_production_step_gate() {
+  local job_name=$1
+  local step_name=$2
+  local expected_command=$3
+  local job_block=$4
+  local step_block expression step_count command_count secret_count
+  step_count=$(awk -v target="      - name: $step_name" '
+    $0 == target { count++ }
+    END { print count + 0 }
+  ' <<<"$job_block")
+  [[ "$step_count" -eq 1 ]] \
+    || fail "$job_name must contain one production step: $step_name"
+  step_block=$(awk -v target="      - name: $step_name" '
+    $0 == target { capture = 1 }
+    capture && $0 != target && /^      - / { exit }
+    capture { print }
+  ' <<<"$job_block")
+  expression=$(awk '
+    $0 == "        if: >-" { capture = 1; next }
+    capture && /^        [A-Za-z_][A-Za-z_-]*:/ { exit }
+    capture { gsub(/[[:space:]]/, ""); printf "%s", $0 }
+  ' <<<"$step_block")
+  [[ "$expression" == "$EXPECTED_PRODUCTION_GATE" ]] \
+    || fail "$job_name does not use the exact trusted-main production gate"
+  command_count=$(count_fixed_occurrences "$expected_command" "$job_block")
+  secret_count=$(count_fixed_occurrences \
+    "$PRODUCTION_SECRET_BINDING" "$job_block")
+  [[ "$command_count" -eq 1 ]] \
+    || fail "$job_name must contain exactly one production command"
+  [[ "$secret_count" -eq 1 ]] \
+    || fail "$job_name must contain exactly one production secret binding"
+  grep -Fq -- "$PRODUCTION_SECRET_BINDING" <<<"$step_block" \
+    || fail "$job_name production command does not receive the repository secret"
+  grep -Fq -- "$expected_command" <<<"$step_block" \
+    || fail "$job_name gate is not bound to its production command"
 }
 
 [[ -f "$MANIFEST" ]] || fail "missing examples/manifest.txt"
@@ -208,6 +293,14 @@ if grep -Fq -- "refs/heads/codex/example-integrations" "$CI_WORKFLOW"; then
 fi
 [[ $(grep -Fc -- "github.actor == 'edescourtis'" "$CI_WORKFLOW") -eq 5 ]] \
   || fail "every manual production P0 entry point must be owner-restricted"
+[[ $(grep -Fc -- "$PRODUCTION_SECRET_BINDING" "$CI_WORKFLOW") -eq 5 ]] \
+  || fail "production credentials must be bound only to five verified steps"
+production_p0_job=$(sed -n \
+  '/^  production-p0-smoke:/,/^  linux-one-shot-examples:/p' \
+  "$CI_WORKFLOW")
+require_production_job_gate \
+  "production protocol CI" "Prove key-only rate and latency behavior" \
+  "bash tests/test_production_p0.sh" "$production_p0_job"
 grep -Fq -- 'cancel-in-progress: false' "$CI_WORKFLOW" \
   || fail "production P0 CI does not serialize shared-tenant tests"
 grep -Fq -- 'unset RATELIMITLY_TENANT' "$PRODUCTION_P0_RUNNER" \
@@ -229,6 +322,10 @@ grep -Fq -- 'tokens_deficit == 0u' "$PRODUCTION_P0_SOURCE" \
 linux_one_shot_job=$(sed -n \
   '/^  linux-one-shot-examples:/,/^  linux-http-examples:/p' \
   "$CI_WORKFLOW")
+require_production_step_gate \
+  "Linux one-shot CI" "Run examples against production P0" \
+  "bash tests/test_production_p0_one_shot_examples.sh" \
+  "$linux_one_shot_job"
 grep -Fq -- 'bash tests/test_production_p0_one_shot_examples.sh' \
   <<<"$linux_one_shot_job" \
   || fail "Linux one-shot CI does not run examples against production P0"
@@ -249,6 +346,9 @@ grep -Eq -- \
 linux_http_job=$(sed -n \
   '/^  linux-http-examples:/,/^  win32-example:/p' \
   "$CI_WORKFLOW")
+require_production_step_gate \
+  "Linux HTTP CI" "Run HTTP frameworks against production P0" \
+  "bash tests/test_production_p0_http_examples.sh" "$linux_http_job"
 grep -Fq -- \
   'bash tests/test_production_p0_http_examples.sh "${{ matrix.shard }}"' \
   <<<"$linux_http_job" \
@@ -292,6 +392,9 @@ if grep -Eq -- 'c-2213169720275691601|s-408232124743711' \
   fail "HTTP P0 runner hard-codes one production endpoint"
 fi
 win32_wine_job=$(sed -n '/^  win32-example:/,/^  win32-msvc:/p' "$CI_WORKFLOW")
+require_production_step_gate \
+  "Wine CI" "Run Wine Win32 example against production P0" \
+  "bash tests/test_production_p0_win32_wine.sh" "$win32_wine_job"
 grep -Fq -- 'cmake -S examples/win32 -B build-mingw' \
   <<<"$win32_wine_job" \
   || fail "Wine CI does not create one reusable CMake cross-build"
@@ -356,6 +459,9 @@ if grep -Eq -- 'c-2213169720275691601|s-408232124743711' \
   fail "Wine P0 runner hard-codes one production endpoint"
 fi
 win32_msvc_job=$(sed -n '/^  win32-msvc:/,$p' "$CI_WORKFLOW")
+require_production_step_gate \
+  "native Win32 CI" "Run native Win32 example against production P0" \
+  "tests/test_production_p0_win32_example.ps1" "$win32_msvc_job"
 grep -Fq -- 'tests/test_production_p0_win32_example.ps1' \
   <<<"$win32_msvc_job" \
   || fail "native MSVC CI does not run the Win32 client against P0"
