@@ -132,6 +132,7 @@ claim that this repository runs the CivetWeb scenario there automatically.
 | latency guard | Pre-work check that sheds new work when recent tracked latency reaches its threshold. |
 | latency tracker | Server-side window updated by the post-work latency report. |
 | condition variable | POSIX synchronization primitive a worker waits on until the bridge publishes a result. |
+| CMake | Cross-platform build-system generator provided as an alternative to Make. |
 
 ## API references
 
