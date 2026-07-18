@@ -77,6 +77,7 @@ static void test_outcome_classification(void) {
     assert(outcome.decision == R_ADMISSION_RATE_LIMITED);
     assert(outcome.rate_limited);
     assert(!outcome.latency_limited);
+    assert(outcome.tokens_deficit == 1u);
     assert(outcome.current_latency_ms == 0u);
     assert(outcome.latency_threshold_ms == 0u);
 
@@ -91,6 +92,12 @@ static void test_outcome_classification(void) {
     assert(outcome.decision == R_ADMISSION_RATE_AND_LATENCY_LIMITED);
     assert(outcome.rate_limited);
     assert(outcome.latency_limited);
+    assert(outcome.tokens_deficit == 2u);
+
+    outcome = classify(false, 0u, true);
+    assert(outcome.decision == R_ADMISSION_RATE_LIMITED);
+    assert(outcome.rate_limited);
+    assert(outcome.tokens_deficit == 0u);
 
     outcome = r_client_admission_classify(RCLIENT_ERR_TIMEOUT, NULL);
     assert(outcome.decision == R_ADMISSION_ERROR);

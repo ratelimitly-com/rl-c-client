@@ -43,6 +43,8 @@ typedef struct r_admission_outcome {
     bool allowed;
     bool rate_limited;
     bool latency_limited;
+    /* Positive only when the server returned a concrete resource deficit. */
+    uint16_t tokens_deficit;
     /* First guard when admitted; first failed guard when rejected. */
     uint32_t current_latency_ms;
     uint32_t latency_threshold_ms;

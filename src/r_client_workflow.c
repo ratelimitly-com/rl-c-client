@@ -94,6 +94,7 @@ r_admission_outcome_t r_client_admission_classify(
     for (size_t i = 0; i < result->resource_count; i++) {
         if (result->resources[i].tokens_deficit > 0u) {
             outcome.rate_limited = true;
+            outcome.tokens_deficit = result->resources[i].tokens_deficit;
             break;
         }
     }
