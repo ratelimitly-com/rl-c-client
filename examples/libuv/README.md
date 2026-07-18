@@ -139,6 +139,7 @@ server acknowledgement.
 | loop thread | The thread calling `uv_run()` and all client callbacks in this example. |
 | latency guard | The pre-work check against previously collected service latency. |
 | latency sample | The duration recorded after admitted work completes successfully. |
+| CMake | Cross-platform build-system generator provided as an alternative to Make. |
 
 ## API references
 
