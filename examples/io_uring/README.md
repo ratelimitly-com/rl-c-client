@@ -128,5 +128,5 @@ send path in that smoke test.
 - [Combined admission workflow](../../include/r_client_workflow.h)
 - [`io_uring_setup(2)`](https://man7.org/linux/man-pages/man2/io_uring_setup.2.html)
 - [`io_uring_enter(2)`](https://man7.org/linux/man-pages/man2/io_uring_enter.2.html)
-- [Linux io_uring documentation](https://docs.kernel.org/io_uring/index.html)
+- [Linux v5.11 io_uring UAPI header](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/io_uring.h?h=v5.11)
 - [Deterministic one-shot test runner](../../tests/run_one_shot_example.sh)
