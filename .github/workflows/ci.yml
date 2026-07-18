@@ -385,8 +385,8 @@ jobs:
             -DOPENSSL_USE_STATIC_LIBS=TRUE
           cmake --build build-mingw --parallel 2
           test -s build-mingw/win32-example.exe
-          grep -Fq \
-            "OPENSSL_CRYPTO_LIBRARY:FILEPATH=$MINGW_OPENSSL_PREFIX/lib/libcrypto.a" \
+          grep -Eq \
+            "^OPENSSL_CRYPTO_LIBRARY(_RELEASE)?:FILEPATH=$MINGW_OPENSSL_PREFIX/lib/libcrypto\\.a$" \
             build-mingw/CMakeCache.txt
           x86_64-w64-mingw32-objdump \
             -f build-mingw/win32-example.exe > build-mingw/pe-header.txt
