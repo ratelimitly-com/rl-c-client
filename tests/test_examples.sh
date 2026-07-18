@@ -16,6 +16,7 @@ GLIB_SOURCE="$ROOT/examples/glib/main.c"
 PERF_SOURCE="$ROOT/bin/perf_client.c"
 LINUX_ONE_SHOT_MATRIX="$ROOT/tests/linux-one-shot-examples.txt"
 LINUX_HTTP_MATRIX="$ROOT/tests/linux-http-examples.txt"
+MACOS_LOCAL_MATRIX="$ROOT/tests/macos-local-examples.txt"
 
 fail() {
   echo "test_examples: $*" >&2
@@ -27,6 +28,8 @@ fail() {
   || fail "missing executable Linux one-shot example matrix"
 [[ -f "$LINUX_HTTP_MATRIX" ]] \
   || fail "missing executable Linux HTTP example matrix"
+[[ -f "$MACOS_LOCAL_MATRIX" ]] \
+  || fail "missing local-only macOS example matrix"
 grep -Fq -- 'bash tests/test_linux_one_shot_examples.sh' "$CI_WORKFLOW" \
   || fail "CI does not execute Linux one-shot examples"
 grep -Fq -- 'bash tests/test_linux_http_examples.sh' "$CI_WORKFLOW" \
@@ -40,6 +43,16 @@ actual_linux_http="$(sed -n '/^[^#]/s/^\([^|]*|[^|]*\).*/\1/p' \
   "$LINUX_HTTP_MATRIX")"
 [[ "$actual_linux_http" == "$expected_linux_http" ]] \
   || fail "Linux HTTP matrix is incomplete, mis-sharded, or out of order"
+expected_macos_local=$'kqueue\nlibdispatch'
+actual_macos_local="$(sed -n '/^[^#]/s/|.*//p' "$MACOS_LOCAL_MATRIX")"
+[[ "$actual_macos_local" == "$expected_macos_local" ]] \
+  || fail "local macOS matrix is incomplete or out of order"
+if grep -Eq -- 'test_macos_examples|macos-local-examples' "$CI_WORKFLOW"; then
+  fail "CI must not execute the local-only macOS example matrix"
+fi
+if grep -Fq -- 'BASHPID' "$ROOT/tests/run_one_shot_example.sh"; then
+  fail "local macOS runner depends on Bash 4 BASHPID"
+fi
 for scenario in guard-pass deny guard-deny; do
   grep -Fq -- "run_scenario $scenario" \
     "$ROOT/tests/run_one_shot_example.sh" \

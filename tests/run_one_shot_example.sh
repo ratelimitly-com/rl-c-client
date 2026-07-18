@@ -32,12 +32,12 @@ fi
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/r-example-e2e.XXXXXX")"
 RESPONDER_PID=""
 EXAMPLE_PID=""
-OWNER_BASHPID=$BASHPID
+OWNER_BASH_SUBSHELL=${BASH_SUBSHELL:-0}
 
 cleanup() {
   # EXIT traps propagate into command substitutions and background subshells.
   # Only the owning shell may stop processes or remove diagnostic files.
-  [[ "$BASHPID" -eq "$OWNER_BASHPID" ]] || return
+  [[ "${BASH_SUBSHELL:-0}" -eq "$OWNER_BASH_SUBSHELL" ]] || return
   local pid
   for pid in "$EXAMPLE_PID" "$RESPONDER_PID"; do
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then

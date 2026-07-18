@@ -189,6 +189,17 @@ Each server runs in its own process group. The harness drains UDP after the
 response and again during shutdown, so worker processes cannot hide duplicate
 or forbidden late reports from the responder assertions.
 
+kqueue and libdispatch are intentionally verified only on a developer Mac.
+They are absent from the CI workflow; run their strict builds and the same
+allow/resource-deny/latency-deny contract locally with:
+
+```sh
+bash tests/test_macos_examples.sh
+```
+
+[`tests/macos-local-examples.txt`](../tests/macos-local-examples.txt) is the
+small source of truth for that local-only matrix.
+
 ## Latency tracking workflow
 
 [`latency_tracker/main.c`](latency_tracker/main.c) demonstrates both halves of
