@@ -47,8 +47,17 @@ On startup it writes exactly one readiness record to standard output:
 ```
 
 All subsequent standard-output records are newline-delimited JSON. Diagnostics
-go to standard error. `SIGINT` and `SIGTERM` cause a clean socket close and exit
-status zero.
+go to standard error. On POSIX, `SIGINT` and `SIGTERM` cause a clean socket close
+and exit status zero. Win32 handles console Ctrl-C and Ctrl-Break cooperatively
+through `SetConsoleCtrlHandler`. Windows may terminate console processes
+directly during close, logoff, or system shutdown, so those events are not
+documented as graceful fixture exits.
+
+The fixture builds on POSIX and native Win32. POSIX waits with `poll(2)`;
+Windows uses WinSock `select`, preserves pointer-width `SOCKET` values, and is
+initialized and cleaned up with `WSAStartup`/`WSACleanup`. The Win32 example's
+CMake project builds `r-test-responder.exe` with the selected compiler so MSVC
+tests exercise this same protocol implementation.
 
 ## Synthetic credentials
 

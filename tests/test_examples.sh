@@ -67,6 +67,14 @@ grep -Fq -- 'macos-latest' "$CI_WORKFLOW" \
   || fail "CI does not validate the macOS build"
 grep -Fq -- 'tests/test_windows_example.sh' "$CI_WORKFLOW" \
   || fail "CI does not build and run the Win32 example"
+grep -Fq -- 'tests/test_windows_responder.sh' "$CI_WORKFLOW" \
+  || fail "Wine CI does not compile the Windows responder"
+grep -Fq -- "'\"event\":\"latency_report\"'" \
+  "$ROOT/tests/test_windows_responder.sh" \
+  || fail "Windows responder test does not run an authenticated PE roundtrip"
+grep -Fq -- 'add_executable(r-test-responder' \
+  "$ROOT/examples/win32/CMakeLists.txt" \
+  || fail "native Windows CMake does not build the test responder"
 for scenario in guard-pass deny guard-deny; do
   grep -Fq -- "run_scenario $scenario" "$ROOT/tests/test_windows_example.sh" \
     || fail "Win32 behavioral runner omits $scenario"

@@ -290,7 +290,9 @@ jobs:
         env:
           MINGW_OPENSSL_PREFIX: ${{ runner.temp }}/openssl-mingw64
           WINDOWS_RUNNER: /usr/lib/wine/wine64
-        run: bash tests/test_windows_example.sh
+        run: |
+          bash tests/test_windows_responder.sh
+          bash tests/test_windows_example.sh
 
   win32-msvc:
     name: Win32 example (MSVC)
