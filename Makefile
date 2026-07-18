@@ -86,6 +86,7 @@ test: $(TEST_BINS) $(TEST_RESPONDER_BIN)
 	bash ./tests/test_runtime.sh
 	bash ./tests/test_latency_tracker.sh
 	bash ./tests/test_examples.sh
+	python3 ./tests/test_readme_quality_unit.py
 	python3 ./tests/test_readme_quality.py
 	bash ./tests/test_windows_headers.sh
 	bash ./tests/test_windows_core.sh

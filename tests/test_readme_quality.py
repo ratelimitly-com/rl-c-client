@@ -21,6 +21,31 @@ FORWARD_REFERENCE = re.compile(
     r"see below|described later|in a later section)\b",
     re.IGNORECASE,
 )
+MERMAID_INIT_DIRECTIVE = re.compile(
+    r"%%\{\s*(?:init|initialize)\b(.*?)\}%%", re.IGNORECASE | re.DOTALL
+)
+MERMAID_FORCED_KEY = re.compile(
+    r"['\"]?(theme|background|lineColor)['\"]?\s*:", re.IGNORECASE
+)
+MERMAID_STYLE_LINE = re.compile(
+    r"^\s*(classDef|style|linkStyle)\b", re.IGNORECASE
+)
+MERMAID_HAS_FILL = re.compile(r"\bfill\s*:", re.IGNORECASE)
+MERMAID_HAS_COLOR = re.compile(r"\bcolor\s*:", re.IGNORECASE)
+MERMAID_FILL_HEX = re.compile(
+    r"\bfill\s*:\s*#([0-9a-f]{3}|[0-9a-f]{6})\b", re.IGNORECASE
+)
+MERMAID_COLOR_HEX = re.compile(
+    r"(?<![A-Za-z])color\s*:\s*#([0-9a-f]{3}|[0-9a-f]{6})\b",
+    re.IGNORECASE,
+)
+MERMAID_PURE_BW_HEX = re.compile(
+    r"#(?:000000|ffffff|000|fff)\b", re.IGNORECASE
+)
+MERMAID_PURE_BW_WORD = re.compile(
+    r"(?<![A-Za-z])(?:black|white)(?![A-Za-z])", re.IGNORECASE
+)
+MIN_TEXT_CONTRAST = 4.5
 
 
 def tracked_readmes() -> list[Path]:
@@ -43,6 +68,83 @@ def section(text: str, heading: str) -> str:
 
 def mermaid_blocks(text: str) -> list[str]:
     return re.findall(r"(?ms)^```mermaid\s*$\n(.*?)^```\s*$", text)
+
+
+def relative_luminance(hex_value: str) -> float:
+    if len(hex_value) == 3:
+        hex_value = "".join(character * 2 for character in hex_value)
+
+    def channel(offset: int) -> float:
+        value = int(hex_value[offset : offset + 2], 16) / 255.0
+        if value <= 0.03928:
+            return value / 12.92
+        return ((value + 0.055) / 1.055) ** 2.4
+
+    red, green, blue = (channel(offset) for offset in (0, 2, 4))
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+
+
+def contrast_ratio(first: str, second: str) -> float:
+    first_luminance = relative_luminance(first)
+    second_luminance = relative_luminance(second)
+    lighter = max(first_luminance, second_luminance)
+    darker = min(first_luminance, second_luminance)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def check_mermaid_block(block: str, index: int) -> list[str]:
+    errors: list[str] = []
+    if not block.strip():
+        return [f"Mermaid block {index} is empty"]
+
+    for directive in MERMAID_INIT_DIRECTIVE.finditer(block):
+        if MERMAID_FORCED_KEY.search(directive.group(1)):
+            errors.append(f"Mermaid block {index} forces a theme color")
+
+    lines = block.splitlines()
+    if lines and lines[0].strip() == "---":
+        frontmatter: list[str] = []
+        for line in lines[1:]:
+            if line.strip() == "---":
+                break
+            frontmatter.append(line)
+        if re.search(
+            r"(?im)^\s*(?:theme|background|lineColor)\s*:",
+            "\n".join(frontmatter),
+        ):
+            errors.append(f"Mermaid block {index} forces a theme color")
+
+    for line_number, line in enumerate(lines, start=1):
+        style = MERMAID_STYLE_LINE.search(line)
+        if MERMAID_PURE_BW_HEX.search(line) or (
+            style and MERMAID_PURE_BW_WORD.search(line)
+        ):
+            errors.append(
+                f"Mermaid block {index}, line {line_number} hardcodes black or white"
+            )
+
+        if (
+            style
+            and style.group(1).lower() != "linkstyle"
+            and MERMAID_HAS_FILL.search(line)
+            and not MERMAID_HAS_COLOR.search(line)
+        ):
+            errors.append(
+                f"Mermaid block {index}, line {line_number} sets fill without text color"
+            )
+
+        fill = MERMAID_FILL_HEX.search(line)
+        color = MERMAID_COLOR_HEX.search(line)
+        if style and fill and color:
+            ratio = contrast_ratio(fill.group(1), color.group(1))
+            if ratio < MIN_TEXT_CONTRAST:
+                errors.append(
+                    f"Mermaid block {index}, line {line_number} has "
+                    f"{ratio:.2f}:1 fill/text contrast; expected at least "
+                    f"{MIN_TEXT_CONTRAST:.1f}:1"
+                )
+
+    return errors
 
 
 def glossary_rows(text: str) -> int:
@@ -87,22 +189,7 @@ def check_readme(path: Path) -> list[str]:
     if not blocks:
         errors.append("missing a Mermaid overview")
     for index, block in enumerate(blocks, start=1):
-        if re.search(r"(?i)%%\s*\{\s*(?:init|initialize)\b", block):
-            errors.append(f"Mermaid block {index} forces initialization/theming")
-        if re.search(r"(?i)\b(?:theme|background|lineColor)\s*:", block):
-            errors.append(f"Mermaid block {index} forces a theme color")
-        for line_number, line in enumerate(block.splitlines(), start=1):
-            if re.search(r"(?i)\b(?:classDef|style)\b", line) and re.search(
-                r"(?i)\bfill\s*:", line
-            ):
-                if not re.search(r"(?i)\bcolor\s*:", line):
-                    errors.append(
-                        f"Mermaid block {index}, line {line_number} sets fill without text color"
-                    )
-                if re.search(r"(?i)(?:color|fill)\s*:\s*(?:#(?:000|000000|fff|ffffff)\b|black\b|white\b)", line):
-                    errors.append(
-                        f"Mermaid block {index}, line {line_number} hardcodes black or white"
-                    )
+        errors.extend(check_mermaid_block(block, index))
 
     if "## Glossary" not in text:
         errors.append("missing a glossary")
