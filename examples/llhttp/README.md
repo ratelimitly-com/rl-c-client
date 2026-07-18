@@ -168,6 +168,8 @@ acknowledgement.
 | EOF | End-of-file notification from the TCP host after a clean peer shutdown. |
 | latency guard | The pre-work decision using existing service-latency samples. |
 | latency sample | The post-work duration reported after admitted work succeeds. |
+| CMake | Cross-platform build-system generator provided as an alternative to Make. |
+| README | Folder-level guide containing this parser integration's complete ownership and build contract. |
 
 ## API references
 
