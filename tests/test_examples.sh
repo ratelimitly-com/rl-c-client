@@ -33,6 +33,20 @@ fail() {
   exit 1
 }
 
+require_main_only_concurrency() {
+  local job_name=$1
+  local job_block=$2
+  local concurrency_block
+  concurrency_block=$(sed -n '/^    concurrency:/,/^    steps:/p' \
+    <<<"$job_block")
+  grep -Fq -- "github.ref == 'refs/heads/main'" <<<"$concurrency_block" \
+    || fail "$job_name does not reserve production concurrency for main"
+  if grep -Fq -- "github.event_name == 'workflow_dispatch'" \
+      <<<"$concurrency_block"; then
+    fail "$job_name routes feature dispatches through production concurrency"
+  fi
+}
+
 [[ -f "$MANIFEST" ]] || fail "missing examples/manifest.txt"
 [[ -f "$LINUX_ONE_SHOT_MATRIX" ]] \
   || fail "missing executable Linux one-shot example matrix"
@@ -145,6 +159,11 @@ grep -Fq -- 'RATELIMITLY_AUTH_KEY: ${{ secrets.RATELIMITLY_AUTH_KEY }}' \
   || fail "production P0 CI does not consume the repository secret"
 grep -Fq -- "github.ref == 'refs/heads/main'" "$CI_WORKFLOW" \
   || fail "production P0 CI is not restricted to main"
+if grep -Fq -- "refs/heads/codex/example-integrations" "$CI_WORKFLOW"; then
+  fail "production P0 CI retains a feature-branch validation exception"
+fi
+[[ $(grep -Fc -- "github.actor == 'edescourtis'" "$CI_WORKFLOW") -eq 5 ]] \
+  || fail "every manual production P0 entry point must be owner-restricted"
 grep -Fq -- 'cancel-in-progress: false' "$CI_WORKFLOW" \
   || fail "production P0 CI does not serialize shared-tenant tests"
 grep -Fq -- 'unset RATELIMITLY_TENANT' "$PRODUCTION_P0_RUNNER" \
@@ -174,9 +193,7 @@ grep -Fq -- 'RATELIMITLY_AUTH_KEY: ${{ secrets.RATELIMITLY_AUTH_KEY }}' \
   || fail "Linux one-shot production step does not use the repository secret"
 grep -Fq -- "github.actor == 'edescourtis'" <<<"$linux_one_shot_job" \
   || fail "Linux one-shot manual production run is not restricted"
-grep -Fq -- "github.ref == 'refs/heads/codex/example-integrations'" \
-  <<<"$linux_one_shot_job" \
-  || fail "Linux one-shot validation exception is not branch-scoped"
+require_main_only_concurrency "Linux one-shot CI" "$linux_one_shot_job"
 grep -Fq -- 'cancel-in-progress: false' <<<"$linux_one_shot_job" \
   || fail "Linux one-shot production runs are not serialized"
 grep -Fq -- 'unset RATELIMITLY_TENANT' "$PRODUCTION_P0_ONE_SHOT_RUNNER" \
@@ -197,9 +214,7 @@ grep -Fq -- 'RATELIMITLY_AUTH_KEY: ${{ secrets.RATELIMITLY_AUTH_KEY }}' \
   || fail "Linux HTTP production step does not use the repository secret"
 grep -Fq -- "github.actor == 'edescourtis'" <<<"$linux_http_job" \
   || fail "Linux HTTP manual production run is not restricted"
-grep -Fq -- "github.ref == 'refs/heads/codex/example-integrations'" \
-  <<<"$linux_http_job" \
-  || fail "Linux HTTP validation exception is not branch-scoped"
+require_main_only_concurrency "Linux HTTP CI" "$linux_http_job"
 grep -Fq -- 'cancel-in-progress: false' <<<"$linux_http_job" \
   || fail "Linux HTTP production runs are not serialized"
 grep -Fq -- 'unset RATELIMITLY_TENANT' "$PRODUCTION_P0_HTTP_MATRIX_RUNNER" \
@@ -256,9 +271,7 @@ grep -Fq -- 'RATELIMITLY_AUTH_KEY: ${{ secrets.RATELIMITLY_AUTH_KEY }}' \
   || fail "Wine production step does not use the repository secret"
 grep -Fq -- "github.actor == 'edescourtis'" <<<"$win32_wine_job" \
   || fail "Wine manual production run is not restricted"
-grep -Fq -- "github.ref == 'refs/heads/codex/example-integrations'" \
-  <<<"$win32_wine_job" \
-  || fail "Wine validation exception is not branch-scoped"
+require_main_only_concurrency "Wine CI" "$win32_wine_job"
 grep -Fq -- 'rl-c-client-production-win32' <<<"$win32_wine_job" \
   || fail "Wine and native Windows production state is not serialized"
 grep -Fq -- 'wait_with_deadline 60' "$PRODUCTION_P0_WIN32_WINE_RUNNER" \
@@ -307,9 +320,7 @@ grep -Fq -- 'RATELIMITLY_AUTH_KEY: ${{ secrets.RATELIMITLY_AUTH_KEY }}' \
   || fail "native Win32 P0 step does not use the repository secret"
 grep -Fq -- "github.actor == 'edescourtis'" <<<"$win32_msvc_job" \
   || fail "native Win32 manual production run is not restricted"
-grep -Fq -- "github.ref == 'refs/heads/codex/example-integrations'" \
-  <<<"$win32_msvc_job" \
-  || fail "native Win32 validation exception is not branch-scoped"
+require_main_only_concurrency "native Win32 CI" "$win32_msvc_job"
 grep -Fq -- 'rl-c-client-production-win32' <<<"$win32_msvc_job" \
   || fail "native Win32 production state is not serialized"
 grep -Fq -- 'WaitForExit(60000)' "$PRODUCTION_P0_WIN32_NATIVE_RUNNER" \

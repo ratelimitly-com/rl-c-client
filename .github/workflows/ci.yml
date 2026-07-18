@@ -52,7 +52,8 @@ jobs:
     if: >-
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'push' ||
-       github.event_name == 'workflow_dispatch')
+       (github.event_name == 'workflow_dispatch' &&
+        github.actor == 'edescourtis'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     concurrency:
@@ -81,8 +82,7 @@ jobs:
     concurrency:
       group: >-
         ${{
-          (github.ref == 'refs/heads/main' ||
-           github.event_name == 'workflow_dispatch') &&
+          github.ref == 'refs/heads/main' &&
           'rl-c-client-production-one-shot' ||
           format('{0}-{1}-linux-one-shot', github.workflow, github.ref)
         }}
@@ -158,13 +158,10 @@ jobs:
 
       - name: Run examples against production P0
         if: >-
-          (github.ref == 'refs/heads/main' &&
-           (github.event_name == 'push' ||
-            (github.event_name == 'workflow_dispatch' &&
-             github.actor == 'edescourtis'))) ||
-          (github.ref == 'refs/heads/codex/example-integrations' &&
-           github.event_name == 'workflow_dispatch' &&
-           github.actor == 'edescourtis')
+          github.ref == 'refs/heads/main' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'workflow_dispatch' &&
+            github.actor == 'edescourtis'))
         env:
           RATELIMITLY_AUTH_KEY: ${{ secrets.RATELIMITLY_AUTH_KEY }}
         run: bash tests/test_production_p0_one_shot_examples.sh
@@ -176,8 +173,7 @@ jobs:
     concurrency:
       group: >-
         ${{
-          (github.ref == 'refs/heads/main' ||
-           github.event_name == 'workflow_dispatch') &&
+          github.ref == 'refs/heads/main' &&
           format('rl-c-client-production-http-{0}', matrix.shard) ||
           format(
             '{0}-{1}-linux-http-{2}',
@@ -319,13 +315,10 @@ jobs:
 
       - name: Run HTTP frameworks against production P0
         if: >-
-          (github.ref == 'refs/heads/main' &&
-           (github.event_name == 'push' ||
-            (github.event_name == 'workflow_dispatch' &&
-             github.actor == 'edescourtis'))) ||
-          (github.ref == 'refs/heads/codex/example-integrations' &&
-           github.event_name == 'workflow_dispatch' &&
-           github.actor == 'edescourtis')
+          github.ref == 'refs/heads/main' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'workflow_dispatch' &&
+            github.actor == 'edescourtis'))
         env:
           RATELIMITLY_AUTH_KEY: ${{ secrets.RATELIMITLY_AUTH_KEY }}
         run: bash tests/test_production_p0_http_examples.sh "${{ matrix.shard }}"
@@ -337,8 +330,7 @@ jobs:
     concurrency:
       group: >-
         ${{
-          (github.ref == 'refs/heads/main' ||
-           github.event_name == 'workflow_dispatch') &&
+          github.ref == 'refs/heads/main' &&
           'rl-c-client-production-win32' ||
           format('{0}-{1}-win32-wine', github.workflow, github.ref)
         }}
@@ -413,13 +405,10 @@ jobs:
 
       - name: Run Wine Win32 example against production P0
         if: >-
-          (github.ref == 'refs/heads/main' &&
-           (github.event_name == 'push' ||
-            (github.event_name == 'workflow_dispatch' &&
-             github.actor == 'edescourtis'))) ||
-          (github.ref == 'refs/heads/codex/example-integrations' &&
-           github.event_name == 'workflow_dispatch' &&
-           github.actor == 'edescourtis')
+          github.ref == 'refs/heads/main' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'workflow_dispatch' &&
+            github.actor == 'edescourtis'))
         env:
           RATELIMITLY_AUTH_KEY: ${{ secrets.RATELIMITLY_AUTH_KEY }}
           WINE_SERVER: /usr/lib/wine/wineserver64
@@ -435,8 +424,7 @@ jobs:
     concurrency:
       group: >-
         ${{
-          (github.ref == 'refs/heads/main' ||
-           github.event_name == 'workflow_dispatch') &&
+          github.ref == 'refs/heads/main' &&
           'rl-c-client-production-win32' ||
           format('{0}-{1}-win32-msvc', github.workflow, github.ref)
         }}
@@ -513,13 +501,10 @@ jobs:
 
       - name: Run native Win32 example against production P0
         if: >-
-          (github.ref == 'refs/heads/main' &&
-           (github.event_name == 'push' ||
-            (github.event_name == 'workflow_dispatch' &&
-             github.actor == 'edescourtis'))) ||
-          (github.ref == 'refs/heads/codex/example-integrations' &&
-           github.event_name == 'workflow_dispatch' &&
-           github.actor == 'edescourtis')
+          github.ref == 'refs/heads/main' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'workflow_dispatch' &&
+            github.actor == 'edescourtis'))
         shell: pwsh
         env:
           RATELIMITLY_AUTH_KEY: ${{ secrets.RATELIMITLY_AUTH_KEY }}
