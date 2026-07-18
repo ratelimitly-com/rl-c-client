@@ -173,6 +173,22 @@ The responder checks tracker TTL, sample limits, buffer size, threshold, and
 that the report uses the same private service identity as the preceding guard.
 Service IDs and credentials never appear in test logs.
 
+The HTTP integrations have the same behavioral coverage in three parallel CI
+shards. [`tests/linux-http-examples.txt`](../tests/linux-http-examples.txt)
+records each executable, listener port, metrics label, and framework-specific
+resource-denial status. For every server, CI makes real HTTP requests and
+requires all of the following:
+
+- an admitted request returns `200`, executes protected work, and emits exactly
+  one latency report for the guard's tracker;
+- a resource denial returns `429` (`403` for Lwan) without work or a report;
+- a latency denial returns `503` without work or a report; and
+- an unprotected readiness request causes no RateLimitly traffic.
+
+Each server runs in its own process group. The harness drains UDP after the
+response and again during shutdown, so worker processes cannot hide duplicate
+or forbidden late reports from the responder assertions.
+
 ## Latency tracking workflow
 
 [`latency_tracker/main.c`](latency_tracker/main.c) demonstrates both halves of

@@ -15,6 +15,7 @@ LWAN_CMAKE="$ROOT/examples/lwan/CMakeLists.txt"
 GLIB_SOURCE="$ROOT/examples/glib/main.c"
 PERF_SOURCE="$ROOT/bin/perf_client.c"
 LINUX_ONE_SHOT_MATRIX="$ROOT/tests/linux-one-shot-examples.txt"
+LINUX_HTTP_MATRIX="$ROOT/tests/linux-http-examples.txt"
 
 fail() {
   echo "test_examples: $*" >&2
@@ -24,17 +25,31 @@ fail() {
 [[ -f "$MANIFEST" ]] || fail "missing examples/manifest.txt"
 [[ -f "$LINUX_ONE_SHOT_MATRIX" ]] \
   || fail "missing executable Linux one-shot example matrix"
+[[ -f "$LINUX_HTTP_MATRIX" ]] \
+  || fail "missing executable Linux HTTP example matrix"
 grep -Fq -- 'bash tests/test_linux_one_shot_examples.sh' "$CI_WORKFLOW" \
   || fail "CI does not execute Linux one-shot examples"
+grep -Fq -- 'bash tests/test_linux_http_examples.sh' "$CI_WORKFLOW" \
+  || fail "CI does not execute Linux HTTP examples"
 expected_linux_one_shot=$'latency_tracker\nlibuv\nlibevent\nglib\nlibev\nsd_event\nlibhv\nliburing\nepoll\nio_uring\nllhttp'
 actual_linux_one_shot="$(sed -n '/^[^#]/s/|.*//p' "$LINUX_ONE_SHOT_MATRIX")"
 [[ "$actual_linux_one_shot" == "$expected_linux_one_shot" ]] \
   || fail "Linux one-shot matrix is incomplete or out of order"
+expected_linux_http=$'mongoose|a\ncivetweb|a\nlibmicrohttpd|a\nulfius|a\nh2o|b\nlwan|b\nlibreactor|b\nfacil_io|c\nonion|c\nkore|c'
+actual_linux_http="$(sed -n '/^[^#]/s/^\([^|]*|[^|]*\).*/\1/p' \
+  "$LINUX_HTTP_MATRIX")"
+[[ "$actual_linux_http" == "$expected_linux_http" ]] \
+  || fail "Linux HTTP matrix is incomplete, mis-sharded, or out of order"
 for scenario in guard-pass deny guard-deny; do
   grep -Fq -- "run_scenario $scenario" \
     "$ROOT/tests/run_one_shot_example.sh" \
     || fail "Linux one-shot runner omits $scenario"
+  grep -Fq -- "run_scenario $scenario" \
+    "$ROOT/tests/run_http_example.sh" \
+    || fail "Linux HTTP runner omits $scenario"
 done
+grep -Fq -- "'\"reports\":1'" "$ROOT/tests/run_http_example.sh" \
+  || fail "Linux HTTP runner does not require exactly one reported sample"
 grep -Fq -- 'macos-latest' "$CI_WORKFLOW" \
   || fail "CI does not validate the macOS build"
 grep -Fq -- 'tests/test_windows_example.sh' "$CI_WORKFLOW" \

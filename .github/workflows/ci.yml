@@ -120,6 +120,140 @@ jobs:
       - name: Run rate-limit and latency scenarios
         run: bash tests/test_linux_one_shot_examples.sh
 
+  linux-http-examples:
+    name: Linux HTTP examples (shard ${{ matrix.shard }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - a
+          - b
+          - c
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install packaged dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf automake build-essential cmake curl git libtool \
+            libbrotli-dev libh2o-evloop-dev libmicrohttpd-dev \
+            liborcania-dev libssl-dev libulfius-dev libzstd-dev \
+            pkg-config zlib1g-dev
+
+      - name: Build pinned framework dependencies
+        env:
+          MONGOOSE_COMMIT: c288ac1f38424ffdd4d2fd5e1893fd4962642db3
+          CIVETWEB_COMMIT: d7ba35bbb649209c66e582d5a0244ba988a15159
+          LWAN_COMMIT: 0927e3eb8f08ab8a4e238bcb7cc2388f6082163b
+          LIBREACTOR_COMMIT: 64afa5364c445736317e44e820a85f09aa88dfc0
+          FACIL_IO_COMMIT: 512a354dbd31e1895647df852d1565f9d408ed91
+          ONION_COMMIT: 46ed564fe1b91d2d253e2f968db233fcc22eeaae
+          KORE_COMMIT: ba9bc3b56e24c3652f4cd808463ad45f78579ba8
+        run: |
+          source_root="${{ runner.temp }}/http-frameworks"
+          install_root="${{ runner.temp }}/http-framework-install"
+          mkdir -p "$source_root" "$install_root"
+
+          checkout_pinned() {
+            name=$1
+            repository=$2
+            commit=$3
+            directory="$source_root/$name"
+            git init -q "$directory"
+            git -C "$directory" remote add origin "$repository"
+            git -C "$directory" fetch -q --depth 1 origin "$commit"
+            git -C "$directory" checkout -q --detach FETCH_HEAD
+            test "$(git -C "$directory" rev-parse HEAD)" = "$commit"
+          }
+
+          case "${{ matrix.shard }}" in
+            a)
+              checkout_pinned mongoose \
+                https://github.com/cesanta/mongoose.git "$MONGOOSE_COMMIT"
+              checkout_pinned civetweb \
+                https://github.com/civetweb/civetweb.git "$CIVETWEB_COMMIT"
+              {
+                echo "MONGOOSE_ROOT=$source_root/mongoose"
+                echo "CIVETWEB_ROOT=$source_root/civetweb"
+              } >> "$GITHUB_ENV"
+              ;;
+            b)
+              checkout_pinned lwan \
+                https://github.com/lpereira/lwan.git "$LWAN_COMMIT"
+              cmake \
+                -S "$source_root/lwan" \
+                -B "$source_root/lwan-build" \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DENABLE_BROTLI=OFF \
+                -DENABLE_ZSTD=OFF \
+                -DMTUNE_NATIVE=OFF
+              cmake --build "$source_root/lwan-build" --parallel 2
+
+              checkout_pinned libreactor \
+                https://github.com/fredrikwidlund/libreactor.git \
+                "$LIBREACTOR_COMMIT"
+              (
+                cd "$source_root/libreactor"
+                ./autogen.sh
+                ./configure --prefix="$install_root/libreactor"
+                make -j2
+                make install
+              )
+              {
+                echo "LWAN_ROOT=$source_root/lwan"
+                echo "LWAN_BUILD=$source_root/lwan-build"
+                echo "PKG_CONFIG_PATH=$install_root/libreactor/lib/pkgconfig"
+              } >> "$GITHUB_ENV"
+              ;;
+            c)
+              checkout_pinned facil.io \
+                https://github.com/boazsegev/facil.io.git "$FACIL_IO_COMMIT"
+              make -C "$source_root/facil.io" -j2 lib
+
+              checkout_pinned onion \
+                https://github.com/davidmoreno/onion.git "$ONION_COMMIT"
+              cmake \
+                -S "$source_root/onion" \
+                -B "$source_root/onion-build" \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_INSTALL_PREFIX="$install_root/onion" \
+                -DONION_EXAMPLES=OFF \
+                -DONION_USE_BINDINGS_CPP=OFF \
+                -DONION_USE_GC=OFF \
+                -DONION_USE_JPEG=OFF \
+                -DONION_USE_PAM=OFF \
+                -DONION_USE_PNG=OFF \
+                -DONION_USE_REDIS=OFF \
+                -DONION_USE_SQLITE3=OFF \
+                -DONION_USE_SSL=OFF \
+                -DONION_USE_SYSTEMD=OFF \
+                -DONION_USE_TESTS=OFF \
+                -DONION_USE_XML2=OFF
+              cmake --build "$source_root/onion-build" --parallel 2
+              cmake --install "$source_root/onion-build"
+
+              checkout_pinned kore \
+                https://github.com/jorisvink/kore.git "$KORE_COMMIT"
+              make -C "$source_root/kore" -j2 TASKS=1 TLS_BACKEND=none
+              {
+                echo "FACIL_ROOT=$source_root/facil.io"
+                echo "ONION_ROOT=$install_root/onion"
+                echo "KORE_ROOT=$source_root/kore"
+              } >> "$GITHUB_ENV"
+              ;;
+          esac
+
+      - name: Build Linux HTTP examples
+        run: bash tests/build_linux_http_examples.sh "${{ matrix.shard }}"
+
+      - name: Run rate-limit and latency HTTP scenarios
+        run: bash tests/test_linux_http_examples.sh "${{ matrix.shard }}"
+
   win32-example:
     name: Win32 example (MinGW + Wine)
     runs-on: ubuntu-latest
