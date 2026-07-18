@@ -8,6 +8,8 @@ OPENSSL_PREFIX="${MINGW_OPENSSL_PREFIX:-}"
 WINDOWS_RUNNER="${WINDOWS_RUNNER:-}"
 PREBUILT_EXAMPLE="${WINDOWS_EXAMPLE_BINARY:-}"
 PORT="${R_WINDOWS_EXAMPLE_TEST_PORT:-39130}"
+TEST_AES_KEY="rl-aes1qvqqqqqqqqqqqqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqqqqzqqqqsqqqqqsqqqyqqqqqqkqzqqqhmzd8l"
+TRACKER_JSON='"tracker":{"ttl_ms":10000,"max_samples":100,"buffer_size":32,"min_sample_threshold":5}'
 
 skip() {
   echo "test_windows_example: SKIP ($*)"
@@ -35,10 +37,15 @@ fi
 
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/r-win32-example.XXXXXX")"
 RESPONDER_PID=""
+EXAMPLE_PID=""
 EXAMPLE="${PREBUILT_EXAMPLE:-$ROOT/examples/win32/win32-example.exe}"
 BUILT_EXAMPLE=false
 
 cleanup() {
+  if [[ -n "$EXAMPLE_PID" ]] && kill -0 "$EXAMPLE_PID" 2>/dev/null; then
+    kill -TERM "$EXAMPLE_PID" 2>/dev/null || true
+    wait "$EXAMPLE_PID" 2>/dev/null || true
+  fi
   if [[ -n "$RESPONDER_PID" ]] && kill -0 "$RESPONDER_PID" 2>/dev/null; then
     kill -TERM "$RESPONDER_PID" 2>/dev/null || true
     wait "$RESPONDER_PID" 2>/dev/null || true
@@ -104,11 +111,115 @@ wait_for_responder() {
   exit 1
 }
 
+wait_with_deadline() {
+  local pid=$1
+  local seconds=$2
+  local attempts=$((seconds * 100))
+  local attempt=0
+  while kill -0 "$pid" 2>/dev/null && ((attempt < attempts)); do
+    sleep 0.01
+    attempt=$((attempt + 1))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -TERM "$pid" 2>/dev/null || true
+    sleep 1
+    kill -KILL "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    return 124
+  fi
+  wait "$pid"
+}
+
+count_events() {
+  local event=$1
+  local file=$2
+  grep -c "\"event\":\"$event\"" "$file" 2>/dev/null || true
+}
+
+fail_case() {
+  local scenario=$1
+  local message=$2
+  local directory="$TMP_DIR/$scenario"
+  echo "test_windows_example: $scenario: $message" >&2
+  local file
+  for file in example.out example.err responder.out responder.err; do
+    if [[ -s "$directory/$file" ]]; then
+      echo "--- $file" >&2
+      sed -n '1,100p' "$directory/$file" >&2
+    fi
+  done
+  exit 1
+}
+
+assert_outputs() {
+  local scenario=$1
+  local expected_status=$2
+  local actual_status=$3
+  local directory="$TMP_DIR/$scenario"
+  local responder="$directory/responder.out"
+  local example="$directory/example.out"
+  local expected_reports=0
+  local rate_line
+
+  [[ "$actual_status" -eq "$expected_status" ]] \
+    || fail_case "$scenario" \
+      "example exited $actual_status; expected $expected_status"
+  case "$scenario" in
+    guard-pass)
+      expected_reports=1
+      grep -Eq '^allowed: .*latency=[0-9]+' "$example" \
+        || fail_case "$scenario" "allowed work or latency output missing"
+      ;;
+    deny)
+      grep -Fq 'denied: resource rate limit' "$example" \
+        || fail_case "$scenario" "resource denial output missing"
+      ;;
+    guard-deny)
+      grep -Fq 'denied: latency guard' "$example" \
+        || fail_case "$scenario" "latency denial output missing"
+      ;;
+  esac
+  if [[ "$scenario" != "guard-pass" ]] && grep -Fq 'allowed:' "$example"; then
+    fail_case "$scenario" "denied path exposed protected work"
+  fi
+
+  [[ "$(count_events rate_request "$responder")" -eq 1 ]] \
+    || fail_case "$scenario" "expected exactly one rate request"
+  [[ "$(count_events latency_report "$responder")" -eq "$expected_reports" ]] \
+    || fail_case "$scenario" \
+      "expected $expected_reports latency report(s)"
+  [[ "$(count_events input_rejected "$responder")" -eq 0 ]] \
+    || fail_case "$scenario" "responder rejected an input packet"
+  rate_line="$(grep '"event":"rate_request"' "$responder")"
+  grep -Fq '"guards":1,"resources":1' <<<"$rate_line" \
+    || fail_case "$scenario" "request omitted resource or latency admission"
+  grep -Fq '"label":"win32-example"' <<<"$rate_line" \
+    || fail_case "$scenario" "request used the wrong metrics label"
+  grep -Fq "$TRACKER_JSON" <<<"$rate_line" \
+    || fail_case "$scenario" "guard tracker configuration changed"
+  grep -Fq '"guard_threshold_ms":100' <<<"$rate_line" \
+    || fail_case "$scenario" "latency threshold changed"
+  grep -Fq "\"disposition\":\"$scenario\"" <<<"$rate_line" \
+    || fail_case "$scenario" "responder observed the wrong scenario"
+
+  if [[ "$scenario" == "guard-pass" ]]; then
+    local latency_line
+    latency_line="$(grep '"event":"latency_report"' "$responder")"
+    grep -Fq '"reports":1' <<<"$latency_line" \
+      || fail_case "$scenario" "latency packet did not contain one report"
+    grep -Fq "$TRACKER_JSON" <<<"$latency_line" \
+      || fail_case "$scenario" "reported tracker configuration changed"
+    grep -Eq '"observed_latency_ms":[0-9]+' <<<"$latency_line" \
+      || fail_case "$scenario" "latency observation missing"
+    grep -Fq '"matches_previous_guard":true' <<<"$latency_line" \
+      || fail_case "$scenario" "report targeted a different tracker"
+  fi
+}
+
 run_scenario() {
   local scenario=$1
   local scenario_port=$2
-  local max_packets=$3
-  local expected_status=$4
+  local expected_status=$3
   local directory="$TMP_DIR/$scenario"
   mkdir -p "$directory"
 
@@ -116,45 +227,42 @@ run_scenario() {
     "--listen=127.0.0.1:$scenario_port" \
     "--scenario=$scenario" \
     --auth=aes \
-    "--max-packets=$max_packets" \
     >"$directory/responder.out" 2>"$directory/responder.err" &
   RESPONDER_PID=$!
   wait_for_responder "$directory/responder.out"
 
-  local key="rl-aes1qvqqqqqqqqqqqqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqqqqzqqqqsqqqqqsqqqyqqqqqqkqzqqqhmzd8l"
   local runner_args=()
   read -r -a runner_args <<<"${WINDOWS_RUNNER_ARGS:-}"
-  set +e
-  WINEPREFIX="${WINEPREFIX:-$TMP_DIR/wine-prefix}" \
-  WINEDEBUG="${WINEDEBUG:--all}" \
-  RATELIMITLY_TENANT=rn-test.local \
-  RATELIMITLY_AUTH_KEY="$key" \
-  RATELIMITLY_EXAMPLE_SERVER_HOST=127.0.0.1 \
-  RATELIMITLY_EXAMPLE_SERVER_PORT="$scenario_port" \
-    "$WINDOWS_RUNNER" "${runner_args[@]}" "$EXAMPLE" \
-      >"$directory/example.out" 2>"$directory/example.err"
-  local example_status=$?
-  set -e
-  for _ in {1..100}; do
-    ! kill -0 "$RESPONDER_PID" 2>/dev/null && break
-    sleep 0.01
-  done
-  if kill -0 "$RESPONDER_PID" 2>/dev/null; then
-    kill -TERM "$RESPONDER_PID" 2>/dev/null || true
-    wait "$RESPONDER_PID" 2>/dev/null || true
-    RESPONDER_PID=""
-    sed -n '1,80p' "$directory/example.err" >&2
-    echo "test_windows_example: $scenario did not send all packets" >&2
-    exit 1
-  fi
-  wait "$RESPONDER_PID"
-  RESPONDER_PID=""
+  (
+    unset RATELIMITLY_TENANT
+    exec env \
+      WINEPREFIX="${WINEPREFIX:-$TMP_DIR/wine-prefix}" \
+      WINEDEBUG="${WINEDEBUG:--all}" \
+      RATELIMITLY_AUTH_KEY="$TEST_AES_KEY" \
+      RATELIMITLY_EXAMPLE_SERVER_HOST=127.0.0.1 \
+      RATELIMITLY_EXAMPLE_SERVER_PORT="$scenario_port" \
+      "$WINDOWS_RUNNER" "${runner_args[@]}" "$EXAMPLE"
+  ) >"$directory/example.out" 2>"$directory/example.err" &
+  EXAMPLE_PID=$!
+  local example_status=0
+  wait_with_deadline "$EXAMPLE_PID" 30 || example_status=$?
+  EXAMPLE_PID=""
+  [[ "$example_status" -ne 124 ]] \
+    || fail_case "$scenario" "example timed out"
 
-  [[ "$example_status" -eq "$expected_status" ]] || {
-    sed -n '1,80p' "$directory/example.err" >&2
-    echo "test_windows_example: $scenario exited $example_status" >&2
-    exit 1
-  }
+  # Keep the responder alive after the executable returns. A bounded drain
+  # makes forbidden late reports and duplicate reports observable.
+  sleep 0.1
+  kill -0 "$RESPONDER_PID" 2>/dev/null \
+    || fail_case "$scenario" "responder exited before packet drain"
+  kill -TERM "$RESPONDER_PID"
+  local responder_status=0
+  wait_with_deadline "$RESPONDER_PID" 5 || responder_status=$?
+  RESPONDER_PID=""
+  [[ "$responder_status" -eq 0 ]] \
+    || fail_case "$scenario" "responder exited $responder_status"
+
+  assert_outputs "$scenario" "$expected_status" "$example_status"
 }
 
 if [[ -z "$PREBUILT_EXAMPLE" ]]; then
@@ -168,18 +276,8 @@ if [[ -z "$WINDOWS_RUNNER" ]]; then
 fi
 
 make -C "$ROOT" test-responder >/dev/null
-run_scenario guard-pass "$PORT" 2 0
-grep -q '^allowed: .*latency=' "$TMP_DIR/guard-pass/example.out"
-grep -q '"event":"rate_request".*"guards":1.*"resources":1' \
-  "$TMP_DIR/guard-pass/responder.out"
-grep -q '"event":"latency_report".*"reports":1' \
-  "$TMP_DIR/guard-pass/responder.out"
+run_scenario guard-pass "$PORT" 0
+run_scenario deny "$((PORT + 1))" 2
+run_scenario guard-deny "$((PORT + 2))" 2
 
-run_scenario guard-deny "$((PORT + 1))" 1 2
-grep -q '^denied: latency guard' "$TMP_DIR/guard-deny/example.out"
-if grep -q '"event":"latency_report"' "$TMP_DIR/guard-deny/responder.out"; then
-  echo "test_windows_example: denied work emitted a latency report" >&2
-  exit 1
-fi
-
-echo "test_windows_example: PASS (Wine allowed and denied paths)"
+echo "test_windows_example: PASS (Wine allow, resource deny, latency deny)"

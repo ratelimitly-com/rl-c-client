@@ -42,14 +42,23 @@ CrossOver on macOS. Set `RATELIMITLY_AUTH_KEY`. The key defaults discovery to
 `_ratelimitly._udp.c-<key-id>.p0.ratelimitly.com`; optional
 `RATELIMITLY_TENANT` overrides it. Fixed responder variables remain optional.
 
-The repository test can cross-compile the complete client and exercise both
-allowed/reporting and denied/no-report paths under Wine:
+The repository test cross-compiles the complete client and exercises three
+separate paths under Wine: allow, resource denial, and latency-guard denial.
+It unsets `RATELIMITLY_TENANT` so the synthetic key supplies the tenant ID. The
+allowed path must emit exactly one sample for the guard's tracker; both denial
+paths must emit none. The responder remains alive through a post-exit drain so
+late or duplicate reports also fail the test:
 
 ```sh
 MINGW_OPENSSL_PREFIX=/path/to/mingw/openssl \
 WINDOWS_RUNNER=/usr/lib/wine/wine64 \
   bash ../../tests/test_windows_example.sh
 ```
+
+This deterministic test deliberately fixes the responder host and port, so it
+does not exercise DNS. The runtime unit tests separately assert that a key-only
+configuration formats `c-<key-id>.p0.ratelimitly.com`. Real P0 SRV discovery
+belongs to the separate production smoke stage, not this deterministic fixture.
 
 The OpenSSL prefix may use either `lib` or `lib64`. `WINDOWS_RUNNER` is optional;
 without it the test still performs a strict compile and link check. CrossOver's

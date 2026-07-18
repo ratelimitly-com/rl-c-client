@@ -67,6 +67,13 @@ grep -Fq -- 'macos-latest' "$CI_WORKFLOW" \
   || fail "CI does not validate the macOS build"
 grep -Fq -- 'tests/test_windows_example.sh' "$CI_WORKFLOW" \
   || fail "CI does not build and run the Win32 example"
+for scenario in guard-pass deny guard-deny; do
+  grep -Fq -- "run_scenario $scenario" "$ROOT/tests/test_windows_example.sh" \
+    || fail "Win32 behavioral runner omits $scenario"
+done
+if grep -Fq -- '--max-packets' "$ROOT/tests/test_windows_example.sh"; then
+  fail "Win32 responder exits before late-packet assertions"
+fi
 grep -Fq -- 'runs-on: windows-latest' "$CI_WORKFLOW" \
   || fail "CI does not validate the Win32 example on native Windows"
 grep -Fq -- 'CMAKE_C_COMPILER_ID -ne "MSVC"' "$CI_WORKFLOW" \
