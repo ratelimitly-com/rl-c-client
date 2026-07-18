@@ -297,6 +297,15 @@ Retry-related flags:
 
 | Term | Meaning |
 | --- | --- |
+| C11 | 2011 revision of the C language standard required by this library. |
+| README | Repository overview document that introduces a project and links to its detailed guides. |
+| GLib | Portable core library whose main loop is used by one integration example. |
+| GIO | GLib input/output APIs, including the `GIOChannel` socket wrapper used by that example. |
+| CivetWeb | Embedded C HTTP server represented by one self-contained integration. |
+| GNU | Free-software project under which libmicrohttpd is developed. |
+| H2O | Event-driven C HTTP server represented by one self-contained integration. |
+| LICENSE | Repository file containing the terms under which the source may be used and redistributed. |
+| MIT | Permissive open-source license applied to this repository. |
 | admission | The combined decision made before protected work starts. An admission may contain resource limits, latency guards, or both. |
 | resource rate limit | A quota check for a named bucket, such as requests allowed per interval. |
 | bucket | Stable resource identity whose configured quota is consumed by matching requests. |
