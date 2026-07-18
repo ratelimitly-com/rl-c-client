@@ -129,6 +129,7 @@ server acknowledgement.
 | `user_data` | Caller-controlled identity copied from an SQE to its matching CQE. |
 | latency guard | The pre-work decision based on previously stored latency samples. |
 | latency sample | The post-work duration reported after successful admitted work. |
+| CMake | Cross-platform build-system generator provided as an alternative to Make. |
 
 ## API references
 
