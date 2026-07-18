@@ -135,6 +135,8 @@ in this repository.
 | latency tracker | Server-side sample window updated by the post-work latency report. |
 | duplicate descriptor | Second file descriptor for the same UDP socket; facil.io watches the duplicate while the runtime owns and drains the original. |
 | retained callback | Scheduled callback that holds a reference to pending state until execution or cancellation finishes. |
+| CMake | Cross-platform build-system generator provided as an alternative to Make. |
+| POSIX | Portable Operating System Interface family that supplies this example's descriptor and threading APIs. |
 
 ## API references
 
