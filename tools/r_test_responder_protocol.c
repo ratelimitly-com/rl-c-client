@@ -207,6 +207,21 @@ static int parse_metrics_label(
     return RCLIENT_OK;
 }
 
+static void observe_tracker(
+    r_test_tracker_observation_t *observation,
+    const uint8_t *block
+) {
+    if (!observation || !block) {
+        return;
+    }
+    observation->present = true;
+    memcpy(observation->service_id, block, sizeof(observation->service_id));
+    observation->ttl_ms = read_le32(block + 16u);
+    observation->max_samples = read_le32(block + 20u);
+    observation->buffer_size = read_le32(block + 24u);
+    observation->min_sample_threshold = read_le32(block + 28u);
+}
+
 static int parse_request_pdu(
     const uint8_t *pdu,
     size_t pdu_len,
@@ -485,6 +500,16 @@ int r_test_responder_process(
     if (request.pdu_type == R_PDU_LATENCY_REPORT) {
         event->kind = R_TEST_EVENT_LATENCY_REPORT;
         event->report_count = request.report_count;
+        if (request.report_count > 0u) {
+            observe_tracker(&event->tracker, request.reports);
+            event->observed_latency_ms = read_le32(request.reports + 32u);
+            event->tracker_matches_guard = state->has_last_guard_service_id
+                && memcmp(
+                    request.reports,
+                    state->last_guard_service_id,
+                    sizeof(state->last_guard_service_id)
+                ) == 0;
+        }
         event->disposition = "observed";
         return RCLIENT_OK;
     }
@@ -492,6 +517,17 @@ int r_test_responder_process(
     event->kind = R_TEST_EVENT_RATE_REQUEST;
     event->guard_count = request.guard_count;
     event->resource_count = request.resource_count;
+    state->has_last_guard_service_id = false;
+    if (request.guard_count > 0u) {
+        observe_tracker(&event->tracker, request.guards);
+        event->guard_threshold_ms = read_le32(request.guards + 32u);
+        memcpy(
+            state->last_guard_service_id,
+            request.guards,
+            sizeof(state->last_guard_service_id)
+        );
+        state->has_last_guard_service_id = true;
+    }
     memcpy(event->label, request.label, sizeof(event->label));
     if (state->scenario == R_TEST_SCENARIO_DROP) {
         event->disposition = "dropped";

@@ -256,6 +256,13 @@ static void run_valid_response_case(
     assert(event.guard_count == 1u);
     assert(event.resource_count == 1u);
     assert(strcmp(event.label, "api") == 0);
+    assert(event.tracker.present);
+    assert(memcmp(event.tracker.service_id, "service", 7u) == 0);
+    assert(event.tracker.ttl_ms == 1000u);
+    assert(event.tracker.max_samples == 10u);
+    assert(event.tracker.buffer_size == 16u);
+    assert(event.tracker.min_sample_threshold == 1u);
+    assert(event.guard_threshold_ms == 50u);
 
     r_addr_t source;
     fill_source_address(&source);
@@ -447,16 +454,6 @@ static void test_latency_report_observation(void) {
     test_context_t context;
     memset(&context, 0, sizeof(context));
     r_client_t *client = create_client(&context, R_TEST_RESPONDER_AES_KEY);
-    r_service_latency_report_t report;
-    memset(&report, 0, sizeof(report));
-    memcpy(report.service_id, "service", 7u);
-    report.observed_latency = 25u;
-    report.ttl_ms = 1000u;
-    report.max_samples = 10u;
-    report.buffer_size = 16u;
-    report.min_sample_threshold = 1u;
-    assert(r_client_report_latency(client, &report, 1u) == RCLIENT_OK);
-
     r_test_responder_state_t state;
     assert(r_test_responder_init(
         &state,
@@ -470,6 +467,34 @@ static void test_latency_report_observation(void) {
     size_t response_len = 0u;
     bool send_response = true;
     r_test_event_t event;
+
+    r_client_req_t *request = submit_request(client, &context);
+    assert(process_captured_request(
+        &state,
+        &context,
+        response,
+        &response_len,
+        &send_response,
+        &event
+    ) == RCLIENT_OK);
+    assert(event.kind == R_TEST_EVENT_RATE_REQUEST);
+    assert(send_response);
+    r_addr_t source;
+    fill_source_address(&source);
+    assert(r_client_on_datagram(client, response, response_len, &source)
+        == RCLIENT_OK);
+    assert(context.callback_count == 1u);
+
+    r_service_latency_report_t report;
+    memset(&report, 0, sizeof(report));
+    memcpy(report.service_id, "service", 7u);
+    report.observed_latency = 25u;
+    report.ttl_ms = 1000u;
+    report.max_samples = 10u;
+    report.buffer_size = 16u;
+    report.min_sample_threshold = 1u;
+    assert(r_client_report_latency(client, &report, 1u) == RCLIENT_OK);
+
     assert(process_captured_request(
         &state,
         &context,
@@ -480,8 +505,17 @@ static void test_latency_report_observation(void) {
     ) == RCLIENT_OK);
     assert(event.kind == R_TEST_EVENT_LATENCY_REPORT);
     assert(event.report_count == 1u);
+    assert(event.tracker.present);
+    assert(memcmp(event.tracker.service_id, "service", 7u) == 0);
+    assert(event.tracker.ttl_ms == 1000u);
+    assert(event.tracker.max_samples == 10u);
+    assert(event.tracker.buffer_size == 16u);
+    assert(event.tracker.min_sample_threshold == 1u);
+    assert(event.observed_latency_ms == 25u);
+    assert(event.tracker_matches_guard);
     assert(!send_response);
     assert(response_len == 0u);
+    (void)request;
     r_client_destroy(client);
 }
 

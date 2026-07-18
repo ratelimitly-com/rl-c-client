@@ -97,20 +97,22 @@ The responder emits one record for each authenticated input packet. A rate
 request record contains at least:
 
 ```json
-{"event":"rate_request","sequence":1,"guards":1,"resources":2,"label":"api"}
+{"event":"rate_request","sequence":1,"guards":1,"resources":2,"label":"api","tracker":{"ttl_ms":30000,"max_samples":100,"buffer_size":100,"min_sample_threshold":1},"guard_threshold_ms":100,"disposition":"guard-pass"}
 ```
 
-A latency report record contains at least:
+A latency report record includes the first report's tracker configuration,
+observed value, and whether its service identity matches the preceding guard:
 
 ```json
-{"event":"latency_report","sequence":2,"reports":1}
+{"event":"latency_report","sequence":2,"reports":1,"tracker":{"ttl_ms":30000,"max_samples":100,"buffer_size":100,"min_sample_threshold":1},"observed_latency_ms":25,"matches_previous_guard":true}
 ```
 
 The runtime event stream must never print credential material, raw
 authenticated packets, bucket ids, or service ids. The explicit
 `--print-nginx-config` mode is the only credential-output exception and labels
-the credential as synthetic. Counts, the optional metrics label, scenario
-name, and response disposition are sufficient for downstream assertions.
+the credential as synthetic. Tracker parameters and the identity-match flag
+let downstream tests validate rate/latency pairing without exposing the
+service identifier itself.
 
 Malformed or unauthenticated inputs produce an `input_rejected` record and no
 response. Invalid command-line configuration exits nonzero before writing a

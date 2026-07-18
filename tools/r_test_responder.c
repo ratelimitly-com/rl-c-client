@@ -256,6 +256,21 @@ static void print_json_string(const char *text) {
     putchar('"');
 }
 
+static void print_tracker(const r_test_tracker_observation_t *tracker) {
+    if (!tracker->present) {
+        fputs("null", stdout);
+        return;
+    }
+    printf("{\"ttl_ms\":%" PRIu32
+        ",\"max_samples\":%" PRIu32
+        ",\"buffer_size\":%" PRIu32
+        ",\"min_sample_threshold\":%" PRIu32 "}",
+        tracker->ttl_ms,
+        tracker->max_samples,
+        tracker->buffer_size,
+        tracker->min_sample_threshold);
+}
+
 static void print_event(const r_test_event_t *event, int status) {
     if (event->kind == R_TEST_EVENT_RATE_REQUEST) {
         printf("{\"event\":\"rate_request\",\"sequence\":%" PRIu64
@@ -264,12 +279,22 @@ static void print_event(const r_test_event_t *event, int status) {
             event->guard_count,
             event->resource_count);
         print_json_string(event->label);
-        printf(",\"disposition\":\"%s\"}\n", event->disposition);
+        fputs(",\"tracker\":", stdout);
+        print_tracker(&event->tracker);
+        printf(",\"guard_threshold_ms\":%" PRIu32
+            ",\"disposition\":\"%s\"}\n",
+            event->guard_threshold_ms,
+            event->disposition);
     } else if (event->kind == R_TEST_EVENT_LATENCY_REPORT) {
         printf("{\"event\":\"latency_report\",\"sequence\":%" PRIu64
-            ",\"reports\":%zu}\n",
+            ",\"reports\":%zu,\"tracker\":",
             event->sequence,
             event->report_count);
+        print_tracker(&event->tracker);
+        printf(",\"observed_latency_ms\":%" PRIu32
+            ",\"matches_previous_guard\":%s}\n",
+            event->observed_latency_ms,
+            event->tracker_matches_guard ? "true" : "false");
     } else {
         printf("{\"event\":\"input_rejected\",\"sequence\":%" PRIu64
             ",\"status\":%d}\n",
