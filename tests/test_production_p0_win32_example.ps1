@@ -23,8 +23,9 @@ if ([string]::IsNullOrEmpty($AuthKey)) {
 
 # A production smoke test must prove key-derived P0 discovery. Reject an
 # accidental override, then remove even an inherited empty value before the
-# executable starts. The authentication key is staged only while Start-Process
-# builds the child's inherited environment; it is never a command argument.
+# executable starts. The authentication key is supplied through Start-Process's
+# child-only environment overlay; it is never a command argument or inherited
+# by this runner's sleep, diagnostics, and cleanup helpers.
 $DiscoveryVariables = @(
     "RATELIMITLY_TENANT",
     "RATELIMITLY_EXAMPLE_SERVER_HOST",
@@ -165,32 +166,27 @@ function Write-BoundedDiagnosticFile {
 }
 
 try {
-    [Environment]::SetEnvironmentVariable(
-        "RATELIMITLY_AUTH_KEY",
-        $AuthKey,
-        [EnvironmentVariableTarget]::Process
-    )
-try {
-    # The example's tracker retains samples for ten seconds. CI serializes the
-    # fixed Win32 identities; one bounded drain prevents a cancelled prior run
-    # from influencing this fresh production admission.
-    Write-Host "$TestName`: draining stale production state (11 seconds)"
-    Start-Sleep -Seconds 11
+    $ChildEnvironment = @{
+        RATELIMITLY_AUTH_KEY = $AuthKey
+    }
+    try {
+        # The example's tracker retains samples for ten seconds. CI serializes
+        # the fixed Win32 identities; one bounded drain prevents a cancelled
+        # prior run from influencing this fresh production admission.
+        Write-Host "$TestName`: draining stale production state (11 seconds)"
+        Start-Sleep -Seconds 11
 
-    $Client = Start-Process `
+        $Client = Start-Process `
             -FilePath $ExamplePath `
             -RedirectStandardOutput $StdoutPath `
             -RedirectStandardError $StderrPath `
+            -Environment $ChildEnvironment `
             -NoNewWindow `
             -PassThru
     }
     finally {
-        # No diagnostics or cleanup helper needs production credentials.
-        [Environment]::SetEnvironmentVariable(
-            "RATELIMITLY_AUTH_KEY",
-            $null,
-            [EnvironmentVariableTarget]::Process
-        )
+        # Drop the child overlay as soon as CreateProcess has copied it.
+        $ChildEnvironment.Clear()
     }
 
     # Keep the network smoke bounded even if DNS, UDP, or shutdown wedges.

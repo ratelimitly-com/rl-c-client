@@ -296,6 +296,12 @@ grep -Fq -- '$Stopped = $Process.WaitForExit(5000)' \
   || fail "native Win32 P0 runner does not verify tree-kill completion"
 grep -Fq -- 'taskkill.exe' "$PRODUCTION_P0_WIN32_NATIVE_RUNNER" \
   || fail "native Win32 P0 runner lacks the bounded taskkill fallback"
+grep -Fq -- '-Environment $ChildEnvironment' \
+  "$PRODUCTION_P0_WIN32_NATIVE_RUNNER" \
+  || fail "native Win32 P0 runner does not explicitly pass the child credential"
+grep -Fq -- '$ChildEnvironment.Clear()' \
+  "$PRODUCTION_P0_WIN32_NATIVE_RUNNER" \
+  || fail "native Win32 P0 runner retains the child environment overlay"
 grep -Fq -- 'Start-Sleep -Seconds 11' "$PRODUCTION_P0_WIN32_NATIVE_RUNNER" \
   || fail "native Win32 P0 runner does not expire stale tracker state"
 for variable in \
