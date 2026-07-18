@@ -71,11 +71,16 @@ Each task owns its runtime, sockets, admission state, and polling loop. Kore own
 audit but creates a client and resolver context for every exchange; high-volume
 services should use one long-lived task with a channel-fed queue.
 
-Linux Kore workers use seccomp. The module declares socket creation, `connect`,
-bind, and `getsockname`; Kore's base filter supplies poll, UDP send/receive,
-fcntl, and file-lookup syscalls. `connect` is required because glibc performs
-DNS queries over a connected UDP socket. Reconcile this list with the exact
-Kore build and resolver used by a hardened deployment.
+Linux Kore workers use seccomp. The module extends Kore's base filter with the
+glibc resolver path used by key-derived discovery: connected UDP DNS and
+batched A/AAAA queries. The local `AF_UNIX` nscd probe receives `ENOENT`, and
+the optional `AF_NETLINK` interface probe receives `EAFNOSUPPORT`; glibc then
+uses its normal DNS and address-sorting fallbacks without gaining access to
+either socket family. Kore's existing `ioctl` denial also remains intact;
+glibc grows its DNS receive buffer when `FIONREAD` is unavailable. Kore's base
+filter already supplies poll, ordinary UDP send/receive, fcntl, and file
+lookup. Reconcile this list with the exact Kore build and libc used by a
+hardened deployment.
 
 ## Platform support
 

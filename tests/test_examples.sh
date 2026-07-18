@@ -114,6 +114,26 @@ if grep -Fq -- '--max-packets' "$ROOT/tests/test_windows_example.sh"; then
 fi
 grep -Fq -- 'KORE_SYSCALL_ALLOW(connect)' "$KORE_SOURCE" \
   || fail "Kore seccomp blocks key-derived production DNS"
+grep -Fq -- \
+  'KORE_SYSCALL_DENY_ARG(socket, 0, AF_UNIX, ENOENT)' "$KORE_SOURCE" \
+  || fail "Kore seccomp does not safely reject the glibc nscd probe"
+if grep -Fq -- 'KORE_SYSCALL_ALLOW_ARG(socket, 0, AF_UNIX)' "$KORE_SOURCE"; then
+  fail "Kore seccomp grants unnecessary access to local Unix sockets"
+fi
+grep -Fq -- \
+  'KORE_SYSCALL_DENY_ARG(socket, 0, AF_NETLINK, EAFNOSUPPORT)' "$KORE_SOURCE" \
+  || fail "Kore seccomp does not safely reject the optional netlink probe"
+if grep -Fq -- 'KORE_SYSCALL_ALLOW_ARG(socket, 0, AF_NETLINK)' "$KORE_SOURCE"; then
+  fail "Kore seccomp grants unnecessary netlink access"
+fi
+grep -Fq -- 'KORE_SYSCALL_ALLOW(sendmmsg)' "$KORE_SOURCE" \
+  || fail "Kore seccomp blocks batched A/AAAA queries"
+if grep -Fq -- 'KORE_SYSCALL_ALLOW(recvmsg)' "$KORE_SOURCE"; then
+  fail "Kore seccomp grants unnecessary recvmsg access"
+fi
+if grep -Eq -- 'KORE_SYSCALL_ALLOW(_ARG)?\(ioctl' "$KORE_SOURCE"; then
+  fail "Kore seccomp grants unnecessary ioctl access"
+fi
 grep -Fq -- 'runs-on: windows-latest' "$CI_WORKFLOW" \
   || fail "CI does not validate the Win32 example on native Windows"
 grep -Fq -- 'tests/test_windows_native_example.ps1' "$CI_WORKFLOW" \
