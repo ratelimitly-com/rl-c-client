@@ -138,6 +138,7 @@ acknowledgement.
 | GLib | A portable core library whose main loop is an alternative on non-Linux hosts. |
 | latency guard | The pre-work policy decision using existing tracker samples. |
 | latency sample | The measured duration submitted after admitted work succeeds. |
+| CMake | Cross-platform build-system generator provided as an alternative to Make. |
 
 ## API references
 
