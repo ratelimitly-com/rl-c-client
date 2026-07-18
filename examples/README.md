@@ -443,7 +443,7 @@ All client calls remain on the libhv loop thread.
 
 ```sh
 cd libhv
-make LIBHV_ROOT=/path/to/libhv
+make LIBHV_PREFIX=/path/to/libhv-install
 ./libhv-example
 ```
 
