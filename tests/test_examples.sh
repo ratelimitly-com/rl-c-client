@@ -23,6 +23,8 @@ PRODUCTION_P0_RUNNER="$ROOT/tests/test_production_p0.sh"
 PRODUCTION_P0_ONE_SHOT_RUNNER="$ROOT/tests/test_production_p0_one_shot_examples.sh"
 PRODUCTION_P0_HTTP_MATRIX_RUNNER="$ROOT/tests/test_production_p0_http_examples.sh"
 PRODUCTION_P0_HTTP_RUNNER="$ROOT/tests/run_production_p0_http_example.sh"
+PRODUCTION_P0_WIN32_WINE_RUNNER="$ROOT/tests/test_production_p0_win32_wine.sh"
+PRODUCTION_P0_WIN32_WINE_TEST="$ROOT/tests/test_production_p0_win32_wine_runner.sh"
 PRODUCTION_P0_WIN32_NATIVE_RUNNER="$ROOT/tests/test_production_p0_win32_example.ps1"
 
 fail() {
@@ -49,6 +51,10 @@ fail() {
   || fail "missing executable production P0 HTTP matrix runner"
 [[ -x "$PRODUCTION_P0_HTTP_RUNNER" ]] \
   || fail "missing executable production P0 HTTP example runner"
+[[ -x "$PRODUCTION_P0_WIN32_WINE_RUNNER" ]] \
+  || fail "missing executable Wine production P0 runner"
+[[ -x "$PRODUCTION_P0_WIN32_WINE_TEST" ]] \
+  || fail "missing executable Wine P0 runner behavioral test"
 [[ -f "$PRODUCTION_P0_WIN32_NATIVE_RUNNER" ]] \
   || fail "missing native Win32 production P0 runner"
 grep -Fxq -- '/bin/production_p0_probe' "$ROOT/.gitignore" \
@@ -202,6 +208,64 @@ bash -n \
 if grep -Eq -- 'c-2213169720275691601|s-408232124743711' \
     "$PRODUCTION_P0_HTTP_MATRIX_RUNNER" "$PRODUCTION_P0_HTTP_RUNNER"; then
   fail "HTTP P0 runner hard-codes one production endpoint"
+fi
+win32_wine_job=$(sed -n '/^  win32-example:/,/^  win32-msvc:/p' "$CI_WORKFLOW")
+grep -Fq -- 'cmake -S examples/win32 -B build-mingw' \
+  <<<"$win32_wine_job" \
+  || fail "Wine CI does not create one reusable CMake cross-build"
+grep -Fq -- \
+  'WINDOWS_EXAMPLE_BINARY: ${{ github.workspace }}/build-mingw/win32-example.exe' \
+  <<<"$win32_wine_job" \
+  || fail "Wine deterministic tests do not reuse the CMake-built PE"
+grep -Fq -- 'tests/test_production_p0_win32_wine.sh' \
+  <<<"$win32_wine_job" \
+  || fail "Wine CI does not run the Win32 client against production P0"
+grep -Fq -- 'RATELIMITLY_AUTH_KEY: ${{ secrets.RATELIMITLY_AUTH_KEY }}' \
+  <<<"$win32_wine_job" \
+  || fail "Wine production step does not use the repository secret"
+grep -Fq -- "github.actor == 'edescourtis'" <<<"$win32_wine_job" \
+  || fail "Wine manual production run is not restricted"
+grep -Fq -- "github.ref == 'refs/heads/codex/example-integrations'" \
+  <<<"$win32_wine_job" \
+  || fail "Wine validation exception is not branch-scoped"
+grep -Fq -- 'rl-c-client-production-win32' <<<"$win32_wine_job" \
+  || fail "Wine and native Windows production state is not serialized"
+grep -Fq -- 'wait_with_deadline 60' "$PRODUCTION_P0_WIN32_WINE_RUNNER" \
+  || fail "Wine P0 runner lacks a 60-second hard client deadline"
+grep -Fq -- 'sleep 11' "$PRODUCTION_P0_WIN32_WINE_RUNNER" \
+  || fail "Wine P0 runner does not expire stale tracker state"
+grep -Fq -- 'ulimit -c 0' "$PRODUCTION_P0_WIN32_WINE_RUNNER" \
+  || fail "Wine P0 runner permits secret-bearing core dumps"
+if grep -Eq -- 'ulimit -c 0.*\|\| true' \
+    "$PRODUCTION_P0_WIN32_WINE_RUNNER"; then
+  fail "Wine P0 runner does not fail closed when core dumps stay enabled"
+fi
+grep -Fq -- 'WINEARCH=win64' "$PRODUCTION_P0_WIN32_WINE_RUNNER" \
+  || fail "Wine P0 runner does not create a deterministic 64-bit prefix"
+grep -Fq -- 'wait_for_tree_exit 40' "$PRODUCTION_P0_WIN32_WINE_RUNNER" \
+  || fail "Wine P0 runner does not verify hard-kill completion"
+grep -Fq -- 'stop_wineserver || cleanup_failed=true' \
+  "$PRODUCTION_P0_WIN32_WINE_RUNNER" \
+  || fail "Wine P0 runner ignores wineserver shutdown failures"
+grep -Fq -- 'inventory response prepared by Win32' \
+  "$PRODUCTION_P0_WIN32_WINE_RUNNER" \
+  || fail "Wine P0 runner does not assert protected work"
+for variable in \
+  RATELIMITLY_TENANT \
+  RATELIMITLY_EXAMPLE_SERVER_HOST \
+  RATELIMITLY_EXAMPLE_SERVER_PORT; do
+  grep -Fq -- "$variable" "$PRODUCTION_P0_WIN32_WINE_RUNNER" \
+    || fail "Wine P0 runner does not clear $variable"
+done
+bash -n "$PRODUCTION_P0_WIN32_WINE_RUNNER" \
+  || fail "Wine P0 runner has invalid Bash syntax"
+if [[ $(uname -s) == Linux ]]; then
+  bash "$PRODUCTION_P0_WIN32_WINE_TEST" \
+    || fail "Wine P0 runner behavioral tests failed"
+fi
+if grep -Eq -- 'c-2213169720275691601|s-408232124743711' \
+    "$PRODUCTION_P0_WIN32_WINE_RUNNER"; then
+  fail "Wine P0 runner hard-codes one production endpoint"
 fi
 win32_msvc_job=$(sed -n '/^  win32-msvc:/,$p' "$CI_WORKFLOW")
 grep -Fq -- 'tests/test_production_p0_win32_example.ps1' \

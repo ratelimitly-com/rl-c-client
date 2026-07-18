@@ -332,8 +332,17 @@ jobs:
 
   win32-example:
     name: Win32 example (MinGW + Wine)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
+    concurrency:
+      group: >-
+        ${{
+          (github.ref == 'refs/heads/main' ||
+           github.event_name == 'workflow_dispatch') &&
+          'rl-c-client-production-win32' ||
+          format('{0}-{1}-win32-wine', github.workflow, github.ref)
+        }}
+      cancel-in-progress: false
 
     steps:
       - name: Check out repository
@@ -343,7 +352,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential libssl-dev mingw-w64 perl wine64
+            build-essential cmake libssl-dev mingw-w64 perl wine64
+          test -x /usr/lib/wine/wine64
+          test -x /usr/lib/wine/wineserver64
 
       - name: Build static Windows OpenSSL
         env:
@@ -362,13 +373,50 @@ jobs:
           make -s -j2
           make -s install_sw
 
+      - name: Cross-build one reusable Win32 executable
+        env:
+          MINGW_OPENSSL_PREFIX: ${{ runner.temp }}/openssl-mingw64
+        run: |
+          cmake -S examples/win32 -B build-mingw \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=Windows \
+            -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
+            -DOPENSSL_ROOT_DIR="$MINGW_OPENSSL_PREFIX" \
+            -DOPENSSL_USE_STATIC_LIBS=TRUE
+          cmake --build build-mingw --parallel 2
+          test -s build-mingw/win32-example.exe
+          grep -Fq \
+            "OPENSSL_CRYPTO_LIBRARY:FILEPATH=$MINGW_OPENSSL_PREFIX/lib/libcrypto.a" \
+            build-mingw/CMakeCache.txt
+          x86_64-w64-mingw32-objdump \
+            -f build-mingw/win32-example.exe > build-mingw/pe-header.txt
+          grep -Fq 'file format pei-x86-64' build-mingw/pe-header.txt
+
       - name: Cross-build and run Win32 integration
         env:
           MINGW_OPENSSL_PREFIX: ${{ runner.temp }}/openssl-mingw64
+          WINDOWS_EXAMPLE_BINARY: ${{ github.workspace }}/build-mingw/win32-example.exe
           WINDOWS_RUNNER: /usr/lib/wine/wine64
         run: |
           bash tests/test_windows_responder.sh
           bash tests/test_windows_example.sh
+
+      - name: Run Wine Win32 example against production P0
+        if: >-
+          (github.ref == 'refs/heads/main' &&
+           (github.event_name == 'push' ||
+            (github.event_name == 'workflow_dispatch' &&
+             github.actor == 'edescourtis'))) ||
+          (github.ref == 'refs/heads/codex/example-integrations' &&
+           github.event_name == 'workflow_dispatch' &&
+           github.actor == 'edescourtis')
+        env:
+          RATELIMITLY_AUTH_KEY: ${{ secrets.RATELIMITLY_AUTH_KEY }}
+          WINE_SERVER: /usr/lib/wine/wineserver64
+        run: |
+          bash tests/test_production_p0_win32_wine.sh \
+            "${{ github.workspace }}/build-mingw/win32-example.exe" \
+            /usr/lib/wine/wine64
 
   win32-msvc:
     name: Win32 example (MSVC)
