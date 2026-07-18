@@ -132,6 +132,7 @@ server acknowledgement.
 | `evutil_socket_t` | libevent's portable socket type, wide enough to retain a native Windows socket handle. |
 | latency guard | The pre-work decision based on existing service-latency samples. |
 | latency sample | The duration reported after admitted work completes successfully. |
+| CMake | Cross-platform build-system generator provided as an alternative to Make. |
 
 ## API references
 
