@@ -25,18 +25,24 @@ MERMAID_INIT_DIRECTIVE = re.compile(
     r"%%\{\s*(?:init|initialize)\b(.*?)\}%%", re.IGNORECASE | re.DOTALL
 )
 MERMAID_FORCED_KEY = re.compile(
-    r"['\"]?(theme|background|lineColor)['\"]?\s*:", re.IGNORECASE
+    r"(?<![A-Za-z0-9_-])['\"]?(theme|background|lineColor)['\"]?\s*:",
+    re.IGNORECASE,
 )
 MERMAID_STYLE_LINE = re.compile(
     r"^\s*(classDef|style|linkStyle)\b", re.IGNORECASE
 )
-MERMAID_HAS_FILL = re.compile(r"\bfill\s*:", re.IGNORECASE)
-MERMAID_HAS_COLOR = re.compile(r"\bcolor\s*:", re.IGNORECASE)
+MERMAID_HAS_FILL = re.compile(
+    r"(?<![A-Za-z0-9_-])fill\s*:", re.IGNORECASE
+)
+MERMAID_HAS_COLOR = re.compile(
+    r"(?<![A-Za-z0-9_-])color\s*:", re.IGNORECASE
+)
 MERMAID_FILL_HEX = re.compile(
-    r"\bfill\s*:\s*#([0-9a-f]{3}|[0-9a-f]{6})\b", re.IGNORECASE
+    r"(?<![A-Za-z0-9_-])fill\s*:\s*#([0-9a-f]{3}|[0-9a-f]{6})\b",
+    re.IGNORECASE,
 )
 MERMAID_COLOR_HEX = re.compile(
-    r"(?<![A-Za-z])color\s*:\s*#([0-9a-f]{3}|[0-9a-f]{6})\b",
+    r"(?<![A-Za-z0-9_-])color\s*:\s*#([0-9a-f]{3}|[0-9a-f]{6})\b",
     re.IGNORECASE,
 )
 MERMAID_PURE_BW_HEX = re.compile(
@@ -108,16 +114,14 @@ def check_mermaid_block(block: str, index: int) -> list[str]:
             if line.strip() == "---":
                 break
             frontmatter.append(line)
-        if re.search(
-            r"(?im)^\s*(?:theme|background|lineColor)\s*:",
-            "\n".join(frontmatter),
-        ):
+        if MERMAID_FORCED_KEY.search("\n".join(frontmatter)):
             errors.append(f"Mermaid block {index} forces a theme color")
 
     for line_number, line in enumerate(lines, start=1):
         style = MERMAID_STYLE_LINE.search(line)
-        if MERMAID_PURE_BW_HEX.search(line) or (
-            style and MERMAID_PURE_BW_WORD.search(line)
+        if style and (
+            MERMAID_PURE_BW_HEX.search(line)
+            or MERMAID_PURE_BW_WORD.search(line)
         ):
             errors.append(
                 f"Mermaid block {index}, line {line_number} hardcodes black or white"

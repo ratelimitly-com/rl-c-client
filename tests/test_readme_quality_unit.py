@@ -24,6 +24,16 @@ def main() -> int:
         "forces a theme color",
     )
     require_issue(
+        "inline frontmatter theme",
+        "---\nconfig: {theme: dark}\n---\nflowchart TD\n  A --> B",
+        "forces a theme color",
+    )
+    require_issue(
+        "quoted frontmatter theme",
+        "---\nconfig:\n  'theme': dark\n---\nflowchart TD\n  A --> B",
+        "forces a theme color",
+    )
+    require_issue(
         "initialization directive",
         "%%{init: {'theme': 'dark'}}%%\nflowchart TD\n  A --> B",
         "forces a theme color",
@@ -31,6 +41,11 @@ def main() -> int:
     require_issue(
         "missing text color",
         "flowchart TD\n  classDef bad fill:#EAECEF,stroke:#7D8590;",
+        "without text color",
+    )
+    require_issue(
+        "background color is not text color",
+        "flowchart TD\n  classDef bad fill:#EAECEF,background-color:#1A1A1A;",
         "without text color",
     )
     require_issue(
@@ -52,6 +67,11 @@ def main() -> int:
     errors = check_mermaid_block(safe, 1)
     if errors:
         raise AssertionError(f"safe palette was rejected: {errors!r}")
+
+    safe_label = 'flowchart TD\n  A["Document #fff token"] --> B'
+    errors = check_mermaid_block(safe_label, 1)
+    if errors:
+        raise AssertionError(f"ordinary label text was rejected: {errors!r}")
 
     print("test_readme_quality_unit: PASS")
     return 0
