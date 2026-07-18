@@ -20,6 +20,7 @@ MACOS_LOCAL_MATRIX="$ROOT/tests/macos-local-examples.txt"
 WINDOWS_NATIVE_RUNNER="$ROOT/tests/test_windows_native_example.ps1"
 PRODUCTION_P0_SOURCE="$ROOT/tests/production_p0_probe.c"
 PRODUCTION_P0_RUNNER="$ROOT/tests/test_production_p0.sh"
+PRODUCTION_P0_ONE_SHOT_RUNNER="$ROOT/tests/test_production_p0_one_shot_examples.sh"
 
 fail() {
   echo "test_examples: $*" >&2
@@ -39,6 +40,8 @@ fail() {
   || fail "missing production P0 protocol probe"
 [[ -x "$PRODUCTION_P0_RUNNER" ]] \
   || fail "missing executable production P0 runner"
+[[ -x "$PRODUCTION_P0_ONE_SHOT_RUNNER" ]] \
+  || fail "missing executable production P0 one-shot runner"
 grep -Fxq -- '/bin/production_p0_probe' "$ROOT/.gitignore" \
   || fail "production P0 build artifact is not ignored"
 grep -Fq -- 'bash tests/test_linux_one_shot_examples.sh' "$CI_WORKFLOW" \
@@ -122,6 +125,28 @@ grep -Fq -- 'rate_limited' "$PRODUCTION_P0_SOURCE" \
   || fail "production P0 probe does not prove rate limiting"
 grep -Fq -- 'tokens_deficit == 0u' "$PRODUCTION_P0_SOURCE" \
   || fail "production P0 probe accepts an unproven rate denial"
+linux_one_shot_job=$(sed -n \
+  '/^  linux-one-shot-examples:/,/^  linux-http-examples:/p' \
+  "$CI_WORKFLOW")
+grep -Fq -- 'bash tests/test_production_p0_one_shot_examples.sh' \
+  <<<"$linux_one_shot_job" \
+  || fail "Linux one-shot CI does not run examples against production P0"
+grep -Fq -- 'RATELIMITLY_AUTH_KEY: ${{ secrets.RATELIMITLY_AUTH_KEY }}' \
+  <<<"$linux_one_shot_job" \
+  || fail "Linux one-shot production step does not use the repository secret"
+grep -Fq -- "github.actor == 'edescourtis'" <<<"$linux_one_shot_job" \
+  || fail "Linux one-shot manual production run is not restricted"
+grep -Fq -- "github.ref == 'refs/heads/codex/example-integrations'" \
+  <<<"$linux_one_shot_job" \
+  || fail "Linux one-shot validation exception is not branch-scoped"
+grep -Fq -- 'cancel-in-progress: false' <<<"$linux_one_shot_job" \
+  || fail "Linux one-shot production runs are not serialized"
+grep -Fq -- 'unset RATELIMITLY_TENANT' "$PRODUCTION_P0_ONE_SHOT_RUNNER" \
+  || fail "one-shot P0 runner does not force key-derived discovery"
+grep -Eq -- \
+  '^[[:space:]]*timeout --signal=TERM --kill-after=1s 29s ' \
+  "$PRODUCTION_P0_ONE_SHOT_RUNNER" \
+  || fail "one-shot P0 runner lacks its hard 30-second deadline"
 for scenario in guard-pass deny guard-deny; do
   grep -Fq -- "Name = \"$scenario\"" "$WINDOWS_NATIVE_RUNNER" \
     || fail "native Windows behavioral runner omits $scenario"

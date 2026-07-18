@@ -78,6 +78,15 @@ jobs:
     name: Linux one-shot examples
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    concurrency:
+      group: >-
+        ${{
+          (github.ref == 'refs/heads/main' ||
+           github.event_name == 'workflow_dispatch') &&
+          'rl-c-client-production-one-shot' ||
+          format('{0}-{1}-linux-one-shot', github.workflow, github.ref)
+        }}
+      cancel-in-progress: false
 
     steps:
       - name: Check out repository
@@ -146,6 +155,19 @@ jobs:
 
       - name: Run rate-limit and latency scenarios
         run: bash tests/test_linux_one_shot_examples.sh
+
+      - name: Run examples against production P0
+        if: >-
+          (github.ref == 'refs/heads/main' &&
+           (github.event_name == 'push' ||
+            (github.event_name == 'workflow_dispatch' &&
+             github.actor == 'edescourtis'))) ||
+          (github.ref == 'refs/heads/codex/example-integrations' &&
+           github.event_name == 'workflow_dispatch' &&
+           github.actor == 'edescourtis')
+        env:
+          RATELIMITLY_AUTH_KEY: ${{ secrets.RATELIMITLY_AUTH_KEY }}
+        run: bash tests/test_production_p0_one_shot_examples.sh
 
   linux-http-examples:
     name: Linux HTTP examples (shard ${{ matrix.shard }})
