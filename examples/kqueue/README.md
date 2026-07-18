@@ -38,8 +38,10 @@ cmake --build build
 ./build/kqueue-example
 ```
 
-Set `RATELIMITLY_TENANT` and `RATELIMITLY_AUTH_KEY`; fixed responder variables
-are optional for local tests.
+Set `RATELIMITLY_AUTH_KEY`. The key defaults discovery to
+`_ratelimitly._udp.c-<key-id>.p0.ratelimitly.com`; optional
+`RATELIMITLY_TENANT` overrides it. Fixed responder variables are optional for
+local tests.
 
 ## Platform support
 

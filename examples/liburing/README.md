@@ -44,8 +44,10 @@ cmake --build build
 ./build/liburing-example
 ```
 
-Set `RATELIMITLY_TENANT` and `RATELIMITLY_AUTH_KEY`. The fixed responder
-variables documented in the top-level examples guide are optional.
+Set `RATELIMITLY_AUTH_KEY`. The key defaults discovery to
+`_ratelimitly._udp.c-<key-id>.p0.ratelimitly.com`; optional
+`RATELIMITLY_TENANT` overrides it. Fixed responder variables documented in the
+top-level examples guide are optional.
 
 ## Platform support
 

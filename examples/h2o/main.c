@@ -389,7 +389,7 @@ static int create_udp_watchers(h2o_app_t *app) {
 int main(void) {
     r_runtime_options_t options;
     if (r_runtime_options_from_env(&options) != RCLIENT_OK) {
-        fprintf(stderr, "set RATELIMITLY_TENANT and RATELIMITLY_AUTH_KEY\n");
+        fprintf(stderr, "set RATELIMITLY_AUTH_KEY; RATELIMITLY_TENANT is optional\n");
         return EXIT_FAILURE;
     }
 

@@ -1,5 +1,6 @@
 #include "../include/r_client.h"
 
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -19,6 +20,34 @@ typedef struct r_server_endpoint {
     uint64_t server_id;
     bool has_server_id;
 } r_server_endpoint_t;
+
+_Static_assert(
+    R_CLIENT_DEFAULT_TENANT_DNS_CAPACITY >=
+        sizeof("c-18446744073709551615.p0.ratelimitly.com"),
+    "default tenant DNS capacity is too small"
+);
+
+int r_client_format_default_tenant_dns(
+    uint64_t key_id,
+    char *out,
+    size_t out_capacity
+) {
+    if (!out || out_capacity == 0u) {
+        return RCLIENT_ERR_CONFIG;
+    }
+    out[0] = '\0';
+    int written = snprintf(
+        out,
+        out_capacity,
+        "c-%" PRIu64 ".p0.ratelimitly.com",
+        key_id
+    );
+    if (written < 0 || (size_t)written >= out_capacity) {
+        out[0] = '\0';
+        return RCLIENT_ERR_CONFIG;
+    }
+    return RCLIENT_OK;
+}
 
 typedef struct r_server_stat {
     uint64_t server_id;
@@ -1434,6 +1463,101 @@ static void r_request_complete(r_client_t *client, r_client_req_t *req, int stat
     r_request_free(req);
 }
 
+static int r_client_configure_auth(
+    r_client_t *client,
+    const r_tenant_config_t *tenant
+) {
+    if (!client || !tenant || !tenant->auth.secret) {
+        return RCLIENT_ERR_CONFIG;
+    }
+
+    size_t auth_secret_len = tenant->auth.secret_len;
+    if (auth_secret_len == 0u) {
+        auth_secret_len = strlen(tenant->auth.secret);
+    }
+    client->auth_secret = r_strdup_n(
+        tenant->auth.secret,
+        tenant->auth.secret_len
+    );
+    if (!client->auth_secret) {
+        return RCLIENT_ERR_NOMEM;
+    }
+    client->auth_secret_len = auth_secret_len;
+    client->config.tenant.auth.secret = client->auth_secret;
+    client->config.tenant.auth.secret_len = 0;
+
+    uint8_t decoded_secret[64] = {0};
+    size_t decoded_secret_len = 0;
+    r_auth_type_t decoded_type = (r_auth_type_t)0;
+    uint64_t decoded_key_id = 0;
+    int decode_rc = r_decode_api_key_bech32_with_quotas(
+        client->auth_secret,
+        &decoded_type,
+        &decoded_key_id,
+        decoded_secret,
+        sizeof(decoded_secret),
+        &decoded_secret_len,
+        &client->quotas
+    );
+
+    int status = RCLIENT_OK;
+    if (decode_rc != 0 || decoded_secret_len != 32u) {
+        status = RCLIENT_ERR_CONFIG;
+    } else if (tenant->auth.type != 0
+            && decoded_type != tenant->auth.type) {
+        status = RCLIENT_ERR_CONFIG;
+    } else if (tenant->key_id != 0u && decoded_key_id != tenant->key_id) {
+        status = RCLIENT_ERR_CONFIG;
+    } else if (decoded_type == R_AUTH_COOKIE) {
+        memcpy(client->cookie, decoded_secret, 32u);
+        client->has_cookie = true;
+    } else if (decoded_type == R_AUTH_AES_GCM) {
+        memcpy(client->aes_key, decoded_secret, 32u);
+        client->has_aes_key = true;
+    } else {
+        status = RCLIENT_ERR_CONFIG;
+    }
+    OPENSSL_cleanse(decoded_secret, sizeof(decoded_secret));
+    if (status != RCLIENT_OK) {
+        return status;
+    }
+
+    client->has_quotas = true;
+    client->config.tenant.key_id = decoded_key_id;
+    client->config.tenant.auth.type = decoded_type;
+    return RCLIENT_OK;
+}
+
+static int r_client_configure_dns(
+    r_client_t *client,
+    const char *dns_override
+) {
+    if (!client) {
+        return RCLIENT_ERR_CONFIG;
+    }
+
+    char default_dns_name[R_CLIENT_DEFAULT_TENANT_DNS_CAPACITY];
+    const char *dns_name = dns_override;
+    if (!dns_name || dns_name[0] == '\0') {
+        int status = r_client_format_default_tenant_dns(
+            client->config.tenant.key_id,
+            default_dns_name,
+            sizeof(default_dns_name)
+        );
+        if (status != RCLIENT_OK) {
+            return status;
+        }
+        dns_name = default_dns_name;
+    }
+
+    client->dns_name = r_strdup_n(dns_name, 0);
+    if (!client->dns_name) {
+        return RCLIENT_ERR_NOMEM;
+    }
+    client->config.tenant.dns_name = client->dns_name;
+    return RCLIENT_OK;
+}
+
 int r_client_create(
     const r_client_config_t *config,
     const r_io_ops_t *io_ops,
@@ -1443,7 +1567,7 @@ int r_client_create(
     if (!config || !io_ops || !resolver_ops || !out_client) {
         return RCLIENT_ERR_CONFIG;
     }
-    if (!config->tenant.dns_name) {
+    if (!config->tenant.auth.secret) {
         return RCLIENT_ERR_CONFIG;
     }
 
@@ -1457,89 +1581,21 @@ int r_client_create(
     client->config = *config;
     client->config.request_policy = NULL;
 
-    client->dns_name = r_strdup_n(config->tenant.dns_name, 0);
-    if (!client->dns_name) {
+    int status = r_client_configure_auth(client, &config->tenant);
+    if (status != RCLIENT_OK) {
         r_client_destroy(client);
-        return RCLIENT_ERR_NOMEM;
+        return status;
     }
-    client->config.tenant.dns_name = client->dns_name;
-
-    if (config->tenant.auth.type != R_AUTH_COOKIE &&
-        config->tenant.auth.type != R_AUTH_AES_GCM) {
+    status = r_client_configure_dns(client, config->tenant.dns_name);
+    if (status != RCLIENT_OK) {
         r_client_destroy(client);
-        return RCLIENT_ERR_CONFIG;
-    }
-    if (!config->tenant.auth.secret) {
-        r_client_destroy(client);
-        return RCLIENT_ERR_CONFIG;
-    }
-
-    if (config->tenant.auth.secret) {
-        size_t auth_secret_len = config->tenant.auth.secret_len;
-        if (auth_secret_len == 0) {
-            auth_secret_len = strlen(config->tenant.auth.secret);
-        }
-        client->auth_secret = r_strdup_n(config->tenant.auth.secret, config->tenant.auth.secret_len);
-        if (!client->auth_secret) {
-            r_client_destroy(client);
-            return RCLIENT_ERR_NOMEM;
-        }
-        client->auth_secret_len = auth_secret_len;
-        client->config.tenant.auth.secret = client->auth_secret;
-        client->config.tenant.auth.secret_len = 0;
+        return status;
     }
 
     if (config->request_policy) {
         client->policy = *config->request_policy;
     } else {
         r_client_default_request_policy(&client->policy);
-    }
-
-    if (client->auth_secret) {
-        uint8_t decoded_secret[64];
-        size_t decoded_secret_len = 0;
-        r_auth_type_t decoded_type = (r_auth_type_t)0;
-        uint64_t decoded_key_id = 0;
-        int decode_rc = r_decode_api_key_bech32_with_quotas(
-                client->auth_secret,
-                &decoded_type,
-                &decoded_key_id,
-                decoded_secret,
-                sizeof(decoded_secret),
-                &decoded_secret_len,
-                &client->quotas);
-        int config_rc = RCLIENT_OK;
-        if (decode_rc != 0) {
-            config_rc = RCLIENT_ERR_CONFIG;
-        } else {
-            client->has_quotas = true;
-            if (decoded_type != config->tenant.auth.type) {
-                config_rc = RCLIENT_ERR_CONFIG;
-            } else if (decoded_key_id != config->tenant.key_id) {
-                config_rc = RCLIENT_ERR_CONFIG;
-            } else if (decoded_type == R_AUTH_COOKIE) {
-                if (decoded_secret_len != 32u) {
-                    config_rc = RCLIENT_ERR_CONFIG;
-                } else {
-                    memcpy(client->cookie, decoded_secret, 32u);
-                    client->has_cookie = true;
-                }
-            } else if (decoded_type == R_AUTH_AES_GCM) {
-                if (decoded_secret_len != 32u) {
-                    config_rc = RCLIENT_ERR_CONFIG;
-                } else {
-                    memcpy(client->aes_key, decoded_secret, 32u);
-                    client->has_aes_key = true;
-                }
-            } else {
-                config_rc = RCLIENT_ERR_CONFIG;
-            }
-        }
-        OPENSSL_cleanse(decoded_secret, sizeof(decoded_secret));
-        if (config_rc != RCLIENT_OK) {
-            r_client_destroy(client);
-            return config_rc;
-        }
     }
 
     client->last_dns_refresh_ms = 0;

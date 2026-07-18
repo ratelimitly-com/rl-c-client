@@ -184,7 +184,7 @@ static void print_outcome(const application_t *app) {
 int main(void) {
     r_runtime_options_t options;
     if (r_runtime_options_from_env(&options) != RCLIENT_OK) {
-        fputs("set RATELIMITLY_TENANT and RATELIMITLY_AUTH_KEY\n", stderr);
+        fputs("set RATELIMITLY_AUTH_KEY; RATELIMITLY_TENANT is optional\n", stderr);
         return EXIT_FAILURE;
     }
 

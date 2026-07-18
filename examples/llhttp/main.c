@@ -192,7 +192,7 @@ int main(void) {
     r_runtime_options_t options;
     int status = r_runtime_options_from_env(&options);
     if (status != RCLIENT_OK) {
-        fprintf(stderr, "set RATELIMITLY_TENANT and RATELIMITLY_AUTH_KEY\n");
+        fprintf(stderr, "set RATELIMITLY_AUTH_KEY; RATELIMITLY_TENANT is optional\n");
         return EXIT_FAILURE;
     }
 

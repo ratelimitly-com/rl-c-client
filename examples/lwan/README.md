@@ -35,11 +35,14 @@ Build Lwan first, then provide its source and build directories:
 ```sh
 make -C ../..
 make LWAN_ROOT=/path/to/lwan LWAN_BUILD=/path/to/lwan/build
-RATELIMITLY_TENANT=example \
-RATELIMITLY_AUTH_KEY=secret \
+RATELIMITLY_AUTH_KEY=rl-aes1... \
 ./lwan-example
 curl -i http://127.0.0.1:8080/limited
 ```
+
+The encoded key supplies the tenant ID and defaults discovery to
+`_ratelimitly._udp.c-<key-id>.p0.ratelimitly.com`. Set optional
+`RATELIMITLY_TENANT` only to override that production DNS name.
 
 The equivalent CMake build is:
 

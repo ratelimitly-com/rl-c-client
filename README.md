@@ -149,23 +149,20 @@ private-network mode: the cookie is sent on the wire and does not authenticate
 the packet contents, so it must be used only where on-path modification and
 capture are outside the deployment threat model.
 
-The public C structures use `tenant` to describe the per-credential context:
-DNS name, key id, and authentication settings. Each credential also carries
-quota values. Use `r_client_parse_auth_key` to validate a key before
-constructing config:
+The encoded key is the source of truth for the tenant key ID, authentication
+type, and quota values. The default production tenant DNS name is
+`c-<key-id>.p0.ratelimitly.com`, so normal configuration needs only the key:
 
 ```c
-r_auth_key_info_t info;
-if (r_client_parse_auth_key(auth_key, &info) != RCLIENT_OK) {
-    /* reject config */
-}
-
 r_client_config_t cfg = {0};
-cfg.tenant.dns_name = "api-key.example.com";
-cfg.tenant.key_id = info.key_id;
-cfg.tenant.auth.type = info.type;
 cfg.tenant.auth.secret = auth_key;
 ```
+
+Set `cfg.tenant.dns_name` only to override production discovery for a custom,
+development, or staging DNS zone. Nonzero `cfg.tenant.key_id` and
+`cfg.tenant.auth.type` values are optional assertions; when supplied, they
+must match the encoded key. `r_client_parse_auth_key` remains available for
+callers that want to inspect key metadata before creating a client.
 
 `cfg.tenant.auth.secret` is the encoded Bech32 credential string, not raw
 secret bytes. Leave `cfg.tenant.auth.secret_len` as `0` for a normal
@@ -212,12 +209,16 @@ The perf client is a standalone load generator and smoke-test tool.
 Examples:
 
 ```sh
-bin/perf_client --clients=50 --requests=10000
+bin/perf_client --clients=50 --requests=10000 --auth=rl-aes1...
 bin/perf_client --duration=60 --auth=rl-aes1...
-bin/perf_client --srv=api-key.example.com --duration=30 --clients=50
-RCLIENT_DNS_SERVER=127.0.0.1:5353 bin/perf_client
-bin/perf_client --attempt-timeout-ms=750 --retry-attempts=2 --retry-on=timeout
+bin/perf_client --srv=api-key.example.com --duration=30 --clients=50 --auth=rl-aes1...
+RCLIENT_DNS_SERVER=127.0.0.1:5353 bin/perf_client --auth=rl-aes1...
+bin/perf_client --attempt-timeout-ms=750 --retry-attempts=2 --retry-on=timeout --auth=rl-aes1...
 ```
+
+Without `--srv`, the perf client derives
+`c-<key-id>.p0.ratelimitly.com` from `--auth`, matching the library default.
+Use `--srv` only for a custom, development, or staging DNS zone.
 
 Retry-related flags:
 

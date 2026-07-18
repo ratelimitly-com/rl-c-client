@@ -227,7 +227,7 @@ int main(void) {
         status = read_work_duration(&work_ms);
     }
     if (status != RCLIENT_OK) {
-        fputs("set RATELIMITLY_TENANT and RATELIMITLY_AUTH_KEY; "
+        fputs("set RATELIMITLY_AUTH_KEY; RATELIMITLY_TENANT is optional; "
             "RATELIMITLY_EXAMPLE_WORK_MS must be 0..60000\n", stderr);
         return EXIT_FAILURE;
     }

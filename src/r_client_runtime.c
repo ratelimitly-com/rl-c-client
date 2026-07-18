@@ -452,9 +452,12 @@ int r_runtime_options_from_env(r_runtime_options_t *out_options) {
         return RCLIENT_ERR_CONFIG;
     }
     memset(out_options, 0, sizeof(*out_options));
-    out_options->tenant_dns_name = runtime_environment_value(
+    const char *tenant_dns_name = runtime_environment_value(
         "RATELIMITLY_TENANT"
     );
+    out_options->tenant_dns_name = tenant_dns_name && tenant_dns_name[0] != '\0'
+        ? tenant_dns_name
+        : NULL;
     out_options->auth_key = runtime_environment_value(
         "RATELIMITLY_AUTH_KEY"
     );
@@ -474,7 +477,7 @@ int r_runtime_options_from_env(r_runtime_options_t *out_options) {
         }
         out_options->server_port = (uint16_t)port;
     }
-    if (!out_options->tenant_dns_name || !out_options->auth_key) {
+    if (!out_options->auth_key || out_options->auth_key[0] == '\0') {
         return RCLIENT_ERR_CONFIG;
     }
     return (out_options->server_host == NULL)
@@ -487,7 +490,8 @@ int r_runtime_client_init(
     r_runtime_client_t *runtime,
     const r_runtime_options_t *options
 ) {
-    if (!runtime || !options || !options->tenant_dns_name || !options->auth_key) {
+    if (!runtime || !options || !options->auth_key
+            || options->auth_key[0] == '\0') {
         return RCLIENT_ERR_CONFIG;
     }
     memset(runtime, 0, sizeof(*runtime));
@@ -521,13 +525,6 @@ int r_runtime_client_init(
         return RCLIENT_ERR_IO;
     }
 
-    r_auth_key_info_t key;
-    status = r_client_parse_auth_key(options->auth_key, &key);
-    if (status != RCLIENT_OK) {
-        r_runtime_client_destroy(runtime);
-        return status;
-    }
-
     r_request_policy_t policy;
     r_client_default_request_policy(&policy);
     policy.attempt_timeout_ms = 1000u;
@@ -535,8 +532,6 @@ int r_runtime_client_init(
 
     r_client_config_t config = {0};
     config.tenant.dns_name = options->tenant_dns_name;
-    config.tenant.key_id = key.key_id;
-    config.tenant.auth.type = key.type;
     config.tenant.auth.secret = options->auth_key;
     config.request_policy = &policy;
 

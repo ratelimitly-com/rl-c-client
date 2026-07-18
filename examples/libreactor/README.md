@@ -36,11 +36,14 @@ Build and install libreactor v3 so `pkg-config libreactor` can find it, then:
 ```sh
 make -C ../..
 make
-RATELIMITLY_TENANT=example \
-RATELIMITLY_AUTH_KEY=secret \
+RATELIMITLY_AUTH_KEY=rl-aes1... \
 ./libreactor-example
 curl -i http://127.0.0.1:8000/limited
 ```
+
+The encoded key supplies the tenant ID and defaults discovery to
+`_ratelimitly._udp.c-<key-id>.p0.ratelimitly.com`. Set optional
+`RATELIMITLY_TENANT` only to override that production DNS name.
 
 For a non-system install, set `PKG_CONFIG_PATH` to its `lib/pkgconfig` folder.
 The equivalent CMake build is:

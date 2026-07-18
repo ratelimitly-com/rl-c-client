@@ -13,6 +13,7 @@ H2O_CMAKE="$ROOT/examples/h2o/CMakeLists.txt"
 LWAN_MAKEFILE="$ROOT/examples/lwan/Makefile"
 LWAN_CMAKE="$ROOT/examples/lwan/CMakeLists.txt"
 GLIB_SOURCE="$ROOT/examples/glib/main.c"
+PERF_SOURCE="$ROOT/bin/perf_client.c"
 
 fail() {
   echo "test_examples: $*" >&2
@@ -56,6 +57,11 @@ grep -Fq -- 'pkg_check_modules(LWAN_BUILD_CONFIG' "$LWAN_CMAKE" \
   || fail "Lwan CMake ignores build-specific optional dependencies"
 grep -Fq -- 'g_io_channel_unref(channel);' "$GLIB_SOURCE" \
   || fail "GLib leaks a channel when source creation fails"
+grep -Fq -- 'r_client_format_default_tenant_dns(' "$PERF_SOURCE" \
+  || fail "perf client does not use key-derived production DNS"
+if grep -Fq -- 'glar.com' "$PERF_SOURCE"; then
+  fail "perf client still uses its legacy DNS default"
+fi
 [[ ! -e "$ROOT/examples/common" ]] \
   || fail "legacy examples/common adapter still exists"
 [[ ! -e "$ROOT/tests/test_example_common.c" \
@@ -105,6 +111,10 @@ while IFS='|' read -r name kind marker; do
     || fail "$name README does not explain rate limiting"
   grep -Eqi 'latency' "$example_dir/README.md" \
     || fail "$name README does not explain latency tracking"
+  grep -Fq -- 'p0.ratelimitly.com' "$example_dir/README.md" \
+    || fail "$name README does not explain production DNS discovery"
+  grep -Fq -- '`RATELIMITLY_TENANT`' "$example_dir/README.md" \
+    || fail "$name README does not explain the tenant DNS override"
   grep -Fq -- "($name/)" "$README" \
     || fail "integration guide does not link the $name folder"
   grep -Fq -- '#include "r_client_runtime.h"' "${source_files[@]}" \

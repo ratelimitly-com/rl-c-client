@@ -31,20 +31,12 @@ socket ownership should use the core I/O interfaces instead.
 
 ## Configuration
 
-Create one `r_client_t` per API-key/event-loop context. The public C structures
-use `tenant` for the per-credential context because that context bundles the DNS
-name, key id, and authentication settings used by one configured client:
+Create one `r_client_t` per API-key/event-loop context. The encoded key supplies
+the tenant key ID, authentication type, and quota values. With no DNS override,
+the client discovers `_ratelimitly._udp.c-<key-id>.p0.ratelimitly.com`:
 
 ```c
-r_auth_key_info_t key;
-if (r_client_parse_auth_key(auth_key, &key) != RCLIENT_OK) {
-    return -1;
-}
-
 r_client_config_t cfg = {0};
-cfg.tenant.dns_name = "api-key.example.com";
-cfg.tenant.key_id = key.key_id;
-cfg.tenant.auth.type = key.type;
 cfg.tenant.auth.secret = auth_key;
 
 r_request_policy_t policy;
@@ -57,6 +49,12 @@ r_client_t *client = NULL;
 int rc = r_client_create(&cfg, &io_ops, &resolver_ops, &client);
 ```
 
+Set `cfg.tenant.dns_name` to override production discovery for custom,
+development, or staging DNS. A nonzero `cfg.tenant.key_id` or
+`cfg.tenant.auth.type` acts as an assertion and must match the encoded key.
+Hosts that need the default name before `r_client_create`, such as a shared DNS
+cache, can call `r_client_format_default_tenant_dns()` with the parsed key ID.
+
 `cfg.tenant.auth.secret` is the encoded Bech32 credential string itself
 (`rl-cookie...` or `rl-aes...`), not raw binary key material.
 `cfg.tenant.auth.secret_len` is the byte length of that encoded text string;
@@ -65,9 +63,9 @@ credential alphabet is printable ASCII and does not carry embedded NUL bytes.
 The client validates and decodes the credential internally before copying the
 raw 32-byte cookie/AES material into private client state.
 
-The client copies `tenant.dns_name` and the auth secret string during
-`r_client_create`, so those configuration strings only need to remain valid for
-the duration of the call.
+The client copies an explicit `tenant.dns_name` and the auth secret string
+during `r_client_create`, so those configuration strings only need to remain
+valid for the duration of the call.
 
 ## Credentials
 
@@ -232,8 +230,9 @@ denied, cancelled, failed, or previously reported work. HTTP integrations whose
 protected operation is asynchronous should record a monotonic start time and
 report from their own completion callback instead.
 
-The portable runtime reads `RATELIMITLY_TENANT` and `RATELIMITLY_AUTH_KEY` through
-`r_runtime_options_from_env()`. The optional
+The portable runtime requires `RATELIMITLY_AUTH_KEY` through
+`r_runtime_options_from_env()`. It derives the production tenant DNS name from
+the key. Optional `RATELIMITLY_TENANT` overrides that default. The optional
 `RATELIMITLY_EXAMPLE_SERVER_HOST`/`RATELIMITLY_EXAMPLE_SERVER_PORT` pair selects
 an explicit development endpoint; set both or neither. Runtime-owned socket
 handles remain valid until `r_runtime_client_destroy()`.

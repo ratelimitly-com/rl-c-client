@@ -11,6 +11,9 @@
 extern "C" {
 #endif
 
+/* Includes space for c-<uint64>.p0.ratelimitly.com and its trailing NUL. */
+#define R_CLIENT_DEFAULT_TENANT_DNS_CAPACITY 42u
+
 // Opaque handles.
 typedef struct r_client r_client_t;
 typedef struct r_client_req r_client_req_t;
@@ -34,6 +37,7 @@ typedef enum r_auth_type {
 } r_auth_type_t;
 
 typedef struct r_auth_config {
+    /* Zero derives the authentication type from the encoded key. */
     r_auth_type_t type;
     const char *secret; // Encoded Bech32 credential string: rl-cookie... / rl-aes...
     size_t secret_len; // Encoded string length; 0 means null-terminated. Not raw secret bytes.
@@ -52,7 +56,9 @@ typedef struct r_auth_key_info {
 } r_auth_key_info_t;
 
 typedef struct r_tenant_config {
+    /* NULL/empty derives c-<key-id>.p0.ratelimitly.com from the auth key. */
     const char *dns_name;
+    /* Zero derives the identifier from the auth key; nonzero must match it. */
     uint64_t key_id;
     r_auth_config_t auth;
 } r_tenant_config_t;
@@ -288,6 +294,12 @@ void r_client_cancel_request(r_client_t *client, r_client_req_t *req);
 void r_client_default_request_policy(r_request_policy_t *out_policy);
 void r_client_hash_id(const char *input, uint8_t out_id[16]);
 int r_client_parse_auth_key(const char *encoded, r_auth_key_info_t *out_info);
+/* Format c-<key-id>.p0.ratelimitly.com; clears a provided buffer on error. */
+int r_client_format_default_tenant_dns(
+    uint64_t key_id,
+    char *out,
+    size_t out_capacity
+);
 
 #ifdef __cplusplus
 }

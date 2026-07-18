@@ -41,10 +41,11 @@ cmake --build build
 ./build/latency-tracker-example
 ```
 
-Set `RATELIMITLY_TENANT` and `RATELIMITLY_AUTH_KEY` before running. Optional
-`RATELIMITLY_EXAMPLE_WORK_MS` controls the simulated operation duration.
-For local testing, set `RATELIMITLY_EXAMPLE_SERVER_HOST` and
-`RATELIMITLY_EXAMPLE_SERVER_PORT` to the repository test responder.
+Set `RATELIMITLY_AUTH_KEY`. The key defaults discovery to
+`_ratelimitly._udp.c-<key-id>.p0.ratelimitly.com`; optional
+`RATELIMITLY_TENANT` overrides it. `RATELIMITLY_EXAMPLE_WORK_MS` controls the
+simulated operation duration. For local testing, set both fixed endpoint
+variables to the repository test responder.
 
 ## Platform support
 

@@ -146,7 +146,7 @@ jobs:
           if ($LASTEXITCODE -ne 1) {
             throw "Expected missing-configuration exit code 1, got $LASTEXITCODE"
           }
-          if ($output -notmatch 'set RATELIMITLY_TENANT and RATELIMITLY_AUTH_KEY') {
+          if ($output -notmatch 'set RATELIMITLY_AUTH_KEY; RATELIMITLY_TENANT is optional') {
             throw "Native executable did not reach configuration validation"
           }
 
@@ -154,7 +154,7 @@ jobs:
           if ($LASTEXITCODE -ne 1) {
             throw "Expected Mongoose missing-configuration exit code 1, got $LASTEXITCODE"
           }
-          if ($mongooseOutput -notmatch 'set RATELIMITLY_TENANT and RATELIMITLY_AUTH_KEY') {
+          if ($mongooseOutput -notmatch 'set RATELIMITLY_AUTH_KEY; RATELIMITLY_TENANT is optional') {
             throw "Mongoose executable did not reach configuration validation"
           }
           # The missing-configuration exit code was expected and validated.

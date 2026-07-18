@@ -5,6 +5,7 @@
 #include <poll.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 #include "r_client_runtime.h"
@@ -79,8 +80,29 @@ int main(int argc, char **argv) {
     assert(port > 0 && port <= UINT16_MAX);
     assert(r_runtime_wall_time_ms() > 0u);
 
+    assert(unsetenv("RATELIMITLY_TENANT") == 0);
+    assert(unsetenv("RATELIMITLY_AUTH_KEY") == 0);
+    r_runtime_options_t environment_options;
+    assert(r_runtime_options_from_env(&environment_options)
+        == RCLIENT_ERR_CONFIG);
+
+    assert(setenv("RATELIMITLY_AUTH_KEY", TEST_AES_KEY, 1) == 0);
+    assert(unsetenv("RATELIMITLY_EXAMPLE_SERVER_HOST") == 0);
+    assert(unsetenv("RATELIMITLY_EXAMPLE_SERVER_PORT") == 0);
+    assert(r_runtime_options_from_env(&environment_options) == RCLIENT_OK);
+    assert(environment_options.tenant_dns_name == NULL);
+    assert(environment_options.auth_key == TEST_AES_KEY
+        || strcmp(environment_options.auth_key, TEST_AES_KEY) == 0);
+
+    assert(setenv("RATELIMITLY_TENANT", "custom.example", 1) == 0);
+    assert(r_runtime_options_from_env(&environment_options) == RCLIENT_OK);
+    assert(strcmp(environment_options.tenant_dns_name, "custom.example") == 0);
+
+    assert(setenv("RATELIMITLY_TENANT", "", 1) == 0);
+    assert(r_runtime_options_from_env(&environment_options) == RCLIENT_OK);
+    assert(environment_options.tenant_dns_name == NULL);
+
     r_runtime_options_t options = {
-        .tenant_dns_name = "rn-test.local",
         .auth_key = TEST_AES_KEY,
         .server_host = "127.0.0.1",
         .server_port = (uint16_t)port,

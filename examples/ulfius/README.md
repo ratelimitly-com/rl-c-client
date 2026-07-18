@@ -34,11 +34,14 @@ Install Ulfius and its `libulfius` pkg-config metadata, then:
 ```sh
 make -C ../..
 make
-RATELIMITLY_TENANT=example \
-RATELIMITLY_AUTH_KEY=secret \
+RATELIMITLY_AUTH_KEY=rl-aes1... \
 ./ulfius-example
 curl -i http://127.0.0.1:8000/limited
 ```
+
+The encoded key supplies the tenant ID and defaults discovery to
+`_ratelimitly._udp.c-<key-id>.p0.ratelimitly.com`. Set optional
+`RATELIMITLY_TENANT` only to override that production DNS name.
 
 Or use CMake:
 

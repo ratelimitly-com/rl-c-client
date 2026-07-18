@@ -51,9 +51,10 @@ cmake --build build
 CMake compiles `rl-c-client` with the selected compiler. This is required for
 Visual Studio builds, which cannot consume the Unix/MinGW `librclient.a`.
 
-Set `RATELIMITLY_TENANT` and `RATELIMITLY_AUTH_KEY`. The optional
-`RATELIMITLY_EXAMPLE_SERVER_HOST` and `RATELIMITLY_EXAMPLE_SERVER_PORT`
-variables select a fixed development responder instead of SRV discovery.
+Set `RATELIMITLY_AUTH_KEY`. The key defaults discovery to
+`_ratelimitly._udp.c-<key-id>.p0.ratelimitly.com`; optional
+`RATELIMITLY_TENANT` overrides it. The fixed endpoint variables select a
+development responder instead of SRV discovery.
 
 ## Platform support
 

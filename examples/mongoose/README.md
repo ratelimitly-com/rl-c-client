@@ -44,8 +44,9 @@ cmake --build build
 CMake builds both Mongoose and `rl-c-client` with the selected compiler. This
 keeps native Visual Studio builds free of Unix/MinGW archive incompatibilities.
 
-Set `RATELIMITLY_TENANT` and `RATELIMITLY_AUTH_KEY`, then request
-`http://127.0.0.1:8000/limited`.
+Set `RATELIMITLY_AUTH_KEY`, then request `http://127.0.0.1:8000/limited`. The key
+defaults discovery to `_ratelimitly._udp.c-<key-id>.p0.ratelimitly.com`;
+optional `RATELIMITLY_TENANT` overrides it.
 
 ## Platform support
 

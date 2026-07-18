@@ -43,8 +43,10 @@ cmake --build build
 CMake compiles `rl-c-client` with the selected compiler. Native Visual Studio
 builds therefore do not depend on an incompatible Unix/MinGW archive.
 
-Set `RATELIMITLY_TENANT` and `RATELIMITLY_AUTH_KEY`. Optional fixed responder
-variables bypass SRV discovery for local testing.
+Set `RATELIMITLY_AUTH_KEY`. The key defaults discovery to
+`_ratelimitly._udp.c-<key-id>.p0.ratelimitly.com`; optional
+`RATELIMITLY_TENANT` overrides it. Fixed responder variables bypass SRV
+discovery for local testing.
 
 ## Platform support
 

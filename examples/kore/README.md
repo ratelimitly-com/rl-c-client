@@ -36,11 +36,14 @@ Build Kore with task support and its no-TLS backend, then build the module:
 make -C /path/to/kore TASKS=1 TLS_BACKEND=none
 make -C ../..
 make KORE_ROOT=/path/to/kore
-RATELIMITLY_TENANT=example \
-RATELIMITLY_AUTH_KEY=secret \
+RATELIMITLY_AUTH_KEY=rl-aes1... \
 /path/to/kore/kore -fnrc kore.conf
 curl -i http://127.0.0.1:8000/limited
 ```
+
+The encoded key supplies the tenant ID and defaults discovery to
+`_ratelimitly._udp.c-<key-id>.p0.ratelimitly.com`. Set optional
+`RATELIMITLY_TENANT` only to override that production DNS name.
 
 Or build the module with CMake:
 

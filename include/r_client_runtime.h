@@ -16,6 +16,7 @@ extern "C" {
 #endif
 
 typedef struct r_runtime_options {
+    /* Optional override; NULL selects the key-derived production DNS name. */
     const char *tenant_dns_name;
     const char *auth_key;
     const char *server_host;
@@ -40,7 +41,7 @@ typedef struct r_runtime_client {
 
 const char *r_runtime_status_name(int status);
 
-/* Read credentials and an optional fixed development endpoint. */
+/* Read the required key plus optional DNS/fixed-endpoint overrides. */
 int r_runtime_options_from_env(r_runtime_options_t *out_options);
 
 int r_runtime_client_init(

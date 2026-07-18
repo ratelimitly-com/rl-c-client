@@ -39,9 +39,10 @@ cmake --build build
 ./build/epoll-example
 ```
 
-Set `RATELIMITLY_TENANT` and `RATELIMITLY_AUTH_KEY`. For local testing, also
-set `RATELIMITLY_EXAMPLE_SERVER_HOST` and
-`RATELIMITLY_EXAMPLE_SERVER_PORT`.
+Set `RATELIMITLY_AUTH_KEY`. The key defaults discovery to
+`_ratelimitly._udp.c-<key-id>.p0.ratelimitly.com`; optional
+`RATELIMITLY_TENANT` overrides it. For local testing, set both
+`RATELIMITLY_EXAMPLE_SERVER_HOST` and `RATELIMITLY_EXAMPLE_SERVER_PORT`.
 
 ## Platform support
 

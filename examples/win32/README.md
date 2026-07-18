@@ -38,8 +38,9 @@ make CC=x86_64-w64-mingw32-gcc \
 ```
 
 Run `win32-example.exe` directly on Windows, through Wine on Linux, or through
-CrossOver on macOS. Set `RATELIMITLY_TENANT`, `RATELIMITLY_AUTH_KEY`, and the
-optional fixed responder variables in that environment.
+CrossOver on macOS. Set `RATELIMITLY_AUTH_KEY`. The key defaults discovery to
+`_ratelimitly._udp.c-<key-id>.p0.ratelimitly.com`; optional
+`RATELIMITLY_TENANT` overrides it. Fixed responder variables remain optional.
 
 The repository test can cross-compile the complete client and exercise both
 allowed/reporting and denied/no-report paths under Wine:

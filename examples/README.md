@@ -113,11 +113,19 @@ DNS resolution is synchronous to keep the examples focused. Production event
 loops should normally substitute their asynchronous resolver during startup or
 configuration refresh.
 
-Set the tenant and authentication key before running an example:
+Set the authentication key before running an example:
+
+```sh
+export RATELIMITLY_AUTH_KEY=rl-aes1...
+```
+
+The runtime decodes the tenant key ID and discovers
+`_ratelimitly._udp.c-<key-id>.p0.ratelimitly.com`. Set
+`RATELIMITLY_TENANT` only to override production discovery for another DNS
+zone:
 
 ```sh
 export RATELIMITLY_TENANT=tenant.example.com
-export RATELIMITLY_AUTH_KEY=rl-aes1...
 ```
 
 For local development, bypass DNS and point the runtime at the repository's
