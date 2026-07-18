@@ -134,6 +134,7 @@ local report submission, not server acknowledgement of that datagram.
 | latency guard | The pre-work policy check against previously reported service latency. |
 | latency sample | The post-work duration reported only after admitted work succeeds. |
 | P0 | The production Ratelimitly DNS and service tier selected from the key. |
+| CMake | Cross-platform build-system generator provided as an alternative to Make. |
 
 ## API references
 
