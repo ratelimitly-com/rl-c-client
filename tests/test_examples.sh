@@ -18,6 +18,8 @@ LINUX_ONE_SHOT_MATRIX="$ROOT/tests/linux-one-shot-examples.txt"
 LINUX_HTTP_MATRIX="$ROOT/tests/linux-http-examples.txt"
 MACOS_LOCAL_MATRIX="$ROOT/tests/macos-local-examples.txt"
 WINDOWS_NATIVE_RUNNER="$ROOT/tests/test_windows_native_example.ps1"
+PRODUCTION_P0_SOURCE="$ROOT/tests/production_p0_probe.c"
+PRODUCTION_P0_RUNNER="$ROOT/tests/test_production_p0.sh"
 
 fail() {
   echo "test_examples: $*" >&2
@@ -33,6 +35,12 @@ fail() {
   || fail "missing local-only macOS example matrix"
 [[ -f "$WINDOWS_NATIVE_RUNNER" ]] \
   || fail "missing native Windows behavioral runner"
+[[ -f "$PRODUCTION_P0_SOURCE" ]] \
+  || fail "missing production P0 protocol probe"
+[[ -x "$PRODUCTION_P0_RUNNER" ]] \
+  || fail "missing executable production P0 runner"
+grep -Fxq -- '/bin/production_p0_probe' "$ROOT/.gitignore" \
+  || fail "production P0 build artifact is not ignored"
 grep -Fq -- 'bash tests/test_linux_one_shot_examples.sh' "$CI_WORKFLOW" \
   || fail "CI does not execute Linux one-shot examples"
 grep -Fq -- 'bash tests/test_linux_http_examples.sh' "$CI_WORKFLOW" \
@@ -89,6 +97,31 @@ grep -Fq -- 'runs-on: windows-latest' "$CI_WORKFLOW" \
   || fail "CI does not validate the Win32 example on native Windows"
 grep -Fq -- 'tests/test_windows_native_example.ps1' "$CI_WORKFLOW" \
   || fail "native Windows CI does not run admission scenarios"
+grep -Fq -- 'bash tests/test_production_p0.sh' "$CI_WORKFLOW" \
+  || fail "CI does not run the key-only production P0 probe"
+grep -Fq -- 'RATELIMITLY_AUTH_KEY: ${{ secrets.RATELIMITLY_AUTH_KEY }}' \
+  "$CI_WORKFLOW" \
+  || fail "production P0 CI does not consume the repository secret"
+grep -Fq -- "github.actor == 'edescourtis'" "$CI_WORKFLOW" \
+  || fail "production P0 manual dispatch is not restricted to edescourtis"
+grep -Fq -- 'cancel-in-progress: false' "$CI_WORKFLOW" \
+  || fail "production P0 CI does not serialize shared-tenant tests"
+grep -Fq -- 'unset RATELIMITLY_TENANT' "$PRODUCTION_P0_RUNNER" \
+  || fail "production P0 runner does not guard key-derived discovery"
+grep -Fq -- 'unset RATELIMITLY_EXAMPLE_SERVER_HOST' "$PRODUCTION_P0_RUNNER" \
+  || fail "production P0 runner does not guard fixed-host bypasses"
+grep -Fq -- 'unset RATELIMITLY_EXAMPLE_SERVER_PORT' "$PRODUCTION_P0_RUNNER" \
+  || fail "production P0 runner does not guard fixed-port bypasses"
+grep -Eq -- 'timeout [0-9]+' "$PRODUCTION_P0_RUNNER" \
+  || fail "production P0 runner has no process deadline"
+grep -Fq -- 'r_client_admission_report_latency(' "$PRODUCTION_P0_SOURCE" \
+  || fail "production P0 probe does not report latency"
+grep -Fq -- 'latency_limited' "$PRODUCTION_P0_SOURCE" \
+  || fail "production P0 probe does not read latency state back"
+grep -Fq -- 'rate_limited' "$PRODUCTION_P0_SOURCE" \
+  || fail "production P0 probe does not prove rate limiting"
+grep -Fq -- 'tokens_deficit == 0u' "$PRODUCTION_P0_SOURCE" \
+  || fail "production P0 probe accepts an unproven rate denial"
 for scenario in guard-pass deny guard-deny; do
   grep -Fq -- "Name = \"$scenario\"" "$WINDOWS_NATIVE_RUNNER" \
     || fail "native Windows behavioral runner omits $scenario"

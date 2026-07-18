@@ -47,6 +47,33 @@ jobs:
       - name: Build perf client
         run: make perf_client
 
+  production-p0-smoke:
+    name: Production P0 protocol smoke
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' &&
+       github.actor == 'edescourtis')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: rl-c-client-production-p0
+      cancel-in-progress: false
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential libssl-dev
+
+      - name: Prove key-only rate and latency behavior
+        env:
+          RATELIMITLY_AUTH_KEY: ${{ secrets.RATELIMITLY_AUTH_KEY }}
+          RATELIMITLY_P0_TEST_NAMESPACE: ci-${{ github.run_id }}-${{ github.run_attempt }}
+        run: bash tests/test_production_p0.sh
+
   linux-one-shot-examples:
     name: Linux one-shot examples
     runs-on: ubuntu-24.04

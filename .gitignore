@@ -9,6 +9,7 @@ compile_commands.json
 /tests/test_public_api
 /tests/test_responder
 /bin/perf_client
+/bin/production_p0_probe
 /bin/r_test_responder
 /examples/*/*-example
 /examples/*/*-example.exe

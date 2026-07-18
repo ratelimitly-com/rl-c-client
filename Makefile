@@ -22,6 +22,7 @@ endif
 BIN_DIR := bin
 PERF_BIN := $(BIN_DIR)/perf_client
 TEST_RESPONDER_BIN := $(BIN_DIR)/r_test_responder
+PRODUCTION_P0_PROBE_BIN := $(BIN_DIR)/production_p0_probe
 TEST_RESPONDER_OBJS := \
 	tools/r_test_responder.o \
 	tools/r_test_responder_protocol.o
@@ -43,13 +44,15 @@ TEST_BINS = \
 	tests/test_responder \
 	tests/test_latency_tracker
 
-.PHONY: all clean test perf_client test-responder
+.PHONY: all clean test perf_client production-p0-probe test-responder
 
 all: librclient.a librclient.so
 
 perf_client: $(PERF_BIN)
 
 test-responder: $(TEST_RESPONDER_BIN)
+
+production-p0-probe: $(PRODUCTION_P0_PROBE_BIN)
 
 $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
@@ -110,5 +113,16 @@ tests/test_responder: tests/test_responder.c tools/r_test_responder_protocol.o l
 tests/test_latency_tracker: examples/latency_tracker/main.c librclient.a
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $^ -o $@ -lcrypto -lresolv -pthread
 
+$(PRODUCTION_P0_PROBE_BIN): tests/production_p0_probe.c librclient.a | $(BIN_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Werror $(LDFLAGS) $^ -o $@ -lcrypto -lresolv -pthread
+
 clean:
-	rm -f $(LIB_OBJS) $(TEST_RESPONDER_OBJS) $(TEST_BINS) librclient.a librclient.so $(PERF_BIN) $(TEST_RESPONDER_BIN)
+	rm -f \
+		$(LIB_OBJS) \
+		$(TEST_RESPONDER_OBJS) \
+		$(TEST_BINS) \
+		librclient.a \
+		librclient.so \
+		$(PERF_BIN) \
+		$(TEST_RESPONDER_BIN) \
+		$(PRODUCTION_P0_PROBE_BIN)
