@@ -40,4 +40,5 @@ src/r_policy.c
 src/r_protocol.c
 src/r_protocol.h
 tools/package_sdk.py
+tools/verify_source_archive.py
 tools/write_dependency_sbom.py

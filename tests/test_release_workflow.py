@@ -103,6 +103,7 @@ def main():
 
     source = job(text, "source")
     assert "tools/package_source.py" in source
+    assert "tools/verify_source_archive.py" in source
     assert "tests/test_source_release.py" in source
     assert "tests/test_source_embed_direct.sh" in source
     assert "tests/test_source_embed_subdirectory.sh" in source

@@ -44,6 +44,23 @@ def build(output):
     )
 
 
+def verify_archive(path, expect_success=True):
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tools" / "verify_source_archive.py"),
+            str(path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if expect_success:
+        assert result.returncode == 0, result.stderr
+    else:
+        assert result.returncode != 0
+
+
 def verify_members(names):
     prefix = f"rl-c-client-{VERSION}/"
     assert all(name.startswith(prefix) for name in names)
@@ -77,6 +94,7 @@ def main():
         ]
         for archive_name in archive_names:
             assert sha256(first / archive_name) == sha256(second / archive_name)
+            verify_archive(first / archive_name)
 
         with tarfile.open(first / archive_names[0], "r:gz") as archive:
             tar_files = {
@@ -100,6 +118,18 @@ def main():
                 if not info.is_dir()
             }
             verify_members(zip_files)
+            corrupted = tmp_path / "corrupted-source.zip"
+            with zipfile.ZipFile(
+                corrupted,
+                "w",
+                compression=zipfile.ZIP_DEFLATED,
+            ) as output:
+                for info in archive.infolist():
+                    content = archive.read(info)
+                    if info.filename.endswith("/README.md"):
+                        content += b"\ncorrupted\n"
+                    output.writestr(info, content)
+            verify_archive(corrupted, expect_success=False)
 
         assert tar_files == zip_files
         assert manifest["version"] == VERSION
