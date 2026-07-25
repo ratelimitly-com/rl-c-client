@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 import argparse
 import hashlib
+import http.client
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+from urllib.parse import urlencode, urlsplit
 
 
 class ReleaseError(RuntimeError):
@@ -24,13 +27,9 @@ class GitHub:
         method="GET",
         fields=None,
         raw_fields=None,
-        hostname=None,
-        input_path=None,
         paginate=False,
     ):
         command = ["gh", "api", path, "--method", method]
-        if hostname:
-            command.extend(["--hostname", hostname])
         if paginate:
             command.extend(["--paginate", "--slurp"])
         for key, value in sorted((fields or {}).items()):
@@ -39,15 +38,6 @@ class GitHub:
             if isinstance(value, bool):
                 value = str(value).lower()
             command.extend(["-F", f"{key}={value}"])
-        if input_path is not None:
-            command.extend(
-                [
-                    "-H",
-                    "Content-Type: application/octet-stream",
-                    "--input",
-                    str(input_path),
-                ]
-            )
         result = subprocess.run(
             command,
             check=False,
@@ -67,6 +57,58 @@ class GitHub:
             return json.loads(output)
         except json.JSONDecodeError as error:
             raise ReleaseError(f"invalid GitHub response for {path}") from error
+
+    def upload(self, upload_url, name, input_path):
+        template = "{?name,label}"
+        if not isinstance(upload_url, str) or not upload_url.endswith(template):
+            raise ReleaseError("release has invalid upload URL template")
+        parsed = urlsplit(upload_url.removesuffix(template))
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != "uploads.github.com"
+            or parsed.port is not None
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or re.fullmatch(
+                r"/repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/"
+                r"releases/[0-9]+/assets",
+                parsed.path,
+            )
+            is None
+        ):
+            raise ReleaseError("release has invalid upload URL")
+        token = os.environ.get("GH_TOKEN")
+        if not token:
+            raise ReleaseError("GH_TOKEN is required")
+        payload = Path(input_path).read_bytes()
+        target = f"{parsed.path}?{urlencode({'name': name})}"
+        connection = http.client.HTTPSConnection(
+            "uploads.github.com",
+            timeout=60,
+        )
+        try:
+            connection.request(
+                "POST",
+                target,
+                body=payload,
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/octet-stream",
+                    "User-Agent": "rl-c-client-release",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+            )
+            response = connection.getresponse()
+            response.read()
+            if response.status != 201:
+                raise ReleaseError(
+                    f"release asset upload returned HTTP {response.status}"
+                )
+        finally:
+            connection.close()
 
 
 def _flatten_pages(response):
@@ -207,6 +249,9 @@ def publish(
     release_id = release.get("id")
     if not isinstance(release_id, int):
         raise ReleaseError(f"release {tag} has no numeric ID")
+    upload_url = release.get("upload_url")
+    if not isinstance(upload_url, str):
+        raise ReleaseError(f"release {tag} has no upload URL")
 
     remote_assets = _release_assets(github, repository, release_id)
     remote_by_name = {}
@@ -231,13 +276,7 @@ def publish(
                 f"repos/{repository}/releases/assets/{previous['id']}",
                 method="DELETE",
             )
-        github.request(
-            f"repos/{repository}/releases/{release_id}/assets",
-            method="POST",
-            fields={"name": asset.name},
-            hostname="uploads.github.com",
-            input_path=asset,
-        )
+        github.upload(upload_url, asset.name, asset)
 
     actual_assets = _release_assets(github, repository, release_id)
     actual = {}
