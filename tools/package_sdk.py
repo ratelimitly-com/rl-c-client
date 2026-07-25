@@ -9,11 +9,14 @@ from pathlib import Path, PurePosixPath
 import re
 import sys
 import tarfile
+import time
+import zipfile
 
 
 SEMVER = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 ARCHITECTURES = {"amd64", "aarch64", "universal2"}
+ZIP_EPOCH = 315532800
 
 
 def parse_args():
@@ -26,6 +29,11 @@ def parse_args():
     parser.add_argument("--commit", required=True)
     parser.add_argument("--platform", required=True)
     parser.add_argument("--architecture", required=True)
+    parser.add_argument(
+        "--archive-format",
+        choices=("tar.gz", "zip"),
+        default="tar.gz",
+    )
     return parser.parse_args()
 
 
@@ -121,6 +129,28 @@ def write_tar_gz(path, root_name, entries, epoch):
                         archive.addfile(info, io.BytesIO(payload))
 
 
+def write_zip(path, root_name, entries, epoch):
+    zip_timestamp = time.gmtime(max(epoch, ZIP_EPOCH))[:6]
+    with zipfile.ZipFile(
+        path,
+        mode="w",
+        compression=zipfile.ZIP_DEFLATED,
+        compresslevel=9,
+    ) as archive:
+        for relative, entry in sorted(entries.items()):
+            entry_type, payload = entry
+            if entry_type != "file":
+                raise ValueError("ZIP SDK archives cannot contain symlinks")
+            info = zipfile.ZipInfo(
+                filename=f"{root_name}/{relative}",
+                date_time=zip_timestamp,
+            )
+            info.create_system = 3
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o100644 << 16
+            archive.writestr(info, payload, compresslevel=9)
+
+
 def main():
     args = parse_args()
     stage = args.stage.resolve()
@@ -152,11 +182,14 @@ def main():
     root_name = (
         f"rl-c-client-{args.version}-{args.platform}-{args.architecture}"
     )
-    archive_name = (
+    basename = (
         f"rl-c-client-v{args.version}-{args.platform}-"
-        f"{args.architecture}-sdk.tar.gz"
+        f"{args.architecture}-sdk"
     )
-    write_tar_gz(output / archive_name, root_name, entries, epoch)
+    if args.archive_format == "zip":
+        write_zip(output / f"{basename}.zip", root_name, entries, epoch)
+    else:
+        write_tar_gz(output / f"{basename}.tar.gz", root_name, entries, epoch)
     return 0
 
 

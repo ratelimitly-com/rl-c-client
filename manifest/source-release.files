@@ -22,11 +22,14 @@ manifest/core.sources
 manifest/public-api.symbols
 manifest/runtime.sources
 manifest/source-release.files
+manifest/windows-release.json
 manifest/workflow.sources
 packaging/linux/build-packages.sh
 packaging/linux/verify-packages.sh
 packaging/macos/build-sdk.sh
 packaging/macos/create-universal-sdk.sh
+packaging/windows/build-sdk.ps1
+packaging/windows/verify-sdk.ps1
 src/r_client.c
 src/r_client_runtime.c
 src/r_client_workflow.c
