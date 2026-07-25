@@ -26,6 +26,8 @@ two Windows SDKs, and two source archives. It then adds
 The macOS and Windows SDKs statically link OpenSSL. They include the exact
 OpenSSL license used by the build and a deterministic SPDX dependency inventory
 that records the bundled OpenSSL version and `STATIC_LINK` relationship.
+The macOS builds compile pinned OpenSSL LTS sources for a declared macOS 12.0
+deployment target and reject a different minimum in the resulting Mach-O.
 
 ## Windows compatibility policy
 

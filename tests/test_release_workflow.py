@@ -96,6 +96,7 @@ def main():
         "tests/test_release_docs.py",
         "tests/test_dependency_sbom.py",
         "tests/test_cmake_minimum.py",
+        "tests/test_macos_release.py",
         "tests/test_windows_x64_release.py",
         "tests/test_windows_arm64_release.py",
         "tests/test_shared_abi.sh",
@@ -126,6 +127,7 @@ def main():
     for token in (
         "macos-15",
         "macos-15-intel",
+        "packaging/macos/build-openssl.sh",
         "packaging/macos/build-sdk.sh",
     ):
         assert token in macos

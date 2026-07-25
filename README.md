@@ -119,7 +119,9 @@ target_link_libraries(my_app PRIVATE rclient::rclient)
 
 The macOS SDKs use the same CMake and `pkg-config` interfaces. The
 `macos-universal2` SDK contains both Intel and Apple Silicon slices; the
-architecture-specific SDKs are smaller. The shared dylib contains its OpenSSL
+architecture-specific SDKs are smaller. Release binaries target macOS 12.0 or
+newer. OpenSSL is built from pinned source at that same deployment target
+instead of using runner-local binaries. The shared dylib contains its OpenSSL
 code and has an `@rpath` install name. Consumers of the static archive must
 request the `static` CMake component and provide static OpenSSL at final link
 time:

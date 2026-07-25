@@ -16,6 +16,21 @@ output_dir="$3"
 source_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 build_root="$(mktemp -d "${TMPDIR:-/tmp}/rl-macos-build.XXXXXX")"
 trap 'rm -rf "${build_root}"' EXIT
+deployment_target="$(
+    python3 - "${source_dir}/manifest/macos-release.json" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+config = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(config["deployment_target"])
+PY
+)"
+if [[ ! "${deployment_target}" =~ ^[0-9]+\.[0-9]+$ ]]; then
+    echo "invalid macOS deployment target" >&2
+    exit 1
+fi
+export MACOSX_DEPLOYMENT_TARGET="${deployment_target}"
 
 case "$(uname -m)" in
     arm64)
@@ -34,6 +49,7 @@ cmake -S "${source_dir}" -B "${build_root}/build" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="${build_root}/stage" \
     -DCMAKE_OSX_ARCHITECTURES="$(uname -m)" \
+    -DCMAKE_OSX_DEPLOYMENT_TARGET="${deployment_target}" \
     -DRCLIENT_BUILD_TESTS=ON \
     -DRCLIENT_BUNDLE_OPENSSL=ON \
     -DRCLIENT_RELOCATABLE_PKGCONFIG=ON \
@@ -70,6 +86,20 @@ test -f "${library}"
 file "${library}" | grep -F "$(uname -m)"
 otool -D "${library}" |
     grep -F "@rpath/librclient.${version%%.*}.dylib"
+minimum_version="$(
+    otool -l "${library}" |
+        awk '
+            /LC_BUILD_VERSION|LC_VERSION_MIN_MACOSX/ { found=1; next }
+            found && ($1 == "minos" || $1 == "version") {
+                print $2
+                exit
+            }
+        '
+)"
+if [[ "${minimum_version}" != "${deployment_target}" ]]; then
+    echo "macOS SDK minimum is ${minimum_version}, expected ${deployment_target}" >&2
+    exit 1
+fi
 if otool -L "${library}" | grep -Ei "homebrew|libcrypto"; then
     echo "macOS SDK dylib has a non-system crypto load dependency" >&2
     exit 1

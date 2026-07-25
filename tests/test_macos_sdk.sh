@@ -41,6 +41,15 @@ test -s "${sdk_root}/share/rl-c-client/dependencies.spdx.json"
 
 file "${library}" | grep -F "${machine}"
 otool -D "${library}" | grep -F "@rpath/librclient.1.dylib"
+otool -l "${library}" |
+    awk '
+        /LC_BUILD_VERSION|LC_VERSION_MIN_MACOSX/ { found=1; next }
+        found && ($1 == "minos" || $1 == "version") {
+            print $2
+            exit
+        }
+    ' |
+    grep -Fx 12.0
 if otool -L "${library}" | grep -Ei "homebrew|libcrypto"; then
     echo "macOS SDK dylib has a non-system crypto load dependency" >&2
     exit 1

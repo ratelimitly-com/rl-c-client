@@ -109,6 +109,7 @@ jobs:
           python3 tests/test_release_docs.py
           python3 tests/test_dependency_sbom.py
           python3 tests/test_cmake_minimum.py
+          python3 tests/test_macos_release.py
           python3 tests/test_windows_x64_release.py
           python3 tests/test_windows_arm64_release.py
           bash tests/test_shared_abi.sh
@@ -261,10 +262,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install native OpenSSL
+      - name: Build pinned native OpenSSL
+        env:
+          SOURCE_DATE_EPOCH: ${{ needs.metadata.outputs.epoch }}
         run: |
-          brew install openssl@3
-          echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          bash packaging/macos/build-openssl.sh "$RUNNER_TEMP/openssl"
+          echo "OPENSSL_ROOT_DIR=$RUNNER_TEMP/openssl" >> "$GITHUB_ENV"
 
       - name: Build, test, and audit native SDK
         env:
