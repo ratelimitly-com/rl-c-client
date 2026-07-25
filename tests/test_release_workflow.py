@@ -69,11 +69,26 @@ def main():
     for token in (
         "GITHUB_EVENT_NAME",
         "GITHUB_REF_NAME",
+        "fetch-depth: 0",
+        "tools/verify_release_tag.sh",
+        "manifest/release-signing-keys.asc",
+        "origin/main",
         "git show -s --format=%ct HEAD",
         "0.0.0",
         "^[0-9]+\\.[0-9]+\\.[0-9]+$",
     ):
         assert token in metadata
+
+    tag_verifier = (
+        ROOT / "tools" / "verify_release_tag.sh"
+    ).read_text(encoding="utf-8")
+    for token in (
+        "git cat-file -t",
+        "git verify-tag",
+        "git merge-base --is-ancestor",
+        "GNUPGHOME",
+    ):
+        assert token in tag_verifier
 
     source = job(text, "source")
     assert "tools/package_source.py" in source

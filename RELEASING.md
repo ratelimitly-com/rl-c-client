@@ -51,6 +51,11 @@ git tag -s vMAJOR.MINOR.PATCH -m 'rl-c-client vMAJOR.MINOR.PATCH'
 git push origin vMAJOR.MINOR.PATCH
 ```
 
+The workflow accepts signatures only from the public keys committed in
+`manifest/release-signing-keys.asc`. The current allowed primary fingerprint is
+`EFECDDA47F063AA02A1042DEC8F243431345A599`. Key changes require normal review
+before a release tag is created.
+
 The tag workflow:
 
 1. validates the tag and records its commit and commit timestamp;
