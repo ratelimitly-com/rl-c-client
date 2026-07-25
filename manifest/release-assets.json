@@ -1,0 +1,118 @@
+{
+  "artifacts": [
+    {
+      "architecture": "aarch64",
+      "category": "development-package",
+      "name": "rl-c-client-v{version}-debian13-aarch64-development.deb",
+      "platform": "debian13"
+    },
+    {
+      "architecture": "aarch64",
+      "category": "runtime-package",
+      "name": "rl-c-client-v{version}-debian13-aarch64-runtime.deb",
+      "platform": "debian13"
+    },
+    {
+      "architecture": "amd64",
+      "category": "development-package",
+      "name": "rl-c-client-v{version}-debian13-amd64-development.deb",
+      "platform": "debian13"
+    },
+    {
+      "architecture": "amd64",
+      "category": "runtime-package",
+      "name": "rl-c-client-v{version}-debian13-amd64-runtime.deb",
+      "platform": "debian13"
+    },
+    {
+      "architecture": "aarch64",
+      "category": "development-package",
+      "name": "rl-c-client-v{version}-fedora44-aarch64-development.rpm",
+      "platform": "fedora44"
+    },
+    {
+      "architecture": "aarch64",
+      "category": "runtime-package",
+      "name": "rl-c-client-v{version}-fedora44-aarch64-runtime.rpm",
+      "platform": "fedora44"
+    },
+    {
+      "architecture": "amd64",
+      "category": "development-package",
+      "name": "rl-c-client-v{version}-fedora44-amd64-development.rpm",
+      "platform": "fedora44"
+    },
+    {
+      "architecture": "amd64",
+      "category": "runtime-package",
+      "name": "rl-c-client-v{version}-fedora44-amd64-runtime.rpm",
+      "platform": "fedora44"
+    },
+    {
+      "architecture": "aarch64",
+      "category": "sdk",
+      "name": "rl-c-client-v{version}-macos-aarch64-sdk.tar.gz",
+      "platform": "macos"
+    },
+    {
+      "architecture": "amd64",
+      "category": "sdk",
+      "name": "rl-c-client-v{version}-macos-amd64-sdk.tar.gz",
+      "platform": "macos"
+    },
+    {
+      "architecture": "universal2",
+      "category": "sdk",
+      "name": "rl-c-client-v{version}-macos-universal2-sdk.tar.gz",
+      "platform": "macos"
+    },
+    {
+      "architecture": "source",
+      "category": "source",
+      "name": "rl-c-client-v{version}-source.tar.gz",
+      "platform": "source"
+    },
+    {
+      "architecture": "source",
+      "category": "source",
+      "name": "rl-c-client-v{version}-source.zip",
+      "platform": "source"
+    },
+    {
+      "architecture": "aarch64",
+      "category": "development-package",
+      "name": "rl-c-client-v{version}-ubuntu24.04-aarch64-development.deb",
+      "platform": "ubuntu24.04"
+    },
+    {
+      "architecture": "aarch64",
+      "category": "runtime-package",
+      "name": "rl-c-client-v{version}-ubuntu24.04-aarch64-runtime.deb",
+      "platform": "ubuntu24.04"
+    },
+    {
+      "architecture": "amd64",
+      "category": "development-package",
+      "name": "rl-c-client-v{version}-ubuntu24.04-amd64-development.deb",
+      "platform": "ubuntu24.04"
+    },
+    {
+      "architecture": "amd64",
+      "category": "runtime-package",
+      "name": "rl-c-client-v{version}-ubuntu24.04-amd64-runtime.deb",
+      "platform": "ubuntu24.04"
+    },
+    {
+      "architecture": "aarch64",
+      "category": "sdk",
+      "name": "rl-c-client-v{version}-windows-aarch64-sdk.zip",
+      "platform": "windows"
+    },
+    {
+      "architecture": "amd64",
+      "category": "sdk",
+      "name": "rl-c-client-v{version}-windows-amd64-sdk.zip",
+      "platform": "windows"
+    }
+  ]
+}
