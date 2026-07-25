@@ -1,0 +1,25 @@
+cmake_minimum_required(VERSION 3.20)
+project(rclient-shared-only-consumer LANGUAGES C)
+
+option(RCLIENT_CONSUMER_STATIC "Consume the static component" OFF)
+if(RCLIENT_CONSUMER_STATIC)
+    find_package(rclient CONFIG REQUIRED COMPONENTS static)
+    if(NOT TARGET rclient::static)
+        message(FATAL_ERROR "rclient::static target is missing")
+    endif()
+    set(rclient_consumer_target rclient::static)
+else()
+    find_package(rclient CONFIG REQUIRED COMPONENTS shared)
+    if(NOT TARGET rclient::shared)
+        message(FATAL_ERROR "rclient::shared target is missing")
+    endif()
+    if(TARGET rclient::static)
+        message(FATAL_ERROR "shared-only discovery loaded rclient::static")
+    endif()
+    set(rclient_consumer_target rclient::rclient)
+endif()
+
+add_executable(rclient-shared-only-consumer
+    ../installed_consumer/main.c)
+target_link_libraries(rclient-shared-only-consumer
+    PRIVATE "${rclient_consumer_target}")

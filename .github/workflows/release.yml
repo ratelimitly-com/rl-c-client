@@ -111,6 +111,7 @@ jobs:
           python3 tests/test_windows_x64_release.py
           python3 tests/test_windows_arm64_release.py
           bash tests/test_shared_abi.sh
+          bash tests/test_shared_only_install.sh
 
   source:
     name: Source archives

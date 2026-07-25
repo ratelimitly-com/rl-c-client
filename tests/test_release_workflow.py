@@ -98,6 +98,7 @@ def main():
         "tests/test_windows_x64_release.py",
         "tests/test_windows_arm64_release.py",
         "tests/test_shared_abi.sh",
+        "tests/test_shared_only_install.sh",
     ):
         assert token in contracts
 

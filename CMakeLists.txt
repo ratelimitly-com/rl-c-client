@@ -189,8 +189,7 @@ if(RCLIENT_ENABLE_INSTALL)
     set(rclient_export_targets rclient)
     if(RCLIENT_BUILD_SHARED)
         list(APPEND rclient_export_targets rclient_shared)
-    endif()
-    if(RCLIENT_BUILD_STATIC)
+    elseif(RCLIENT_BUILD_STATIC)
         list(APPEND rclient_export_targets rclient_static)
     endif()
 
@@ -208,6 +207,15 @@ if(RCLIENT_ENABLE_INSTALL)
             COMPONENT Development
         INCLUDES
             DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+    if(RCLIENT_BUILD_SHARED AND RCLIENT_BUILD_STATIC)
+        install(TARGETS rclient_static
+            EXPORT rclient-static-targets
+            ARCHIVE
+                DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+                COMPONENT Development
+            INCLUDES
+                DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+    endif()
     install(DIRECTORY include/
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
         COMPONENT Development
@@ -249,6 +257,13 @@ if(RCLIENT_ENABLE_INSTALL)
         NAMESPACE rclient::
         DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/rclient"
         COMPONENT Development)
+    if(RCLIENT_BUILD_SHARED AND RCLIENT_BUILD_STATIC)
+        install(EXPORT rclient-static-targets
+            FILE rclient-static-targets.cmake
+            NAMESPACE rclient::
+            DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/rclient"
+            COMPONENT Development)
+    endif()
     install(FILES LICENSE
         DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/doc/rl-c-client"
         COMPONENT Runtime)
