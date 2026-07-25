@@ -473,6 +473,25 @@ static bool r_is_better_candidate(
     return cand_penalty < best_penalty;
 }
 
+static bool r_is_oldest_known_server(const r_client_req_t *req, uint64_t server_id) {
+    if (!req) {
+        return false;
+    }
+    for (size_t i = 0; i < req->allowed_id_count; i++) {
+        uint64_t candidate = req->allowed_ids[i];
+        if (candidate == server_id) {
+            continue;
+        }
+        uint64_t candidate_start = r_server_start_s_from_id(candidate);
+        uint64_t server_start = r_server_start_s_from_id(server_id);
+        if (candidate_start < server_start
+            || (candidate_start == server_start && candidate < server_id)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static int r_candidate_set(
     r_candidate_t *cand,
     uint64_t server_id,
@@ -2116,6 +2135,10 @@ int r_client_on_datagram(
 
     if (client->policy.wait == R_WAIT_RETURN_ON_FIRST_VALID) {
         if (req->best.has) {
+            r_request_complete(client, req, RCLIENT_OK, &req->best);
+        }
+    } else if (client->policy.wait == R_WAIT_RETURN_ON_OLDEST) {
+        if (req->best.has && r_is_oldest_known_server(req, server_id)) {
             r_request_complete(client, req, RCLIENT_OK, &req->best);
         }
     } else if (client->policy.wait == R_WAIT_RETURN_ON_FIRST_STABLE) {

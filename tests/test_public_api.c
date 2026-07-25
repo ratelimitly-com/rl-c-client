@@ -69,6 +69,20 @@ static void test_hash_id_known_vector(void) {
     assert(memcmp(id, expected, sizeof(expected)) == 0);
 }
 
+static void test_default_policy_prefers_oldest_until_dedup_deadline(void) {
+    r_request_policy_t policy;
+    memset(&policy, 0, sizeof(policy));
+    r_client_default_request_policy(&policy);
+
+    assert(policy.attempt_timeout_ms == 20u);
+    assert(policy.dedup_ttl_ms == 300u);
+    assert(policy.wait == R_WAIT_RETURN_ON_OLDEST);
+    assert(policy.select == R_SELECT_BEST_BY_RELIABILITY);
+    assert(policy.retry.retry_on == R_RETRY_TIMEOUT_ONLY);
+    assert(policy.retry.resend == R_RESEND_ALL);
+    assert(policy.retry.retry_attempts == 14u);
+}
+
 static void test_format_default_tenant_dns(void) {
     char dns_name[R_CLIENT_DEFAULT_TENANT_DNS_CAPACITY];
     assert(r_client_format_default_tenant_dns(
@@ -107,6 +121,7 @@ int main(void) {
     test_parse_aes_key();
     test_reject_invalid_key();
     test_hash_id_known_vector();
+    test_default_policy_prefers_oldest_until_dedup_deadline();
     test_format_default_tenant_dns();
     return 0;
 }

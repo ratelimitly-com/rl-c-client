@@ -61,6 +61,15 @@ Rate-limit checks are asynchronous:
 The borrowed API is the preferred high-throughput path when the caller can keep
 request buffers alive until completion.
 
+The default request policy prefers the oldest trusted r-server. A request is
+one logical operation with one `unique_id` and deduplication window, sent to
+all currently known servers. The client returns immediately when the oldest
+trusted server responds. If the attempt deadline expires first, it returns the
+oldest valid response received; if none arrived, it retransmits the same logical
+request to all servers. This repeats until the deduplication deadline, after
+which the request fails. Applications may select another policy when a
+different availability or consistency trade-off is required.
+
 ## Latency Reports
 
 Latency reports are fire-and-forget. They reuse the same credential auth and routing
