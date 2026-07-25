@@ -55,6 +55,19 @@ if ($runtimeArchitecture -ne $architectureConfig.runtime_architecture) {
 }
 
 $resolvedVcpkgRoot = (Resolve-Path $VcpkgRoot).Path
+$actualVcpkgCommit = (
+    & git -C $resolvedVcpkgRoot rev-parse HEAD
+).Trim()
+Assert-NativeSuccess "vcpkg commit query"
+if ($actualVcpkgCommit -notmatch "^[0-9a-f]{40}$") {
+    throw "vcpkg checkout commit is invalid: $actualVcpkgCommit"
+}
+if ($actualVcpkgCommit -ne $config.vcpkg_commit) {
+    throw (
+        "vcpkg checkout $actualVcpkgCommit does not match pinned commit " +
+        $config.vcpkg_commit
+    )
+}
 $toolchainFile = Join-Path $resolvedVcpkgRoot "scripts/buildsystems/vcpkg.cmake"
 if (-not (Test-Path $toolchainFile -PathType Leaf)) {
     throw "vcpkg toolchain does not exist: $toolchainFile"
@@ -222,7 +235,7 @@ try {
         linker_version = $linkerVersion
         msvc_runtime = "MultiThreaded"
         msvc_toolset_version = $config.msvc_toolset_version
-        vcpkg_commit = $config.vcpkg_commit
+        vcpkg_commit = $actualVcpkgCommit
         vcpkg_triplet = $architectureConfig.vcpkg_triplet
         wdk_package = $architectureConfig.nuget_package
         wdk_sbom_package = $architectureConfig.sbom_nuget_package

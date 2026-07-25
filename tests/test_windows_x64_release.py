@@ -54,6 +54,9 @@ def main():
     assert "CMAKE_VS_PLATFORM_TOOLSET_VERSION" in build_script
     assert "compiler_version" in build_script
     assert "linker_version" in build_script
+    assert "git -C $resolvedVcpkgRoot rev-parse HEAD" in build_script
+    assert "$actualVcpkgCommit -ne $config.vcpkg_commit" in build_script
+    assert "vcpkg_commit = $actualVcpkgCommit" in build_script
     assert "RCLIENT_BUNDLE_OPENSSL=ON" in build_script
     assert "nuget install" in build_script
     assert "sbomtool" in build_script.lower()
