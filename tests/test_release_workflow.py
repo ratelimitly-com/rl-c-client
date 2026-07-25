@@ -138,12 +138,17 @@ def main():
 
     attest = job(text, "attest")
     assert "refs/tags/v" in attest
+    assert "github.event_name == 'push'" in attest
     assert "id-token: write" in attest
     assert "attestations: write" in attest
     assert "subject-path" in attest
 
     publish = job(text, "publish")
     assert "refs/tags/v" in publish
+    assert "github.event_name == 'push'" in publish
+    assert re.search(r"^\s+- metadata\s*$", publish, re.MULTILINE)
+    assert "VERSION: ${{ needs.metadata.outputs.version }}" in publish
+    assert '${TAG#v}' in publish
     assert "contents: write" in publish
     assert "gh release create" in publish
     assert "--draft" in publish
