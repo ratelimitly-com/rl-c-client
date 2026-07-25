@@ -26,7 +26,6 @@ include(cmake/rclient-msvc-runtime.cmake)
 option(RCLIENT_BUILD_STATIC "Build the static rl-c-client library" ON)
 option(RCLIENT_BUILD_SHARED "Build the shared rl-c-client library" ON)
 option(RCLIENT_BUILD_TESTS "Build rl-c-client tests" OFF)
-option(RCLIENT_BUILD_EXAMPLES "Build rl-c-client examples" OFF)
 option(RCLIENT_ENABLE_INSTALL "Enable rl-c-client install rules"
        "${RCLIENT_IS_TOP_LEVEL}")
 option(RCLIENT_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)

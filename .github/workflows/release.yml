@@ -109,6 +109,7 @@ jobs:
           python3 tests/test_release_docs.py
           python3 tests/test_dependency_sbom.py
           python3 tests/test_cmake_minimum.py
+          python3 tests/test_cmake_options.py
           python3 tests/test_macos_release.py
           python3 tests/test_windows_x64_release.py
           python3 tests/test_windows_arm64_release.py

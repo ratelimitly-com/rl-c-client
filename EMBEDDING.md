@@ -22,7 +22,6 @@ Extract the archive below the application's source tree, for example at
 
 ```cmake
 set(RCLIENT_BUILD_TESTS OFF)
-set(RCLIENT_BUILD_EXAMPLES OFF)
 set(RCLIENT_ENABLE_INSTALL OFF)
 add_subdirectory(vendor/rl-c-client)
 target_link_libraries(my_app PRIVATE rclient::rclient)

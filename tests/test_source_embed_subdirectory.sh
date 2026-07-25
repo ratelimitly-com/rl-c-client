@@ -20,7 +20,6 @@ cmake_minimum_required(VERSION 3.20)
 project(rclient-embed-subdirectory LANGUAGES C)
 
 set(RCLIENT_BUILD_TESTS OFF)
-set(RCLIENT_BUILD_EXAMPLES OFF)
 set(RCLIENT_ENABLE_INSTALL OFF)
 add_subdirectory(../rl-c-client-1.2.3 rclient)
 

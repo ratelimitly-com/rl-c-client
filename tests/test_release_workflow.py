@@ -96,6 +96,7 @@ def main():
         "tests/test_release_docs.py",
         "tests/test_dependency_sbom.py",
         "tests/test_cmake_minimum.py",
+        "tests/test_cmake_options.py",
         "tests/test_macos_release.py",
         "tests/test_windows_x64_release.py",
         "tests/test_windows_arm64_release.py",
