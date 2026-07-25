@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 import hashlib
 import importlib.util
+import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,13 +32,11 @@ class FakeGitHub:
         method="GET",
         fields=None,
         raw_fields=None,
-        hostname=None,
-        input_path=None,
         paginate=False,
     ):
         fields = fields or {}
         raw_fields = raw_fields or {}
-        self.events.append((method, hostname, path))
+        self.events.append((method, None, path))
 
         if path.endswith("/git/ref/tags/v0.3.0") and method == "GET":
             if "v0.3.0" not in self.refs:
@@ -54,6 +54,7 @@ class FakeGitHub:
         if path.endswith("/releases?per_page=100") and method == "GET":
             return [dict(release) for release in self.releases]
         if path.endswith("/releases") and method == "POST":
+            repository = path.removeprefix("repos/").removesuffix("/releases")
             release = {
                 "id": self.next_release_id,
                 "tag_name": fields["tag_name"],
@@ -61,6 +62,10 @@ class FakeGitHub:
                 "target_commitish": fields["target_commitish"],
                 "draft": raw_fields["draft"],
                 "html_url": "https://example.invalid/draft",
+                "upload_url": (
+                    f"https://uploads.github.com/repos/{repository}/releases/"
+                    f"{self.next_release_id}/assets{{?name,label}}"
+                ),
             }
             self.next_release_id += 1
             self.releases.append(release)
@@ -77,19 +82,6 @@ class FakeGitHub:
         if path.endswith("/assets?per_page=100") and method == "GET":
             release_id = int(path.split("/releases/", 1)[1].split("/", 1)[0])
             return [dict(asset) for asset in self.assets[release_id]]
-        if path.endswith("/assets") and method == "POST":
-            if hostname != "uploads.github.com":
-                raise AssertionError("release assets must use upload API")
-            release_id = int(path.split("/releases/", 1)[1].split("/", 1)[0])
-            payload = Path(input_path).read_bytes()
-            asset = {
-                "id": self.next_asset_id,
-                "name": fields["name"],
-                "digest": f"sha256:{hashlib.sha256(payload).hexdigest()}",
-            }
-            self.next_asset_id += 1
-            self.assets[release_id].append(asset)
-            return dict(asset)
         if "/releases/" in path and method == "PATCH":
             release_id = int(path.rsplit("/", 1)[1])
             release = next(
@@ -101,7 +93,33 @@ class FakeGitHub:
                 "https://example.invalid/releases/tag/v0.3.0"
             )
             return dict(release)
-        raise AssertionError(f"unexpected request: {method} {hostname} {path}")
+        raise AssertionError(f"unexpected request: {method} {path}")
+
+    def upload(self, upload_url, name, input_path):
+        expected_prefix = (
+            "https://uploads.github.com/repos/acme/repo/releases/"
+        )
+        expected_suffix = "/assets{?name,label}"
+        if (
+            not upload_url.startswith(expected_prefix)
+            or not upload_url.endswith(expected_suffix)
+        ):
+            raise AssertionError(f"invalid release upload URL: {upload_url}")
+        release_id = int(
+            upload_url.removeprefix(expected_prefix).removesuffix(
+                expected_suffix
+            )
+        )
+        self.events.append(("UPLOAD", upload_url, name))
+        payload = Path(input_path).read_bytes()
+        asset = {
+            "id": self.next_asset_id,
+            "name": name,
+            "digest": f"sha256:{hashlib.sha256(payload).hexdigest()}",
+        }
+        self.next_asset_id += 1
+        self.assets[release_id].append(asset)
+        return dict(asset)
 
 
 class PublishReleaseTests(unittest.TestCase):
@@ -135,6 +153,10 @@ class PublishReleaseTests(unittest.TestCase):
                     "target_commitish": self.COMMIT,
                     "draft": True,
                     "html_url": "https://example.invalid/untagged-draft",
+                    "upload_url": (
+                        "https://uploads.github.com/repos/acme/repo/releases/"
+                        "7/assets{?name,label}"
+                    ),
                 }
             )
             github.assets[7] = [
@@ -170,8 +192,7 @@ class PublishReleaseTests(unittest.TestCase):
             )
             first_upload = next(
                 index for index, event in enumerate(github.events)
-                if event[0] == "POST"
-                and event[1] == "uploads.github.com"
+                if event[0] == "UPLOAD"
             )
             self.assertLess(create_ref, first_upload)
             self.assertIn(
@@ -216,6 +237,10 @@ class PublishReleaseTests(unittest.TestCase):
                     "target_commitish": "4" * 40,
                     "draft": True,
                     "html_url": "https://example.invalid/untagged-draft",
+                    "upload_url": (
+                        "https://uploads.github.com/repos/acme/repo/releases/"
+                        "7/assets{?name,label}"
+                    ),
                 }
             )
             github.assets[7] = []
@@ -234,6 +259,60 @@ class PublishReleaseTests(unittest.TestCase):
                 )
 
             self.assertEqual(github.refs, {})
+
+    @mock.patch.dict(os.environ, {"GH_TOKEN": "test-token"})
+    @mock.patch.object(publish_release.http.client, "HTTPSConnection")
+    def test_upload_uses_exact_github_host_and_hypermedia_path(
+        self,
+        https_connection,
+    ):
+        response = mock.Mock(status=201)
+        response.read.return_value = b'{"id":1000}'
+        connection = https_connection.return_value
+        connection.getresponse.return_value = response
+
+        with tempfile.TemporaryDirectory() as directory:
+            asset = Path(directory) / "release asset+1.zip"
+            asset.write_bytes(b"payload")
+            publish_release.GitHub().upload(
+                "https://uploads.github.com/repos/acme/repo/releases/"
+                "7/assets{?name,label}",
+                asset.name,
+                asset,
+            )
+
+        https_connection.assert_called_once_with(
+            "uploads.github.com",
+            timeout=60,
+        )
+        connection.request.assert_called_once()
+        method, target = connection.request.call_args.args[:2]
+        self.assertEqual(method, "POST")
+        self.assertEqual(
+            target,
+            "/repos/acme/repo/releases/7/assets"
+            "?name=release+asset%2B1.zip",
+        )
+        self.assertEqual(
+            connection.request.call_args.kwargs["body"],
+            b"payload",
+        )
+        headers = connection.request.call_args.kwargs["headers"]
+        self.assertEqual(headers["Authorization"], "Bearer test-token")
+        self.assertEqual(headers["Content-Type"], "application/octet-stream")
+        connection.close.assert_called_once_with()
+
+    def test_upload_rejects_non_github_host(self):
+        with self.assertRaisesRegex(
+            publish_release.ReleaseError,
+            "invalid upload URL",
+        ):
+            publish_release.GitHub().upload(
+                "https://uploads.example.com/repos/acme/repo/releases/"
+                "7/assets{?name,label}",
+                "asset.zip",
+                "/does/not/matter",
+            )
 
 
 if __name__ == "__main__":
