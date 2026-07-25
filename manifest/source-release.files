@@ -22,6 +22,8 @@ manifest/public-api.symbols
 manifest/runtime.sources
 manifest/source-release.files
 manifest/workflow.sources
+packaging/linux/build-packages.sh
+packaging/linux/verify-packages.sh
 src/r_client.c
 src/r_client_runtime.c
 src/r_client_workflow.c
