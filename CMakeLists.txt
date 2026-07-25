@@ -19,6 +19,8 @@ option(RCLIENT_BUILD_EXAMPLES "Build rl-c-client examples" OFF)
 option(RCLIENT_ENABLE_INSTALL "Enable rl-c-client install rules"
        "${PROJECT_IS_TOP_LEVEL}")
 option(RCLIENT_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
+set(RCLIENT_PACKAGE_FORMAT "" CACHE STRING
+    "Native package profile (debian13 or ubuntu24.04)")
 
 if(NOT RCLIENT_BUILD_STATIC AND NOT RCLIENT_BUILD_SHARED)
     message(FATAL_ERROR
@@ -212,4 +214,11 @@ if(RCLIENT_ENABLE_INSTALL)
         NAMESPACE rclient::
         DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/rclient"
         COMPONENT Development)
+    install(FILES LICENSE
+        DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/doc/rl-c-client"
+        COMPONENT Runtime)
+endif()
+
+if(RCLIENT_PACKAGE_FORMAT)
+    include(cmake/rclient-packaging.cmake)
 endif()
