@@ -178,7 +178,7 @@ try {
     Assert-NativeSuccess "Windows CMake configure"
     $selectedToolset = Select-String `
         -Path (Join-Path $buildDirectory "CMakeCache.txt") `
-        -Pattern "^CMAKE_VS_PLATFORM_TOOLSET_VERSION:STRING=(.+)$"
+        -Pattern "^CMAKE_VS_PLATFORM_TOOLSET_VERSION:[^=]+=(.+)$"
     if (
         $null -eq $selectedToolset -or
         $selectedToolset.Matches[0].Groups[1].Value -ne

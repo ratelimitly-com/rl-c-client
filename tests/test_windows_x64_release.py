@@ -52,6 +52,10 @@ def main():
     assert "RCLIENT_USE_STATIC_MSVC_RUNTIME=ON" in build_script
     assert "v143,host=x64,version=$($config.msvc_toolset_version)" in build_script
     assert "CMAKE_VS_PLATFORM_TOOLSET_VERSION" in build_script
+    assert (
+        '"^CMAKE_VS_PLATFORM_TOOLSET_VERSION:[^=]+=(.+)$"'
+        in build_script
+    )
     assert "compiler_version" in build_script
     assert "linker_version" in build_script
     assert "git -C $resolvedVcpkgRoot rev-parse HEAD" in build_script
