@@ -11,6 +11,7 @@ project(rl-c-client VERSION "${RCLIENT_VERSION}" LANGUAGES C)
 
 include(CTest)
 include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
 
 option(RCLIENT_BUILD_STATIC "Build the static rl-c-client library" ON)
 option(RCLIENT_BUILD_SHARED "Build the shared rl-c-client library" ON)
@@ -59,7 +60,6 @@ set(RCLIENT_EMBED_SOURCES
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 if(NOT WIN32)
     find_package(Threads REQUIRED)
-    find_library(RCLIENT_RESOLV_LIBRARY NAMES resolv REQUIRED)
 endif()
 
 function(rclient_configure_library target linkage)
@@ -103,7 +103,7 @@ function(rclient_configure_library target linkage)
         target_link_libraries("${target}"
             "${dependency_visibility}"
             Threads::Threads
-            "${RCLIENT_RESOLV_LIBRARY}")
+            resolv)
     endif()
 endfunction()
 
@@ -146,4 +146,65 @@ if(RCLIENT_BUILD_TESTS)
     target_compile_features(rclient-test-public-api PRIVATE c_std_11)
     target_link_libraries(rclient-test-public-api PRIVATE rclient)
     add_test(NAME rclient-public-api COMMAND rclient-test-public-api)
+endif()
+
+if(RCLIENT_ENABLE_INSTALL)
+    set(rclient_export_targets rclient)
+    if(RCLIENT_BUILD_SHARED)
+        list(APPEND rclient_export_targets rclient_shared)
+    endif()
+    if(RCLIENT_BUILD_STATIC)
+        list(APPEND rclient_export_targets rclient_static)
+    endif()
+
+    install(TARGETS ${rclient_export_targets}
+        EXPORT rclient-targets
+        RUNTIME
+            DESTINATION "${CMAKE_INSTALL_BINDIR}"
+            COMPONENT Runtime
+        LIBRARY
+            DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+            COMPONENT Runtime
+            NAMELINK_COMPONENT Development
+        ARCHIVE
+            DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+            COMPONENT Development
+        INCLUDES
+            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+    install(DIRECTORY include/
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+        COMPONENT Development
+        FILES_MATCHING PATTERN "*.h")
+
+    if(WIN32)
+        set(RCLIENT_PC_PRIVATE_LIBS "-lws2_32 -ldnsapi")
+    else()
+        set(RCLIENT_PC_PRIVATE_LIBS "-lresolv -pthread")
+    endif()
+    configure_file(
+        cmake/rclient.pc.in
+        "${CMAKE_CURRENT_BINARY_DIR}/rclient.pc"
+        @ONLY)
+    install(FILES "${CMAKE_CURRENT_BINARY_DIR}/rclient.pc"
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig"
+        COMPONENT Development)
+
+    configure_package_config_file(
+        cmake/rclient-config.cmake.in
+        "${CMAKE_CURRENT_BINARY_DIR}/rclient-config.cmake"
+        INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/rclient")
+    write_basic_package_version_file(
+        "${CMAKE_CURRENT_BINARY_DIR}/rclient-config-version.cmake"
+        VERSION "${PROJECT_VERSION}"
+        COMPATIBILITY SameMajorVersion)
+    install(FILES
+        "${CMAKE_CURRENT_BINARY_DIR}/rclient-config.cmake"
+        "${CMAKE_CURRENT_BINARY_DIR}/rclient-config-version.cmake"
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/rclient"
+        COMPONENT Development)
+    install(EXPORT rclient-targets
+        FILE rclient-targets.cmake
+        NAMESPACE rclient::
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/rclient"
+        COMPONENT Development)
 endif()
