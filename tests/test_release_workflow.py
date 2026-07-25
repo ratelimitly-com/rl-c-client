@@ -102,6 +102,7 @@ def main():
         "tests/test_macos_release.py",
         "tests/test_windows_x64_release.py",
         "tests/test_windows_arm64_release.py",
+        "tests/test_publish_release.py",
         "tests/test_shared_abi.sh",
         "tests/test_shared_only_install.sh",
     ):
@@ -182,19 +183,17 @@ def main():
     assert "VERSION: ${{ needs.metadata.outputs.version }}" in publish
     assert "TAG: ${{ needs.metadata.outputs.tag }}" in publish
     assert "COMMIT: ${{ needs.metadata.outputs.commit }}" in publish
-    assert '${TAG#v}' in publish
     assert "GH_REPO: ${{ github.repository }}" in publish
     assert "contents: write" in publish
-    assert "gh release create" in publish
-    assert '--target "$COMMIT"' in publish
+    assert "tools/publish_release.py" in publish
+    assert '--assets release-assets' in publish
+    assert '--commit "$COMMIT"' in publish
+    assert '--repository "$GITHUB_REPOSITORY"' in publish
+    assert '--tag "$TAG"' in publish
+    assert '--version "$VERSION"' in publish
+    assert "gh release create" not in publish
+    assert "gh release upload" not in publish
     assert "--verify-tag" not in publish
-    assert "--draft" in publish
-    assert "RELEASE-MANIFEST.json" in publish
-    assert "SHA256SUMS" in publish
-    assert "sha256sum" in publish
-    assert ".assets[] | [.name, .digest] | @tsv" in publish
-    assert "gh release edit" in publish
-    assert "--draft=false" in publish
 
     assert "secrets." not in text
     assert "write-all" not in text
