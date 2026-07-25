@@ -24,6 +24,30 @@ def job(text, name):
     return match.group("body")
 
 
+def action_step_positions(text, action):
+    positions = []
+    for step in re.finditer(
+        r"^      - name: [^\n]+\n"
+        r"(?P<body>.*?)(?=^      - name: [^\n]+\n|\Z)",
+        text,
+        flags=re.MULTILINE | re.DOTALL,
+    ):
+        body = step.group("body")
+        uses_action = re.search(
+            rf"^        uses: {re.escape(action)}@[0-9a-f]{{40}}$",
+            body,
+            flags=re.MULTILINE,
+        )
+        conditional = re.search(
+            r"^        if:",
+            body,
+            flags=re.MULTILINE,
+        )
+        if uses_action is not None and conditional is None:
+            positions.append(step.start())
+    return positions
+
+
 def main():
     if not WORKFLOW.is_file():
         raise AssertionError("release workflow does not exist")
@@ -186,6 +210,19 @@ def main():
     assert "GH_REPO: ${{ github.repository }}" in publish
     assert "contents: write" in publish
     assert "tools/publish_release.py" in publish
+    checkout_positions = action_step_positions(publish, "actions/checkout")
+    assert len(checkout_positions) == 1
+    assert checkout_positions[0] < publish.index("tools/publish_release.py")
+    assert not action_step_positions(
+        "      # uses: actions/checkout@" + ("0" * 40) + "\n",
+        "actions/checkout",
+    )
+    assert not action_step_positions(
+        "      - name: Disabled checkout\n"
+        "        uses: actions/checkout@" + ("0" * 40) + "\n"
+        "        if: false\n",
+        "actions/checkout",
+    )
     assert '--assets release-assets' in publish
     assert '--commit "$COMMIT"' in publish
     assert '--repository "$GITHUB_REPOSITORY"' in publish
