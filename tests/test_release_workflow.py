@@ -32,8 +32,8 @@ def main():
     assert "pull_request_target" not in text
     require(text, r"^  pull_request:\s*$", "pull-request validation")
     require(text, r"^  workflow_dispatch:\s*$", "manual dry run")
-    require(text, r"^  push:\s*$", "tag publication trigger")
-    require(text, r"^\s+- 'v\*'\s*$", "version-tag filter")
+    require(text, r"^  push:\s*$", "main publication trigger")
+    require(text, r"^\s+- main\s*$", "main-branch filter")
     require(text, r"^\s+- 'VERSION'\s*$", "project-version path filter")
     require(
         text,
@@ -67,18 +67,21 @@ def main():
             raise AssertionError("checkout must disable persisted credentials")
 
     metadata = job(text, "metadata")
+    assert "publish: ${{ steps.metadata.outputs.publish }}" in metadata
+    assert "tag: ${{ steps.metadata.outputs.tag }}" in metadata
     for token in (
         "GITHUB_EVENT_NAME",
-        "GITHUB_REF_NAME",
+        "refs/heads/main",
         "fetch-depth: 0",
-        "tools/verify_release_tag.sh",
-        "manifest/release-signing-keys.asc",
-        "origin/main",
         "git show -s --format=%ct HEAD",
         'canonical_version="$(tr -d \'\\r\\n\' < VERSION)"',
-        'tag_version="${GITHUB_REF_NAME#v}"',
-        'if [[ "$tag_version" != "$canonical_version" ]]; then',
-        "tag $GITHUB_REF_NAME does not match VERSION $canonical_version",
+        'release_tag="v${canonical_version}"',
+        'gh release view "$release_tag"',
+        "already published; bump VERSION for the next release",
+        "git ls-remote --exit-code --tags",
+        '"refs/tags/${release_tag}"',
+        'echo "publish=$publish"',
+        'echo "tag=$release_tag"',
         'version="$canonical_version"',
         "^[0-9]+\\.[0-9]+\\.[0-9]+$",
     ):
@@ -86,17 +89,7 @@ def main():
     assert "inputs.version" not in text
     assert "DISPATCH_VERSION" not in metadata
     assert "0.0.0" not in metadata
-
-    tag_verifier = (
-        ROOT / "tools" / "verify_release_tag.sh"
-    ).read_text(encoding="utf-8")
-    for token in (
-        "git cat-file -t",
-        "git verify-tag",
-        "git merge-base --is-ancestor",
-        "GNUPGHOME",
-    ):
-        assert token in tag_verifier
+    assert "verify_release_tag" not in metadata
 
     contracts = job(text, "contracts")
     for token in (
@@ -173,21 +166,28 @@ def main():
     assert "merge-multiple: true" not in aggregate
 
     attest = job(text, "attest")
-    assert "refs/tags/v" in attest
+    assert "refs/heads/main" in attest
     assert "github.event_name == 'push'" in attest
+    assert "needs.metadata.outputs.publish == 'true'" in attest
+    assert re.search(r"^\s+- metadata\s*$", attest, re.MULTILINE)
     assert "id-token: write" in attest
     assert "attestations: write" in attest
     assert "subject-path" in attest
 
     publish = job(text, "publish")
-    assert "refs/tags/v" in publish
+    assert "refs/heads/main" in publish
     assert "github.event_name == 'push'" in publish
+    assert "needs.metadata.outputs.publish == 'true'" in publish
     assert re.search(r"^\s+- metadata\s*$", publish, re.MULTILINE)
     assert "VERSION: ${{ needs.metadata.outputs.version }}" in publish
+    assert "TAG: ${{ needs.metadata.outputs.tag }}" in publish
+    assert "COMMIT: ${{ needs.metadata.outputs.commit }}" in publish
     assert '${TAG#v}' in publish
     assert "GH_REPO: ${{ github.repository }}" in publish
     assert "contents: write" in publish
     assert "gh release create" in publish
+    assert '--target "$COMMIT"' in publish
+    assert "--verify-tag" not in publish
     assert "--draft" in publish
     assert "RELEASE-MANIFEST.json" in publish
     assert "SHA256SUMS" in publish
