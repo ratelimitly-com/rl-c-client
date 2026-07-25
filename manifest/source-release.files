@@ -25,6 +25,7 @@ manifest/workflow.sources
 packaging/linux/build-packages.sh
 packaging/linux/verify-packages.sh
 packaging/macos/build-sdk.sh
+packaging/macos/create-universal-sdk.sh
 src/r_client.c
 src/r_client_runtime.c
 src/r_client_workflow.c

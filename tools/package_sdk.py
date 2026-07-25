@@ -40,6 +40,8 @@ def collect_entries(stage, version, commit, platform, architecture, epoch):
         if path.is_dir():
             continue
         relative = path.relative_to(stage).as_posix()
+        if relative == "SDK-MANIFEST.json":
+            continue
         safe_relative = PurePosixPath(relative)
         if safe_relative.is_absolute() or ".." in safe_relative.parts:
             raise ValueError(f"unsafe SDK path: {relative}")
