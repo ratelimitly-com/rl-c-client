@@ -34,6 +34,7 @@ def main():
     require(text, r"^  workflow_dispatch:\s*$", "manual dry run")
     require(text, r"^  push:\s*$", "tag publication trigger")
     require(text, r"^\s+- 'v\*'\s*$", "version-tag filter")
+    require(text, r"^\s+- 'VERSION'\s*$", "project-version path filter")
     require(
         text,
         r"^permissions:\n  contents: read\s*$",
@@ -74,10 +75,17 @@ def main():
         "manifest/release-signing-keys.asc",
         "origin/main",
         "git show -s --format=%ct HEAD",
-        "0.0.0",
+        'canonical_version="$(tr -d \'\\r\\n\' < VERSION)"',
+        'tag_version="${GITHUB_REF_NAME#v}"',
+        'if [[ "$tag_version" != "$canonical_version" ]]; then',
+        "tag $GITHUB_REF_NAME does not match VERSION $canonical_version",
+        'version="$canonical_version"',
         "^[0-9]+\\.[0-9]+\\.[0-9]+$",
     ):
         assert token in metadata
+    assert "inputs.version" not in text
+    assert "DISPATCH_VERSION" not in metadata
+    assert "0.0.0" not in metadata
 
     tag_verifier = (
         ROOT / "tools" / "verify_release_tag.sh"
@@ -97,6 +105,7 @@ def main():
         "tests/test_dependency_sbom.py",
         "tests/test_cmake_minimum.py",
         "tests/test_cmake_options.py",
+        "tests/test_project_version.py",
         "tests/test_macos_release.py",
         "tests/test_windows_x64_release.py",
         "tests/test_windows_arm64_release.py",

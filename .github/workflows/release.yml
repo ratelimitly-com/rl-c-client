@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/release.yml'
       - 'CMakeLists.txt'
+      - 'VERSION'
       - 'cmake/**'
       - 'include/**'
       - 'manifest/**'
@@ -16,12 +17,6 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
-    inputs:
-      version:
-        description: Version used for a non-publishing validation build
-        required: true
-        default: '0.0.0'
-        type: string
 
 permissions:
   contents: read
@@ -49,10 +44,13 @@ jobs:
       - name: Resolve immutable build metadata
         id: metadata
         shell: bash
-        env:
-          DISPATCH_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
+          canonical_version="$(tr -d '\r\n' < VERSION)"
+          if [[ ! "$canonical_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "VERSION must be numeric MAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
           case "$GITHUB_EVENT_NAME" in
             push)
               [[ "$GITHUB_REF" == refs/tags/v* ]]
@@ -63,13 +61,15 @@ jobs:
                 refs/remotes/origin/main \
                 "$(git rev-parse HEAD)" \
                 manifest/release-signing-keys.asc
-              version="${GITHUB_REF_NAME#v}"
+              tag_version="${GITHUB_REF_NAME#v}"
+              if [[ "$tag_version" != "$canonical_version" ]]; then
+                echo "tag $GITHUB_REF_NAME does not match VERSION $canonical_version" >&2
+                exit 1
+              fi
+              version="$canonical_version"
               ;;
-            workflow_dispatch)
-              version="$DISPATCH_VERSION"
-              ;;
-            pull_request)
-              version="0.0.0"
+            workflow_dispatch|pull_request)
+              version="$canonical_version"
               ;;
             *)
               echo "unsupported release event: $GITHUB_EVENT_NAME" >&2
@@ -110,6 +110,7 @@ jobs:
           python3 tests/test_dependency_sbom.py
           python3 tests/test_cmake_minimum.py
           python3 tests/test_cmake_options.py
+          python3 tests/test_project_version.py
           python3 tests/test_macos_release.py
           python3 tests/test_windows_x64_release.py
           python3 tests/test_windows_arm64_release.py
