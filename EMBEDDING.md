@@ -22,10 +22,18 @@ the parent C standard, or parent install rules.
 
 ## Direct source compilation
 
-The `manifest/*.sources` files are line-oriented source inventories. Compile
-all entries from `core.sources`, `workflow.sources`, and `runtime.sources`, add
-`include/` and `src/` to the private include path, then link platform
-dependencies listed above.
+The bundle's `cmake/rclient-embed.cmake` reads the canonical source manifests
+and provides absolute paths and platform dependencies:
+
+```cmake
+include(vendor/rl-c-client/cmake/rclient-embed.cmake)
+target_sources(my_app PRIVATE ${RCLIENT_EMBED_SOURCES})
+target_include_directories(my_app PRIVATE ${RCLIENT_EMBED_INCLUDE_DIRS})
+target_link_libraries(my_app PRIVATE ${RCLIENT_EMBED_LIBRARIES})
+```
+
+The `manifest/*.sources` files remain available as line-oriented inventories
+for consumers that do not use CMake.
 
 Direct Windows builds do not define `RCLIENT_SHARED`; this keeps public
 declarations suitable for compiling directly into an executable.

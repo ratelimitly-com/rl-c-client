@@ -8,6 +8,7 @@ Makefile
 README.md
 SECURITY.md
 cmake/rclient-config.cmake.in
+cmake/rclient-embed.cmake
 cmake/rclient.pc.in
 docs/api.md
 include/r_client.h

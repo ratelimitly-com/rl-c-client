@@ -50,6 +50,7 @@ def verify_members(names):
     assert "VERSION" in relative
     assert "SOURCE-MANIFEST.json" in relative
     assert "EMBEDDING.md" in relative
+    assert "cmake/rclient-embed.cmake" in relative
     assert "include/r_client.h" in relative
     assert "src/r_client.c" in relative
     assert "tests/test_protocol.c" not in relative
