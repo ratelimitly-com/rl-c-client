@@ -15,7 +15,7 @@ include(CMakePackageConfigHelpers)
 
 option(RCLIENT_BUILD_STATIC "Build the static rl-c-client library" ON)
 option(RCLIENT_BUILD_SHARED "Build the shared rl-c-client library" ON)
-option(RCLIENT_BUILD_TESTS "Build rl-c-client tests" "${PROJECT_IS_TOP_LEVEL}")
+option(RCLIENT_BUILD_TESTS "Build rl-c-client tests" OFF)
 option(RCLIENT_BUILD_EXAMPLES "Build rl-c-client examples" OFF)
 option(RCLIENT_ENABLE_INSTALL "Enable rl-c-client install rules"
        "${PROJECT_IS_TOP_LEVEL}")
