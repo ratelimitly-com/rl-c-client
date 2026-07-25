@@ -178,6 +178,8 @@ def main():
     assert "--draft" in publish
     assert "RELEASE-MANIFEST.json" in publish
     assert "SHA256SUMS" in publish
+    assert "sha256sum" in publish
+    assert ".assets[] | [.name, .digest] | @tsv" in publish
     assert "gh release edit" in publish
     assert "--draft=false" in publish
 

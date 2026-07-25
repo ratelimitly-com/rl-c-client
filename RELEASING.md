@@ -70,7 +70,8 @@ The tag workflow:
 4. generates the release manifest and checksums;
 5. creates a GitHub build-provenance attestation for every release asset;
 6. creates or resumes a draft GitHub release and uploads the exact asset set;
-7. compares the draft's remote asset names with the local set; and
+7. compares every draft asset's remote name and SHA-256 digest with the local
+   set; and
 8. changes the release from draft to public only after the comparison passes.
 
 A failed publication stays in draft. A rerun may resume that draft and replace

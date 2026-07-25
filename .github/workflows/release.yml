@@ -534,12 +534,16 @@ jobs:
               --title "$TAG"
           fi
           gh release upload "$TAG" release-assets/* --clobber
-          find release-assets -maxdepth 1 -type f -exec basename {} \; |
-            LC_ALL=C sort > expected-assets.txt
+          for asset in release-assets/*; do
+            digest="$(sha256sum "$asset")"
+            digest="${digest%% *}"
+            printf '%s\tsha256:%s\n' "$(basename "$asset")" "$digest"
+          done | LC_ALL=C sort > expected-assets.tsv
           gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" \
-            --jq '.assets[].name' |
-            LC_ALL=C sort > actual-assets.txt
-          diff -u expected-assets.txt actual-assets.txt
+            --jq '.assets[] | [.name, .digest] | @tsv' |
+            LC_ALL=C sort > actual-assets.tsv
+          diff -u expected-assets.tsv actual-assets.tsv
+          cut -f1 actual-assets.tsv > actual-assets.txt
           grep -Fxq RELEASE-MANIFEST.json actual-assets.txt
           grep -Fxq SHA256SUMS actual-assets.txt
           gh release edit "$TAG" --draft=false
