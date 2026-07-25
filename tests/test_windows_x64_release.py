@@ -21,10 +21,12 @@ def main():
         )
     )
     assert config["wdk_version"] == "10.0.26100.6584"
+    assert config["msvc_toolset_version"] == "14.44.35207"
     assert config["vcpkg_commit"] == "40f3c709db80acf154ac4b17a1f83c564ebd022e"
     amd64 = config["architectures"]["amd64"]
     assert amd64 == {
         "cmake_architecture": "x64",
+        "msvc_target": "x64",
         "nuget_package": "Microsoft.Windows.WDK.x64",
         "runner": "windows-2022",
         "runtime_architecture": "X64",
@@ -48,6 +50,10 @@ def main():
         ROOT / "packaging" / "windows" / "verify-sdk.ps1"
     ).read_text(encoding="utf-8")
     assert "RCLIENT_USE_STATIC_MSVC_RUNTIME=ON" in build_script
+    assert "v143,host=x64,version=$($config.msvc_toolset_version)" in build_script
+    assert "CMAKE_VS_PLATFORM_TOOLSET_VERSION" in build_script
+    assert "compiler_version" in build_script
+    assert "linker_version" in build_script
     assert "RCLIENT_BUNDLE_OPENSSL=ON" in build_script
     assert "nuget install" in build_script
     assert "sbomtool" in build_script.lower()

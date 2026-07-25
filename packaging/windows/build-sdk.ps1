@@ -60,6 +60,41 @@ if (-not (Test-Path $toolchainFile -PathType Leaf)) {
     throw "vcpkg toolchain does not exist: $toolchainFile"
 }
 
+$programFilesX86 = ${env:ProgramFiles(x86)}
+if ([string]::IsNullOrWhiteSpace($programFilesX86)) {
+    throw "ProgramFiles(x86) is not available"
+}
+$vswhere = Join-Path $programFilesX86 (
+    "Microsoft Visual Studio/Installer/vswhere.exe"
+)
+if (-not (Test-Path $vswhere -PathType Leaf)) {
+    throw "Visual Studio locator does not exist: $vswhere"
+}
+$vsInstallation = (
+    & $vswhere -latest -products * -property installationPath
+).Trim()
+Assert-NativeSuccess "Visual Studio discovery"
+if ([string]::IsNullOrWhiteSpace($vsInstallation)) {
+    throw "Visual Studio 2022 installation was not found"
+}
+$msvcDirectory = Join-Path $vsInstallation (
+    "VC/Tools/MSVC/$($config.msvc_toolset_version)"
+)
+$compilerPath = Join-Path $msvcDirectory (
+    "bin/Hostx64/$($architectureConfig.msvc_target)/cl.exe"
+)
+$linkerPath = Join-Path $msvcDirectory (
+    "bin/Hostx64/$($architectureConfig.msvc_target)/link.exe"
+)
+if (-not (Test-Path $compilerPath -PathType Leaf)) {
+    throw "Pinned MSVC compiler does not exist: $compilerPath"
+}
+if (-not (Test-Path $linkerPath -PathType Leaf)) {
+    throw "Pinned MSVC linker does not exist: $linkerPath"
+}
+$compilerVersion = (Get-Item $compilerPath).VersionInfo.FileVersion
+$linkerVersion = (Get-Item $linkerPath).VersionInfo.FileVersion
+
 $workDirectory = Join-Path (
     [System.IO.Path]::GetTempPath()
 ) ("rl-windows-build-" + [guid]::NewGuid().ToString("N"))
@@ -114,6 +149,7 @@ try {
         "-B", $buildDirectory,
         "-G", "Visual Studio 17 2022",
         "-A", $architectureConfig.cmake_architecture,
+        "-T", "v143,host=x64,version=$($config.msvc_toolset_version)",
         "-DCMAKE_INSTALL_PREFIX=$stageDirectory",
         "-DCMAKE_SYSTEM_VERSION=10.0.26100.0",
         "-DCMAKE_TOOLCHAIN_FILE=$toolchainFile",
@@ -127,6 +163,16 @@ try {
     )
     & cmake @configureArguments
     Assert-NativeSuccess "Windows CMake configure"
+    $selectedToolset = Select-String `
+        -Path (Join-Path $buildDirectory "CMakeCache.txt") `
+        -Pattern "^CMAKE_VS_PLATFORM_TOOLSET_VERSION:STRING=(.+)$"
+    if (
+        $null -eq $selectedToolset -or
+        $selectedToolset.Matches[0].Groups[1].Value -ne
+        $config.msvc_toolset_version
+    ) {
+        throw "CMake did not select the pinned MSVC toolset"
+    }
     & cmake --build $buildDirectory --config Release --parallel
     Assert-NativeSuccess "Windows CMake build"
     & ctest --test-dir $buildDirectory -C Release --output-on-failure
@@ -172,7 +218,10 @@ try {
 
     [ordered]@{
         architecture = $Architecture
+        compiler_version = $compilerVersion
+        linker_version = $linkerVersion
         msvc_runtime = "MultiThreaded"
+        msvc_toolset_version = $config.msvc_toolset_version
         vcpkg_commit = $config.vcpkg_commit
         vcpkg_triplet = $architectureConfig.vcpkg_triplet
         wdk_package = $architectureConfig.nuget_package

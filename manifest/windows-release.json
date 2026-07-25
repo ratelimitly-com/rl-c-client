@@ -2,6 +2,7 @@
   "architectures": {
     "amd64": {
       "cmake_architecture": "x64",
+      "msvc_target": "x64",
       "nuget_package": "Microsoft.Windows.WDK.x64",
       "runner": "windows-2022",
       "runtime_architecture": "X64",
@@ -11,6 +12,7 @@
     },
     "aarch64": {
       "cmake_architecture": "ARM64",
+      "msvc_target": "arm64",
       "nuget_package": "Microsoft.Windows.WDK.ARM64",
       "runner": "windows-11-arm",
       "runtime_architecture": "Arm64",
@@ -27,6 +29,7 @@
     "^ucrtbase[.]dll$",
     "^vcruntime[0-9]"
   ],
+  "msvc_toolset_version": "14.44.35207",
   "vcpkg_commit": "40f3c709db80acf154ac4b17a1f83c564ebd022e",
   "wdk_version": "10.0.26100.6584"
 }

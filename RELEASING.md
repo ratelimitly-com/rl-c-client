@@ -29,11 +29,13 @@ that records the bundled OpenSSL version and `STATIC_LINK` relationship.
 
 ## Windows compatibility policy
 
-Windows releases use the pinned WDK NuGet toolchain version `10.0.26100.6584`
-and pinned vcpkg sources. Builds are performed on the native target runner with
-the Visual Studio 2022 generator. The ARM64 WDK package does not carry the WDK
-SBOM executable, so that job runs the pinned x64 WDK SBOM tool under Windows
-ARM64's x64 emulation and records both packages in `toolchain.json`.
+Windows releases use the pinned WDK NuGet toolchain version `10.0.26100.6584`,
+MSVC toolset `14.44.35207`, and pinned vcpkg sources. Builds are performed on
+the native target runner with the Visual Studio 2022 generator. The build fails
+if CMake selects a different MSVC toolset, and records the actual compiler and
+linker versions in `toolchain.json`. The ARM64 WDK package does not carry the
+WDK SBOM executable, so that job runs the pinned x64 WDK SBOM tool under
+Windows ARM64's x64 emulation and records both packages in `toolchain.json`.
 
 The release DLL uses the MSVC MultiThreaded (`/MT`) runtime and statically
 links OpenSSL. Verification rejects imports from the dynamic UCRT,

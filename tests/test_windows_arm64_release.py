@@ -16,6 +16,7 @@ def main():
     arm64 = config["architectures"]["aarch64"]
     assert arm64 == {
         "cmake_architecture": "ARM64",
+        "msvc_target": "arm64",
         "nuget_package": "Microsoft.Windows.WDK.ARM64",
         "runner": "windows-11-arm",
         "runtime_architecture": "Arm64",
