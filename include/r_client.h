@@ -69,6 +69,9 @@ typedef enum r_wait_policy {
     R_WAIT_RETURN_ON_FIRST_STABLE = 1,
     R_WAIT_FOR_DEADLINE = 2,
     R_WAIT_FOR_QUORUM = 3,
+    // Prefer the oldest trusted server and retry all servers when no response
+    // arrives before the attempt deadline.
+    R_WAIT_RETURN_ON_OLDEST = 4,
 } r_wait_policy_t;
 
 typedef enum r_response_quorum_kind {
