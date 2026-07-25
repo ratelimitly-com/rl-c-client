@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#include "r_client_export.h"
 #include "r_client_io.h"
 
 #ifdef __cplusplus
@@ -222,17 +223,17 @@ typedef void (*r_rate_limit_cb)(
 );
 
 // Client lifecycle.
-int r_client_create(
+RCLIENT_API int r_client_create(
     const r_client_config_t *config,
     const r_io_ops_t *io_ops,
     const r_resolver_ops_t *resolver_ops,
     r_client_t **out_client
 );
 
-void r_client_destroy(r_client_t *client);
+RCLIENT_API void r_client_destroy(r_client_t *client);
 
 // Async rate limit request.
-int r_client_check_rate_limit_async(
+RCLIENT_API int r_client_check_rate_limit_async(
     r_client_t *client,
     const r_resource_request_t *resources,
     size_t resource_count,
@@ -247,7 +248,7 @@ int r_client_check_rate_limit_async(
 
 // Async rate limit request using caller-owned buffers (no internal copies).
 // Caller must keep buffers alive until the callback is invoked.
-int r_client_check_rate_limit_async_borrowed(
+RCLIENT_API int r_client_check_rate_limit_async_borrowed(
     r_client_t *client,
     const r_resource_request_t *resources,
     size_t resource_count,
@@ -261,14 +262,14 @@ int r_client_check_rate_limit_async_borrowed(
 );
 
 // Fire-and-forget latency reporting.
-int r_client_report_latency(
+RCLIENT_API int r_client_report_latency(
     r_client_t *client,
     const r_service_latency_report_t *reports,
     size_t report_count
 );
 
 // Datagram ingress from host.
-int r_client_on_datagram(
+RCLIENT_API int r_client_on_datagram(
     r_client_t *client,
     const uint8_t *buf,
     size_t len,
@@ -276,26 +277,34 @@ int r_client_on_datagram(
 );
 
 // Per-request timer support.
-int r_client_request_deadline_ms(
+RCLIENT_API int r_client_request_deadline_ms(
     const r_client_req_t *req,
     uint64_t *out_deadline_ms
 );
 
-int r_client_on_timeout(
+RCLIENT_API int r_client_on_timeout(
     r_client_t *client,
     r_client_req_t *req,
     uint64_t now_ms
 );
 
 // Cancellation.
-void r_client_cancel_request(r_client_t *client, r_client_req_t *req);
+RCLIENT_API void r_client_cancel_request(
+    r_client_t *client,
+    r_client_req_t *req
+);
 
 // Helpers.
-void r_client_default_request_policy(r_request_policy_t *out_policy);
-void r_client_hash_id(const char *input, uint8_t out_id[16]);
-int r_client_parse_auth_key(const char *encoded, r_auth_key_info_t *out_info);
+RCLIENT_API void r_client_default_request_policy(
+    r_request_policy_t *out_policy
+);
+RCLIENT_API void r_client_hash_id(const char *input, uint8_t out_id[16]);
+RCLIENT_API int r_client_parse_auth_key(
+    const char *encoded,
+    r_auth_key_info_t *out_info
+);
 /* Format c-<key-id>.p0.ratelimitly.com; clears a provided buffer on error. */
-int r_client_format_default_tenant_dns(
+RCLIENT_API int r_client_format_default_tenant_dns(
     uint64_t key_id,
     char *out,
     size_t out_capacity

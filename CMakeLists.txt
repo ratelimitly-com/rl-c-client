@@ -110,17 +110,22 @@ endfunction()
 if(RCLIENT_BUILD_SHARED)
     add_library(rclient_shared SHARED)
     rclient_configure_library(rclient_shared SHARED)
+    target_compile_definitions(rclient_shared
+        PRIVATE RCLIENT_BUILDING_DLL
+        PUBLIC RCLIENT_SHARED)
     set_target_properties(rclient_shared PROPERTIES
         OUTPUT_NAME rclient
         EXPORT_NAME shared
         VERSION "${PROJECT_VERSION}"
-        SOVERSION "${PROJECT_VERSION_MAJOR}")
+        SOVERSION "${PROJECT_VERSION_MAJOR}"
+        C_VISIBILITY_PRESET hidden)
     add_library(rclient::shared ALIAS rclient_shared)
 endif()
 
 if(RCLIENT_BUILD_STATIC)
     add_library(rclient_static STATIC)
     rclient_configure_library(rclient_static STATIC)
+    target_compile_definitions(rclient_static PUBLIC RCLIENT_STATIC)
     set_target_properties(rclient_static PROPERTIES
         OUTPUT_NAME rclient
         EXPORT_NAME static)

@@ -24,6 +24,7 @@ cmake --install "$BUILD_DIR"
 
 for header in \
   r_client.h \
+  r_client_export.h \
   r_client_io.h \
   r_client_runtime.h \
   r_client_workflow.h; do
