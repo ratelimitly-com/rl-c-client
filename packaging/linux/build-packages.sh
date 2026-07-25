@@ -23,7 +23,7 @@ case "${profile}" in
         generator="DEB"
         extension="deb"
         native_arch="$(dpkg --print-architecture)"
-        runtime_pattern="librclient[0-9]_*.deb"
+        runtime_pattern="librclient${version%%.*}_*.deb"
         development_pattern="librclient-dev_*.deb"
         ;;
     fedora44)

@@ -13,40 +13,35 @@ docker run --rm \
     --mount "type=bind,source=${repo_root},target=/src,readonly" \
     "${image_name}" bash -euxo pipefail -c '
 cp -a /src /work
-cmake -S /work -B /work/build -G Ninja \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_INSTALL_PREFIX=/usr \
-    -DRCLIENT_PACKAGE_FORMAT=debian13 \
-    -DRCLIENT_VERSION=1.2.3
-cmake --build /work/build --parallel
-cpack --config /work/build/CPackConfig.cmake -G DEB \
-    -B /work/packages
+export SOURCE_DATE_EPOCH=1700000000
+bash /work/packaging/linux/build-packages.sh \
+    debian13 12.3.4 /work/packages
 
 mapfile -t packages < <(find /work/packages -maxdepth 1 -name "*.deb" -print)
 test "${#packages[@]}" -eq 2
 runtime_package="$(
-    find /work/packages -maxdepth 1 -name "librclient1_*.deb"
+    find /work/packages -maxdepth 1 -name "*-runtime.deb"
 )"
 development_package="$(
-    find /work/packages -maxdepth 1 -name "librclient-dev_*.deb"
+    find /work/packages -maxdepth 1 -name "*-development.deb"
 )"
 test -n "${runtime_package}"
 test -n "${development_package}"
 
-test "$(dpkg-deb --field "${runtime_package}" Package)" = librclient1
+test "$(dpkg-deb --field "${runtime_package}" Package)" = librclient12
 test "$(dpkg-deb --field "${development_package}" Package)" = librclient-dev
-test "$(dpkg-deb --field "${runtime_package}" Version)" = 1.2.3-1
-test "$(dpkg-deb --field "${development_package}" Version)" = 1.2.3-1
+test "$(dpkg-deb --field "${runtime_package}" Version)" = 12.3.4-1
+test "$(dpkg-deb --field "${development_package}" Version)" = 12.3.4-1
 test "$(dpkg-deb --field "${runtime_package}" Architecture)" = \
     "$(dpkg --print-architecture)"
 test "$(dpkg-deb --field "${development_package}" Architecture)" = \
     "$(dpkg --print-architecture)"
 dpkg-deb --field "${runtime_package}" Depends | grep -Eq "libssl3"
 dpkg-deb --field "${development_package}" Depends |
-    grep -F "librclient1 (= 1.2.3-1)"
+    grep -F "librclient12 (= 12.3.4-1)"
 
 dpkg-deb --contents "${runtime_package}" |
-    grep -E "/librclient\\.so\\.1 -> librclient\\.so\\.1\\.2\\.3$"
+    grep -E "/librclient\\.so\\.12 -> librclient\\.so\\.12\\.3\\.4$"
 dpkg-deb --contents "${runtime_package}" |
     grep -F "usr/share/doc/rl-c-client/LICENSE"
 dpkg-deb --contents "${development_package}" |
@@ -58,13 +53,8 @@ dpkg-deb --contents "${development_package}" |
 dpkg-deb --contents "${development_package}" |
     grep -F "/cmake/rclient/rclient-config.cmake"
 
-mkdir /work/release
-cp "${runtime_package}" \
-    /work/release/rl-c-client-v1.2.3-debian13-amd64-runtime.deb
-cp "${development_package}" \
-    /work/release/rl-c-client-v1.2.3-debian13-amd64-development.deb
 bash /work/packaging/linux/verify-packages.sh \
-    debian13 /work/release /work/tests/fixtures/installed_consumer
+    debian13 /work/packages /work/tests/fixtures/installed_consumer
 '
 
 echo "test_deb_packages: PASS"
