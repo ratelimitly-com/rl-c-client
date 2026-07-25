@@ -1,0 +1,587 @@
+name: Release
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
+      - 'CMakeLists.txt'
+      - 'VERSION'
+      - 'cmake/**'
+      - 'include/**'
+      - 'manifest/**'
+      - 'packaging/**'
+      - 'src/**'
+      - 'tests/**'
+      - 'tools/**'
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  metadata:
+    name: Validate release metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      commit: ${{ steps.metadata.outputs.commit }}
+      epoch: ${{ steps.metadata.outputs.epoch }}
+      publish: ${{ steps.metadata.outputs.publish }}
+      tag: ${{ steps.metadata.outputs.tag }}
+      version: ${{ steps.metadata.outputs.version }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve immutable build metadata
+        id: metadata
+        shell: bash
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          canonical_version="$(tr -d '\r\n' < VERSION)"
+          if [[ ! "$canonical_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "VERSION must be numeric MAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+          commit="$(git rev-parse HEAD)"
+          epoch="$(git show -s --format=%ct HEAD)"
+          release_tag="v${canonical_version}"
+          publish=false
+
+          verify_tag_commit() {
+            git fetch --no-tags origin \
+              "+refs/tags/${release_tag}:refs/tags/${release_tag}"
+            tag_commit="$(git rev-list -n 1 "refs/tags/${release_tag}")"
+            if [[ "$tag_commit" != "$commit" ]]; then
+              echo "$release_tag points to $tag_commit, expected $commit" >&2
+              exit 1
+            fi
+          }
+
+          case "$GITHUB_EVENT_NAME" in
+            push)
+              [[ "$GITHUB_REF" == refs/heads/main ]]
+              if gh release view "$release_tag" >/dev/null 2>&1; then
+                state="$(
+                  gh release view "$release_tag" \
+                    --json isDraft \
+                    --jq .isDraft
+                )"
+                if [[ "$state" == true ]]; then
+                  verify_tag_commit
+                  publish=true
+                else
+                  echo "$release_tag already published; bump VERSION for the next release"
+                fi
+              elif git ls-remote --exit-code --tags \
+                origin "refs/tags/${release_tag}" >/dev/null 2>&1; then
+                verify_tag_commit
+                publish=true
+              else
+                publish=true
+              fi
+              ;;
+            workflow_dispatch|pull_request)
+              ;;
+            *)
+              echo "unsupported release event: $GITHUB_EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
+          version="$canonical_version"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "version must be numeric MAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$epoch" =~ ^[0-9]+$ ]]
+          {
+            echo "commit=$commit"
+            echo "epoch=$epoch"
+            echo "publish=$publish"
+            echo "tag=$release_tag"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+
+  contracts:
+    name: Focused release contracts
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Run focused release contract tests
+        env:
+          SOURCE_DATE_EPOCH: ${{ needs.metadata.outputs.epoch }}
+        run: |
+          python3 tests/test_release_workflow.py
+          python3 tests/test_release_docs.py
+          python3 tests/test_dependency_sbom.py
+          python3 tests/test_cmake_minimum.py
+          python3 tests/test_cmake_options.py
+          python3 tests/test_project_version.py
+          python3 tests/test_macos_release.py
+          python3 tests/test_windows_x64_release.py
+          python3 tests/test_windows_arm64_release.py
+          bash tests/test_shared_abi.sh
+          bash tests/test_shared_only_install.sh
+
+  source:
+    name: Source archives
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Test source archive contract
+        run: |
+          python3 tests/test_source_release.py
+          bash tests/test_source_embed_direct.sh
+          bash tests/test_source_embed_subdirectory.sh
+
+      - name: Build deterministic source archives
+        env:
+          COMMIT: ${{ needs.metadata.outputs.commit }}
+          SOURCE_DATE_EPOCH: ${{ needs.metadata.outputs.epoch }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/release-source"
+          python3 tools/package_source.py \
+            --source . \
+            --output "$RUNNER_TEMP/release-source" \
+            --version "$VERSION" \
+            --commit "$COMMIT"
+          for archive in "$RUNNER_TEMP/release-source"/*; do
+            python3 tools/verify_source_archive.py "$archive"
+          done
+
+      - name: Upload source archives
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-source
+          path: ${{ runner.temp }}/release-source/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  linux:
+    name: ${{ matrix.profile }} ${{ matrix.architecture }}
+    needs: metadata
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: ubuntu24.04
+            architecture: amd64
+            runner: ubuntu-24.04
+            dockerfile: ubuntu-package.Dockerfile
+          - profile: ubuntu24.04
+            architecture: aarch64
+            runner: ubuntu-24.04-arm
+            dockerfile: ubuntu-package.Dockerfile
+          - profile: debian13
+            architecture: amd64
+            runner: ubuntu-24.04
+            dockerfile: debian-package.Dockerfile
+          - profile: debian13
+            architecture: aarch64
+            runner: ubuntu-24.04-arm
+            dockerfile: debian-package.Dockerfile
+          - profile: fedora44
+            architecture: amd64
+            runner: ubuntu-24.04
+            dockerfile: fedora-package.Dockerfile
+          - profile: fedora44
+            architecture: aarch64
+            runner: ubuntu-24.04-arm
+            dockerfile: fedora-package.Dockerfile
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Build pinned native package environment
+        env:
+          DOCKERFILE: ${{ matrix.dockerfile }}
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          docker build \
+            --file "tests/fixtures/$DOCKERFILE" \
+            --tag "rl-c-client-release:$PROFILE" \
+            .
+
+      - name: Build and test native packages
+        env:
+          PROFILE: ${{ matrix.profile }}
+          SOURCE_DATE_EPOCH: ${{ needs.metadata.outputs.epoch }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/release-linux"
+          docker run --rm \
+            --env SOURCE_DATE_EPOCH \
+            --volume "$GITHUB_WORKSPACE:/source:ro" \
+            --volume "$RUNNER_TEMP/release-linux:/output" \
+            --workdir /source \
+            "rl-c-client-release:$PROFILE" \
+            bash packaging/linux/build-packages.sh \
+              "$PROFILE" "$VERSION" /output
+
+      - name: Verify packages in a clean native environment
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/source:ro" \
+            --volume "$RUNNER_TEMP/release-linux:/packages:ro" \
+            --workdir /source \
+            "rl-c-client-release:$PROFILE" \
+            bash packaging/linux/verify-packages.sh \
+              "$PROFILE" /packages tests/fixtures/installed_consumer
+
+      - name: Upload native Linux packages
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-linux-${{ matrix.profile }}-${{ matrix.architecture }}
+          path: ${{ runner.temp }}/release-linux/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  macos:
+    name: macOS ${{ matrix.architecture }}
+    needs: metadata
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: aarch64
+            runner: macos-15
+          - architecture: amd64
+            runner: macos-15-intel
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Build pinned native OpenSSL
+        env:
+          SOURCE_DATE_EPOCH: ${{ needs.metadata.outputs.epoch }}
+        run: |
+          bash packaging/macos/build-openssl.sh "$RUNNER_TEMP/openssl"
+          echo "OPENSSL_ROOT_DIR=$RUNNER_TEMP/openssl" >> "$GITHUB_ENV"
+
+      - name: Build, test, and audit native SDK
+        env:
+          COMMIT: ${{ needs.metadata.outputs.commit }}
+          SOURCE_DATE_EPOCH: ${{ needs.metadata.outputs.epoch }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/release-macos"
+          bash packaging/macos/build-sdk.sh \
+            "$VERSION" "$COMMIT" "$RUNNER_TEMP/release-macos"
+
+      - name: Upload native macOS SDK
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-macos-${{ matrix.architecture }}
+          path: ${{ runner.temp }}/release-macos/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  macos_universal:
+    name: macOS universal2
+    needs:
+      - metadata
+      - macos
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Download aarch64 SDK
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: release-macos-aarch64
+          path: ${{ runner.temp }}/macos-aarch64
+
+      - name: Download amd64 SDK
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: release-macos-amd64
+          path: ${{ runner.temp }}/macos-amd64
+
+      - name: Merge and audit universal SDK
+        env:
+          COMMIT: ${{ needs.metadata.outputs.commit }}
+          SOURCE_DATE_EPOCH: ${{ needs.metadata.outputs.epoch }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          aarch64_sdk="$(
+            find "$RUNNER_TEMP/macos-aarch64" -type f \
+              -name '*-macos-aarch64-sdk.tar.gz'
+          )"
+          amd64_sdk="$(
+            find "$RUNNER_TEMP/macos-amd64" -type f \
+              -name '*-macos-amd64-sdk.tar.gz'
+          )"
+          test -n "$aarch64_sdk"
+          test -n "$amd64_sdk"
+          mkdir -p "$RUNNER_TEMP/release-macos-universal"
+          bash packaging/macos/create-universal-sdk.sh \
+            "$aarch64_sdk" \
+            "$amd64_sdk" \
+            "$VERSION" \
+            "$COMMIT" \
+            "$RUNNER_TEMP/release-macos-universal"
+
+      - name: Upload universal macOS SDK
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-macos-universal2
+          path: ${{ runner.temp }}/release-macos-universal/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  windows:
+    name: Windows ${{ matrix.architecture }}
+    needs: metadata
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            runner: windows-2022
+            triplet: x64-windows-static
+          - architecture: aarch64
+            runner: windows-11-arm
+            triplet: arm64-windows-static
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Bootstrap pinned vcpkg
+        shell: pwsh
+        env:
+          VCPKG_COMMIT: 40f3c709db80acf154ac4b17a1f83c564ebd022e
+        run: |
+          $vcpkgRoot = Join-Path $env:RUNNER_TEMP "vcpkg"
+          git init -q $vcpkgRoot
+          git -C $vcpkgRoot remote add origin https://github.com/microsoft/vcpkg.git
+          git -C $vcpkgRoot fetch -q --depth 1 origin $env:VCPKG_COMMIT
+          git -C $vcpkgRoot checkout -q --detach FETCH_HEAD
+          if ((git -C $vcpkgRoot rev-parse HEAD) -ne $env:VCPKG_COMMIT) {
+            throw "vcpkg checkout does not match the pinned commit"
+          }
+          & (Join-Path $vcpkgRoot "bootstrap-vcpkg.bat") -disableMetrics
+          if ($LASTEXITCODE -ne 0) {
+            throw "vcpkg bootstrap failed"
+          }
+          "VCPKG_ROOT=$vcpkgRoot" | Out-File `
+            -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build pinned static OpenSSL
+        shell: pwsh
+        env:
+          TRIPLET: ${{ matrix.triplet }}
+        run: |
+          & "$env:VCPKG_ROOT\vcpkg.exe" install "openssl:$env:TRIPLET"
+          if ($LASTEXITCODE -ne 0) {
+            throw "static OpenSSL build failed"
+          }
+
+      - name: Build, test, package, and audit native SDK
+        shell: pwsh
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+          COMMIT: ${{ needs.metadata.outputs.commit }}
+          SOURCE_DATE_EPOCH: ${{ needs.metadata.outputs.epoch }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP "release-windows"
+          & packaging/windows/build-sdk.ps1 `
+            -Architecture $env:ARCHITECTURE `
+            -Version $env:VERSION `
+            -Commit $env:COMMIT `
+            -OutputDirectory $output `
+            -VcpkgRoot $env:VCPKG_ROOT
+
+      - name: Upload native Windows SDK
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-windows-${{ matrix.architecture }}
+          path: ${{ runner.temp }}/release-windows/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  aggregate:
+    name: Validate complete release
+    needs:
+      - metadata
+      - contracts
+      - source
+      - linux
+      - macos
+      - macos_universal
+      - windows
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Download every platform artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: release-*
+          path: ${{ runner.temp }}/release-inputs
+
+      - name: Reject partial or unexpected release sets
+        env:
+          COMMIT: ${{ needs.metadata.outputs.commit }}
+          SOURCE_DATE_EPOCH: ${{ needs.metadata.outputs.epoch }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          python3 tests/test_release_assembly.py
+          python3 tools/assemble_release.py \
+            --input "$RUNNER_TEMP/release-inputs" \
+            --output "$RUNNER_TEMP/release-assets" \
+            --version "$VERSION" \
+            --commit "$COMMIT"
+
+      - name: Upload exact release assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/release-assets/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  attest:
+    name: Attest release assets
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      needs.metadata.outputs.publish == 'true'
+    needs:
+      - metadata
+      - aggregate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download exact release assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: release-assets
+          path: release-assets
+
+      - name: Create build provenance attestations
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
+        with:
+          subject-path: 'release-assets/*'
+
+  publish:
+    name: Publish atomic GitHub release
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      needs.metadata.outputs.publish == 'true'
+    needs:
+      - metadata
+      - aggregate
+      - attest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download exact release assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: release-assets
+          path: release-assets
+
+      - name: Upload to a draft, verify, then publish
+        shell: bash
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ needs.metadata.outputs.commit }}
+          TAG: ${{ needs.metadata.outputs.tag }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "${TAG#v}" != "$VERSION" ]]; then
+            echo "tag $TAG does not match resolved version $VERSION" >&2
+            exit 1
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            state="$(gh release view "$TAG" --json isDraft --jq .isDraft)"
+            if [[ "$state" != true ]]; then
+              echo "refusing to overwrite published release $TAG" >&2
+              exit 1
+            fi
+          else
+            gh release create "$TAG" \
+              --draft \
+              --generate-notes \
+              --target "$COMMIT" \
+              --title "$TAG"
+          fi
+          gh release upload "$TAG" release-assets/* --clobber
+          for asset in release-assets/*; do
+            digest="$(sha256sum "$asset")"
+            digest="${digest%% *}"
+            printf '%s\tsha256:%s\n' "$(basename "$asset")" "$digest"
+          done | LC_ALL=C sort > expected-assets.tsv
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" \
+            --jq '.assets[] | [.name, .digest] | @tsv' |
+            LC_ALL=C sort > actual-assets.tsv
+          diff -u expected-assets.tsv actual-assets.tsv
+          cut -f1 actual-assets.tsv > actual-assets.txt
+          grep -Fxq RELEASE-MANIFEST.json actual-assets.txt
+          grep -Fxq SHA256SUMS actual-assets.txt
+          gh release edit "$TAG" --draft=false

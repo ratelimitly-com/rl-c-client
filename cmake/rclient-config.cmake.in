@@ -1,0 +1,29 @@
+@PACKAGE_INIT@
+
+set(rclient_shared_FOUND @RCLIENT_BUILD_SHARED@)
+set(rclient_static_FOUND @RCLIENT_BUILD_STATIC@)
+foreach(rclient_component IN LISTS rclient_FIND_COMPONENTS)
+    if(NOT rclient_component STREQUAL "shared"
+       AND NOT rclient_component STREQUAL "static")
+        set(rclient_${rclient_component}_FOUND FALSE)
+    endif()
+endforeach()
+
+set(rclient_load_static FALSE)
+if(NOT @RCLIENT_BUILD_SHARED@ OR "static" IN_LIST rclient_FIND_COMPONENTS)
+    set(rclient_load_static TRUE)
+    include(CMakeFindDependencyMacro)
+    find_dependency(OpenSSL REQUIRED COMPONENTS Crypto)
+    if(NOT WIN32)
+        find_dependency(Threads REQUIRED)
+    endif()
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/rclient-targets.cmake")
+if(@RCLIENT_BUILD_SHARED@ AND @RCLIENT_BUILD_STATIC@
+   AND rclient_load_static)
+    include("${CMAKE_CURRENT_LIST_DIR}/rclient-static-targets.cmake")
+endif()
+unset(rclient_load_static)
+
+check_required_components(rclient)

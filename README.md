@@ -79,6 +79,103 @@ encoding, authentication, response parsing, retry policy, and server selection.
 Integrators provide credentials, resource IDs, latency data, UDP I/O, DNS, and
 timers through the APIs documented here.
 
+## Install a release
+
+Published assets are available from
+[GitHub Releases](https://github.com/ratelimitly-com/rl-c-client/releases).
+Choose the asset built for the target system and architecture:
+
+| Target | Architectures | Payload |
+| --- | --- | --- |
+| Ubuntu 24.04 (`ubuntu24.04`) | `amd64`, `aarch64` | Runtime and development `.deb` packages |
+| Debian 13 (`debian13`) | `amd64`, `aarch64` | Runtime and development `.deb` packages |
+| Fedora 44 (`fedora44`) | `amd64`, `aarch64` | Runtime and development `.rpm` packages |
+| macOS | `amd64`, `aarch64`, `universal2` | Relocatable SDK `.tar.gz` |
+| Windows | `amd64`, `aarch64` | Relocatable SDK `.zip` |
+| Source | Platform-independent | Embeddable `.tar.gz` and `.zip` |
+
+Linux applications normally install both packages. Replace `<VERSION>` and
+`<ARCH>` with the release version and `amd64` or `aarch64`:
+
+```sh
+# Ubuntu 24.04
+sudo apt install \
+  ./rl-c-client-v<VERSION>-ubuntu24.04-<ARCH>-runtime.deb \
+  ./rl-c-client-v<VERSION>-ubuntu24.04-<ARCH>-development.deb
+
+# Debian 13
+sudo apt install \
+  ./rl-c-client-v<VERSION>-debian13-<ARCH>-runtime.deb \
+  ./rl-c-client-v<VERSION>-debian13-<ARCH>-development.deb
+
+# Fedora 44
+sudo dnf install \
+  ./rl-c-client-v<VERSION>-fedora44-<ARCH>-runtime.rpm \
+  ./rl-c-client-v<VERSION>-fedora44-<ARCH>-development.rpm
+```
+
+The Linux runtime packages use the distribution's OpenSSL libcrypto. The
+development packages install public headers, static and shared link artifacts,
+`pkg-config` metadata, and a CMake package:
+
+```cmake
+find_package(rclient CONFIG REQUIRED)
+target_link_libraries(my_app PRIVATE rclient::rclient)
+```
+
+The macOS SDKs use the same CMake and `pkg-config` interfaces. The
+`macos-universal2` SDK contains both Intel and Apple Silicon slices; the
+architecture-specific SDKs are smaller. Release binaries target macOS 12.0 or
+newer. OpenSSL is built from pinned source at that same deployment target
+instead of using runner-local binaries. The shared dylib contains its OpenSSL
+code and has an `@rpath` install name. Consumers of the static archive must
+request the `static` CMake component and provide static OpenSSL at final link
+time:
+
+```cmake
+find_package(rclient CONFIG REQUIRED COMPONENTS static)
+target_link_libraries(my_app PRIVATE rclient::static)
+```
+
+Shared-library consumers do not need OpenSSL development files. Each bundled
+SDK includes the exact OpenSSL license under
+`share/doc/rl-c-client/third-party` and a dependency inventory at
+`share/rl-c-client/dependencies.spdx.json`.
+
+The `windows-amd64` and `windows-aarch64` SDKs contain `rclient.dll`, import and
+static libraries, headers, CMake metadata, SPDX SBOMs, third-party licenses,
+and toolchain metadata.
+The DLL is built with pinned WDK/MSVC tools, the static `MultiThreaded` (`/MT`)
+runtime, and static OpenSSL. Its import table is checked to exclude the
+separately installed Visual C++ runtime and OpenSSL DLL families. A build using
+the SDK's shared CMake target needs no external OpenSSL development tree; the
+optional static component still requires one.
+
+Every release also contains `RELEASE-MANIFEST.json` and `SHA256SUMS`. After
+downloading the complete asset set, verify the hashes:
+
+```sh
+sha256sum --check SHA256SUMS
+```
+
+To verify one downloaded asset without downloading all payloads:
+
+```sh
+grep '  rl-c-client-v<VERSION>-source.tar.gz$' SHA256SUMS |
+  sha256sum --check -
+```
+
+GitHub also records build provenance for every published asset:
+
+```sh
+gh attestation verify rl-c-client-v<VERSION>-source.tar.gz \
+  --repo ratelimitly-com/rl-c-client
+```
+
+Use `rl-c-client-v<VERSION>-source.tar.gz` or the equivalent `source.zip` when
+the client should be compiled directly into an application. See
+[EMBEDDING.md](EMBEDDING.md) for the two supported source-integration modes.
+
 ## Build
 
 Requirements:

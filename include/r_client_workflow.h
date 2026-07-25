@@ -75,10 +75,12 @@ typedef struct r_admission_request {
     bool latency_reported;
 } r_admission_request_t;
 
-void r_client_admission_config_defaults(r_admission_config_t *out_config);
+RCLIENT_API void r_client_admission_config_defaults(
+    r_admission_config_t *out_config
+);
 
 /* Prepare storage without submitting I/O. Useful for validation and tests. */
-int r_client_admission_prepare(
+RCLIENT_API int r_client_admission_prepare(
     r_admission_request_t *request,
     const r_admission_config_t *config,
     r_admission_cb callback,
@@ -86,13 +88,13 @@ int r_client_admission_prepare(
 );
 
 /* Convert a callback result into an explicit, durable application decision. */
-r_admission_outcome_t r_client_admission_classify(
+RCLIENT_API r_admission_outcome_t r_client_admission_classify(
     int status,
     const r_rate_limit_result_t *result
 );
 
 /* Prepare and submit one combined rate-limit and latency-guard check. */
-int r_client_admission_start(
+RCLIENT_API int r_client_admission_start(
     r_client_t *client,
     r_admission_request_t *request,
     const r_admission_config_t *config,
@@ -100,18 +102,18 @@ int r_client_admission_start(
     void *user
 );
 
-int r_client_admission_deadline_ms(
+RCLIENT_API int r_client_admission_deadline_ms(
     const r_admission_request_t *request,
     uint64_t *out_deadline_ms
 );
 
-int r_client_admission_on_timeout(
+RCLIENT_API int r_client_admission_on_timeout(
     r_client_t *client,
     r_admission_request_t *request,
     uint64_t now_ms
 );
 
-void r_client_admission_cancel(
+RCLIENT_API void r_client_admission_cancel(
     r_client_t *client,
     r_admission_request_t *request
 );
@@ -120,7 +122,7 @@ void r_client_admission_cancel(
  * Report one measured protected-operation duration. This succeeds only after
  * admission, never for denied/cancelled work, and at most once per request.
  */
-int r_client_admission_report_latency(
+RCLIENT_API int r_client_admission_report_latency(
     r_client_t *client,
     r_admission_request_t *request,
     uint32_t observed_latency_ms

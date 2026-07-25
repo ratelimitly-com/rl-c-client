@@ -27,13 +27,16 @@ TEST_RESPONDER_OBJS := \
 	tools/r_test_responder.o \
 	tools/r_test_responder_protocol.o
 
-LIB_OBJS = \
-	src/r_client.o \
-	src/r_client_runtime.o \
-	src/r_client_workflow.o \
-	src/r_protocol.o \
-	src/r_crypto.o \
-	src/r_policy.o
+source_manifest = $(shell sed \
+	-e '/^[[:space:]]*\#/d' \
+	-e '/^[[:space:]]*$$/d' \
+	$(1))
+
+LIB_SRCS := \
+	$(call source_manifest,manifest/core.sources) \
+	$(call source_manifest,manifest/workflow.sources) \
+	$(call source_manifest,manifest/runtime.sources)
+LIB_OBJS := $(LIB_SRCS:.c=.o)
 
 TEST_BINS = \
 	tests/test_protocol \
