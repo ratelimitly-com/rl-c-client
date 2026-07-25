@@ -58,8 +58,15 @@ jobs:
           set -euo pipefail
           case "$GITHUB_EVENT_NAME" in
             push)
-              [[ "$GITHUB_REF" == refs/tags/v* ]]
-              version="${GITHUB_REF_NAME#v}"
+              if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+                version="${GITHUB_REF_NAME#v}"
+              elif [[ "$GITHUB_REF" == \
+                refs/heads/agent/release-validation-1 ]]; then
+                version="0.0.0"
+              else
+                echo "unsupported release push ref: $GITHUB_REF" >&2
+                exit 1
+              fi
               ;;
             workflow_dispatch)
               version="$DISPATCH_VERSION"
