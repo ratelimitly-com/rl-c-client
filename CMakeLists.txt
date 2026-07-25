@@ -11,6 +11,7 @@ project(rl-c-client VERSION "${RCLIENT_VERSION}" LANGUAGES C)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
+include(cmake/rclient-msvc-runtime.cmake)
 
 option(RCLIENT_BUILD_STATIC "Build the static rl-c-client library" ON)
 option(RCLIENT_BUILD_SHARED "Build the shared rl-c-client library" ON)
@@ -23,6 +24,8 @@ option(RCLIENT_BUNDLE_OPENSSL
        "Statically link OpenSSL into the shared library" OFF)
 option(RCLIENT_RELOCATABLE_PKGCONFIG
        "Make installed pkg-config metadata relocatable" OFF)
+option(RCLIENT_USE_STATIC_MSVC_RUNTIME
+       "Link project targets to the static MSVC runtime" OFF)
 set(RCLIENT_PACKAGE_FORMAT "" CACHE STRING
     "Native package profile (debian13, ubuntu24.04, or fedora44)")
 
@@ -72,6 +75,7 @@ endif()
 
 function(rclient_configure_library target linkage)
     target_sources("${target}" PRIVATE ${RCLIENT_EMBED_SOURCES})
+    rclient_configure_msvc_runtime("${target}")
     target_compile_features("${target}" PUBLIC c_std_11)
     target_include_directories("${target}"
         PUBLIC
@@ -170,6 +174,7 @@ if(RCLIENT_BUILD_TESTS)
     include(CTest)
     enable_testing()
     add_executable(rclient-test-public-api tests/test_public_api.c)
+    rclient_configure_msvc_runtime(rclient-test-public-api)
     target_compile_features(rclient-test-public-api PRIVATE c_std_11)
     target_link_libraries(rclient-test-public-api PRIVATE rclient)
     add_test(NAME rclient-public-api COMMAND rclient-test-public-api)

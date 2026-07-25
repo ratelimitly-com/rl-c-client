@@ -9,6 +9,7 @@ README.md
 SECURITY.md
 cmake/rclient-config.cmake.in
 cmake/rclient-embed.cmake
+cmake/rclient-msvc-runtime.cmake
 cmake/rclient-packaging.cmake
 cmake/rclient.pc.in
 docs/api.md
