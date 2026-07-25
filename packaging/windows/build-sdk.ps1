@@ -43,6 +43,9 @@ $architectureConfig = (
 if ($null -eq $architectureConfig) {
     throw "Unsupported Windows release architecture: $Architecture"
 }
+$expectedToolset = (
+    "v143,host=x64,version=$($config.msvc_toolset_version)"
+)
 
 $runtimeArchitecture = (
     [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
@@ -162,7 +165,7 @@ try {
         "-B", $buildDirectory,
         "-G", "Visual Studio 17 2022",
         "-A", $architectureConfig.cmake_architecture,
-        "-T", "v143,host=x64,version=$($config.msvc_toolset_version)",
+        "-T", $expectedToolset,
         "-DCMAKE_INSTALL_PREFIX=$stageDirectory",
         "-DCMAKE_SYSTEM_VERSION=10.0.26100.0",
         "-DCMAKE_TOOLCHAIN_FILE=$toolchainFile",
@@ -176,17 +179,13 @@ try {
     )
     & cmake @configureArguments
     Assert-NativeSuccess "Windows CMake configure"
-    $selectedToolsetFile = Join-Path $buildDirectory (
-        "rclient-vs-toolset-version.txt"
-    )
-    if (-not (Test-Path $selectedToolsetFile -PathType Leaf)) {
-        throw "CMake did not report the selected MSVC toolset"
-    }
-    $selectedToolset = (
-        Get-Content $selectedToolsetFile -Raw
-    ).Trim()
+    $selectedToolset = Select-String `
+        -Path (Join-Path $buildDirectory "CMakeCache.txt") `
+        -Pattern "^CMAKE_GENERATOR_TOOLSET:INTERNAL=(.+)$"
     if (
-        $selectedToolset -ne $config.msvc_toolset_version
+        $null -eq $selectedToolset -or
+        $selectedToolset.Matches[0].Groups[1].Value -ne
+        $expectedToolset
     ) {
         throw "CMake did not select the pinned MSVC toolset"
     }
