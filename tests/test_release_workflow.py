@@ -149,6 +149,7 @@ def main():
     assert re.search(r"^\s+- metadata\s*$", publish, re.MULTILINE)
     assert "VERSION: ${{ needs.metadata.outputs.version }}" in publish
     assert '${TAG#v}' in publish
+    assert "GH_REPO: ${{ github.repository }}" in publish
     assert "contents: write" in publish
     assert "gh release create" in publish
     assert "--draft" in publish
