@@ -67,6 +67,12 @@ framework README can focus on its readiness, timer, and shutdown rules.
 - Optional steering feedback callback for source-port rebinding.
 - Static and shared library builds.
 
+The default wait policy prefers the oldest trusted r-server. A valid response
+from that server completes the request immediately. At an attempt timeout, the
+oldest valid response received is selected; if no response was received, the
+same logical request is retransmitted to all servers until its deduplication
+window expires.
+
 This repository contains the public C API and integration contract. Applications
 do not construct or parse Ratelimitly packets directly; the library owns packet
 encoding, authentication, response parsing, retry policy, and server selection.
