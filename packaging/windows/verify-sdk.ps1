@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("amd64")]
+    [ValidateSet("amd64", "aarch64")]
     [string]$Architecture,
 
     [Parameter(Mandatory = $true)]

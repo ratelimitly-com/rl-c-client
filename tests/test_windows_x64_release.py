@@ -28,6 +28,7 @@ def main():
         "nuget_package": "Microsoft.Windows.WDK.x64",
         "runner": "windows-2022",
         "runtime_architecture": "X64",
+        "sbom_nuget_package": "Microsoft.Windows.WDK.x64",
         "sbom_tool": "sbom-tool-win-x64.exe",
         "vcpkg_triplet": "x64-windows-static",
     }

@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("amd64")]
+    [ValidateSet("amd64", "aarch64")]
     [string]$Architecture,
 
     [Parameter(Mandatory = $true)]
@@ -66,6 +66,7 @@ $workDirectory = Join-Path (
 $buildDirectory = Join-Path $workDirectory "build"
 $stageDirectory = Join-Path $workDirectory "stage"
 $wdkDirectory = Join-Path $workDirectory "wdk"
+$sbomWdkDirectory = $wdkDirectory
 $verifyDirectory = Join-Path $workDirectory "verify"
 
 try {
@@ -83,6 +84,29 @@ try {
         Select-Object -First 1
     if ($null -eq $wdkProps) {
         throw "Pinned WDK package did not contain its native MSBuild props"
+    }
+    $wdkPackageRoot = $wdkProps.Directory.Parent.Parent.FullName
+    $wdkContentRoot = Join-Path $wdkPackageRoot "c"
+    if (-not (Test-Path (
+        Join-Path $wdkContentRoot "Include/10.0.26100.0/um"
+    ) -PathType Container)) {
+        throw "Pinned WDK package did not contain user-mode SDK headers"
+    }
+    $env:WindowsSdkDir = $wdkContentRoot + "\"
+    $env:WindowsSDKVersion = "10.0.26100.0\"
+
+    if (
+        $architectureConfig.sbom_nuget_package -ne
+        $architectureConfig.nuget_package
+    ) {
+        $sbomWdkDirectory = Join-Path $workDirectory "wdk-sbom"
+        nuget install $architectureConfig.sbom_nuget_package `
+            -Version $config.wdk_version `
+            -OutputDirectory $sbomWdkDirectory `
+            -ExcludeVersion `
+            -DirectDownload `
+            -NonInteractive
+        Assert-NativeSuccess "WDK SBOM-tool NuGet restore"
     }
 
     $configureArguments = @(
@@ -119,12 +143,13 @@ try {
         vcpkg_commit = $config.vcpkg_commit
         vcpkg_triplet = $architectureConfig.vcpkg_triplet
         wdk_package = $architectureConfig.nuget_package
+        wdk_sbom_package = $architectureConfig.sbom_nuget_package
         wdk_version = $config.wdk_version
     } | ConvertTo-Json | Set-Content -Encoding utf8NoBOM (
         Join-Path $toolchainMetadataDirectory "toolchain.json"
     )
 
-    $sbomTool = Get-ChildItem $wdkDirectory -Recurse `
+    $sbomTool = Get-ChildItem $sbomWdkDirectory -Recurse `
         -Filter $architectureConfig.sbom_tool |
         Select-Object -First 1
     if ($null -eq $sbomTool) {

@@ -5,8 +5,18 @@
       "nuget_package": "Microsoft.Windows.WDK.x64",
       "runner": "windows-2022",
       "runtime_architecture": "X64",
+      "sbom_nuget_package": "Microsoft.Windows.WDK.x64",
       "sbom_tool": "sbom-tool-win-x64.exe",
       "vcpkg_triplet": "x64-windows-static"
+    },
+    "aarch64": {
+      "cmake_architecture": "ARM64",
+      "nuget_package": "Microsoft.Windows.WDK.ARM64",
+      "runner": "windows-11-arm",
+      "runtime_architecture": "Arm64",
+      "sbom_nuget_package": "Microsoft.Windows.WDK.x64",
+      "sbom_tool": "sbom-tool-win-x64.exe",
+      "vcpkg_triplet": "arm64-windows-static"
     }
   },
   "forbidden_import_patterns": [
