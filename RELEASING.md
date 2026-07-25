@@ -1,15 +1,15 @@
 # Releasing rl-c-client
 
-Releases are built only by `.github/workflows/release.yml`. Maintainers create
-the version tag; the workflow derives every archive and package from that
-immutable commit. Supported release tags are exactly `vMAJOR.MINOR.PATCH`
-without prerelease or build suffixes.
+Releases are built only by `.github/workflows/release.yml`. The canonical
+`VERSION` file selects the release version. A merge to `main` runs the complete
+native matrix and, when that version is not already published, creates
+`vMAJOR.MINOR.PATCH` at the tested merge commit and publishes its assets.
 
-## Validate before tagging
+## Validate before merging
 
-Use the workflow's `workflow_dispatch` trigger with a numeric version to run the
-complete matrix without creating a GitHub release. Pull requests that change
-release inputs run the same non-publishing matrix with version `0.0.0`.
+Use the workflow's `workflow_dispatch` trigger to run the complete matrix
+without creating a GitHub release. Manual and pull-request runs both read the
+canonical `VERSION` file and never publish.
 
 The matrix builds on the target architecture instead of cross-compiling:
 
@@ -49,37 +49,28 @@ architecture still apply.
 
 ## Publish
 
-Start from an up-to-date, clean `main`, and create a signed annotated tag:
+Set the next numeric `MAJOR.MINOR.PATCH` value in `VERSION` as part of the
+release pull request. Review its release inputs and merge it to `main`. Do not
+create the version tag manually.
 
-```sh
-git switch main
-git pull --ff-only origin main
-git status --short
-git tag -s vMAJOR.MINOR.PATCH -m 'rl-c-client vMAJOR.MINOR.PATCH'
-git push origin vMAJOR.MINOR.PATCH
-```
+The `main` workflow:
 
-The workflow accepts signatures only from the public keys committed in
-`manifest/release-signing-keys.asc`. The current allowed primary fingerprint is
-`EFECDDA47F063AA02A1042DEC8F243431345A599`. Key changes require normal review
-before a release tag is created.
-
-The tag workflow:
-
-1. validates the tag and records its commit and commit timestamp;
+1. validates `VERSION` and records the merge commit and commit timestamp;
 2. builds and verifies all 19 payload artifacts;
 3. rejects any missing, duplicate, or unexpected asset;
 4. generates the release manifest and checksums;
 5. creates a GitHub build-provenance attestation for every release asset;
-6. creates or resumes a draft GitHub release and uploads the exact asset set;
+6. creates `vMAJOR.MINOR.PATCH` at the tested commit, or resumes a matching
+   draft GitHub release, and uploads the exact asset set;
 7. compares every draft asset's remote name and SHA-256 digest with the local
    set; and
 8. changes the release from draft to public only after the comparison passes.
 
-A failed publication stays in draft. A rerun may resume that draft and replace
-its expected assets, but the workflow refuses to overwrite an already
-published release. Inspect the workflow run, the draft assets, and the
-attestation results before retrying.
+A failed publication stays in draft. A rerun of the same commit may resume that
+draft and replace its expected assets. A draft tag that points elsewhere fails
+closed. When the version is already published, later `main` runs still validate
+the matrix but skip attestation and publication; bump `VERSION` for the next
+release. The workflow never overwrites an already published release.
 
 ## Verify the published result
 
@@ -93,4 +84,4 @@ gh attestation verify rl-c-client-vMAJOR.MINOR.PATCH-source.tar.gz \
 
 Confirm that the release page contains the 19 payload artifacts plus
 `RELEASE-MANIFEST.json` and `SHA256SUMS`, and that the release points to the
-signed tag.
+tested `main` commit recorded in `RELEASE-MANIFEST.json`.

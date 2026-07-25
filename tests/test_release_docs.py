@@ -45,14 +45,20 @@ def main():
     )
     require(
         "RELEASING.md",
+        "merge to `main`",
+        "canonical `VERSION`",
         "vMAJOR.MINOR.PATCH",
         "workflow_dispatch",
+        "already published",
         "19 payload artifacts",
         "10.0.26100.6584",
         "MultiThreaded (`/MT`)",
         "draft",
         "attest",
     )
+    releasing = (ROOT / "RELEASING.md").read_text(encoding="utf-8")
+    assert "create a signed annotated tag" not in releasing
+    assert "version `0.0.0`" not in releasing
     require(
         "CHANGES.md",
         "native Ubuntu, Debian, Fedora, macOS, and Windows release artifacts",

@@ -60,6 +60,11 @@ GitHub build-provenance attestation before the draft release becomes public.
 Verify both the checksum and the attestation; a matching checksum alone does
 not establish who produced an artifact.
 
+Publication runs only after a push to `main`. The workflow reads the canonical
+`VERSION`, builds and validates the complete native matrix, then creates the
+matching release tag at that tested commit. An already published version is
+never overwritten.
+
 Windows SDKs also contain a WDK-generated SPDX SBOM. Release packages are not
 claimed to be Authenticode-signed, Apple-notarized, or distribution-repository
 signed unless the individual release notes explicitly say so.

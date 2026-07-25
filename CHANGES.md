@@ -6,6 +6,8 @@
   AMD64 and AArch64, including a universal macOS SDK.
 - Added deterministic embeddable source archives, exact-set checksums and
   manifests, SBOM metadata, and build-provenance attestations.
+- Added automatic GitHub Release publication after a version-bumping pull
+  request merges to `main`.
 
 ## 0.2.0 - 2026-07-15
 
