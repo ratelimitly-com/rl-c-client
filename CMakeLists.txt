@@ -20,7 +20,7 @@ option(RCLIENT_ENABLE_INSTALL "Enable rl-c-client install rules"
        "${PROJECT_IS_TOP_LEVEL}")
 option(RCLIENT_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 set(RCLIENT_PACKAGE_FORMAT "" CACHE STRING
-    "Native package profile (debian13 or ubuntu24.04)")
+    "Native package profile (debian13, ubuntu24.04, or fedora44)")
 
 if(NOT RCLIENT_BUILD_STATIC AND NOT RCLIENT_BUILD_SHARED)
     message(FATAL_ERROR

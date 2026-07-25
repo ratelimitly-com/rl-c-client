@@ -45,6 +45,25 @@ if(RCLIENT_PACKAGE_FORMAT STREQUAL "debian13"
         "librclient${PROJECT_VERSION_MAJOR} (= ${PROJECT_VERSION}-1), libssl-dev, pkg-config")
     set(CPACK_DEBIAN_DEVELOPMENT_DESCRIPTION
         "Headers, static library, and build metadata for rl-c-client")
+elseif(RCLIENT_PACKAGE_FORMAT STREQUAL "fedora44")
+    set(CPACK_GENERATOR RPM)
+    set(CPACK_RPM_COMPONENT_INSTALL ON)
+    set(CPACK_RPM_PACKAGE_RELEASE 1)
+    set(CPACK_RPM_PACKAGE_LICENSE MIT)
+    set(CPACK_RPM_RUNTIME_PACKAGE_NAME "rclient-libs")
+    set(CPACK_RPM_RUNTIME_FILE_NAME RPM-DEFAULT)
+    set(CPACK_RPM_RUNTIME_PACKAGE_GROUP "System Environment/Libraries")
+    set(CPACK_RPM_RUNTIME_PACKAGE_REQUIRES
+        "glibc >= 2.34, openssl-libs >= 3.0")
+    set(CPACK_RPM_RUNTIME_PACKAGE_SUMMARY
+        "Shared runtime library for the Ratelimitly C client")
+    set(CPACK_RPM_DEVELOPMENT_PACKAGE_NAME "rclient-devel")
+    set(CPACK_RPM_DEVELOPMENT_FILE_NAME RPM-DEFAULT)
+    set(CPACK_RPM_DEVELOPMENT_PACKAGE_GROUP "Development/Libraries")
+    set(CPACK_RPM_DEVELOPMENT_PACKAGE_REQUIRES
+        "rclient-libs = ${PROJECT_VERSION}-1, openssl-devel, pkgconf-pkg-config")
+    set(CPACK_RPM_DEVELOPMENT_PACKAGE_SUMMARY
+        "Development files for the Ratelimitly C client")
 else()
     message(FATAL_ERROR
         "Unsupported RCLIENT_PACKAGE_FORMAT: ${RCLIENT_PACKAGE_FORMAT}")
