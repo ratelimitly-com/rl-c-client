@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added native Ubuntu, Debian, Fedora, macOS, and Windows release artifacts for
+  AMD64 and AArch64, including a universal macOS SDK.
+- Added deterministic embeddable source archives, exact-set checksums and
+  manifests, SBOM metadata, and build-provenance attestations.
+
 ## 0.2.0 - 2026-07-15
 
 - Specified a versioned test responder contract for downstream integration
