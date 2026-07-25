@@ -132,6 +132,7 @@ jobs:
           SOURCE_DATE_EPOCH: ${{ needs.metadata.outputs.epoch }}
         run: |
           python3 tests/test_release_workflow.py
+          python3 tests/test_publish_release.py
           python3 tests/test_release_docs.py
           python3 tests/test_dependency_sbom.py
           python3 tests/test_cmake_minimum.py
@@ -553,35 +554,9 @@ jobs:
           TAG: ${{ needs.metadata.outputs.tag }}
           VERSION: ${{ needs.metadata.outputs.version }}
         run: |
-          set -euo pipefail
-          if [[ "${TAG#v}" != "$VERSION" ]]; then
-            echo "tag $TAG does not match resolved version $VERSION" >&2
-            exit 1
-          fi
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            state="$(gh release view "$TAG" --json isDraft --jq .isDraft)"
-            if [[ "$state" != true ]]; then
-              echo "refusing to overwrite published release $TAG" >&2
-              exit 1
-            fi
-          else
-            gh release create "$TAG" \
-              --draft \
-              --generate-notes \
-              --target "$COMMIT" \
-              --title "$TAG"
-          fi
-          gh release upload "$TAG" release-assets/* --clobber
-          for asset in release-assets/*; do
-            digest="$(sha256sum "$asset")"
-            digest="${digest%% *}"
-            printf '%s\tsha256:%s\n' "$(basename "$asset")" "$digest"
-          done | LC_ALL=C sort > expected-assets.tsv
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" \
-            --jq '.assets[] | [.name, .digest] | @tsv' |
-            LC_ALL=C sort > actual-assets.tsv
-          diff -u expected-assets.tsv actual-assets.tsv
-          cut -f1 actual-assets.tsv > actual-assets.txt
-          grep -Fxq RELEASE-MANIFEST.json actual-assets.txt
-          grep -Fxq SHA256SUMS actual-assets.txt
-          gh release edit "$TAG" --draft=false
+          python3 tools/publish_release.py \
+            --assets release-assets \
+            --commit "$COMMIT" \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag "$TAG" \
+            --version "$VERSION"
