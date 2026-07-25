@@ -445,7 +445,6 @@ jobs:
         with:
           pattern: release-*
           path: ${{ runner.temp }}/release-inputs
-          merge-multiple: true
 
       - name: Reject partial or unexpected release sets
         env:

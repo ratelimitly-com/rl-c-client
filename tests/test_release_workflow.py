@@ -160,6 +160,7 @@ def main():
         assert dependency in aggregate
     assert "tools/assemble_release.py" in aggregate
     assert "release-assets" in aggregate
+    assert "merge-multiple: true" not in aggregate
 
     attest = job(text, "attest")
     assert "refs/tags/v" in attest

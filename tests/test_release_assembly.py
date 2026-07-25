@@ -106,6 +106,23 @@ def main():
         )
         assert "unexpected release artifacts" in result.stderr
 
+        duplicate_inputs = tmp_path / "duplicate-inputs"
+        (duplicate_inputs / "artifact-one").mkdir(parents=True)
+        (duplicate_inputs / "artifact-two").mkdir()
+        duplicate_name = names[0]
+        (duplicate_inputs / "artifact-one" / duplicate_name).write_bytes(
+            b"first\n"
+        )
+        (duplicate_inputs / "artifact-two" / duplicate_name).write_bytes(
+            b"second\n"
+        )
+        result = assemble(
+            duplicate_inputs,
+            tmp_path / "duplicate-output",
+            expect_success=False,
+        )
+        assert f"duplicate release artifact: {duplicate_name}" in result.stderr
+
     print("test_release_assembly: PASS")
     return 0
 
