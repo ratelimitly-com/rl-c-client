@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import platform
 import subprocess
 import sys
 import tarfile
@@ -90,6 +91,7 @@ def main():
             )
             assert manifest_file is not None
             manifest = json.load(manifest_file)
+            archive.extractall(tmp_path, filter="data")
 
         with zipfile.ZipFile(first / archive_names[1]) as archive:
             zip_files = {
@@ -110,6 +112,32 @@ def main():
             len(item["sha256"]) == 64 and item["size"] >= 0
             for item in manifest["files"]
         )
+
+        extracted = tmp_path / f"rl-c-client-{VERSION}"
+        build_dir = tmp_path / "versioned-build"
+        subprocess.run(
+            [
+                "cmake",
+                "-S",
+                str(extracted),
+                "-B",
+                str(build_dir),
+                "-DRCLIENT_BUILD_STATIC=OFF",
+                "-DRCLIENT_BUILD_TESTS=OFF",
+            ],
+            check=True,
+        )
+        cache = (build_dir / "CMakeCache.txt").read_text(encoding="utf-8")
+        assert f"CMAKE_PROJECT_VERSION:STATIC={VERSION}" in cache
+        subprocess.run(
+            ["cmake", "--build", str(build_dir), "--parallel", "2"],
+            check=True,
+        )
+        if platform.system() == "Darwin":
+            versioned_library = build_dir / f"librclient.{VERSION}.dylib"
+        else:
+            versioned_library = build_dir / f"librclient.so.{VERSION}"
+        assert versioned_library.is_file()
 
     print("test_source_release: PASS")
     return 0
