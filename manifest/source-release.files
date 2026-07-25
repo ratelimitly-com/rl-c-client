@@ -24,6 +24,7 @@ manifest/source-release.files
 manifest/workflow.sources
 packaging/linux/build-packages.sh
 packaging/linux/verify-packages.sh
+packaging/macos/build-sdk.sh
 src/r_client.c
 src/r_client_runtime.c
 src/r_client_workflow.c
@@ -32,3 +33,4 @@ src/r_crypto.h
 src/r_policy.c
 src/r_protocol.c
 src/r_protocol.h
+tools/package_sdk.py

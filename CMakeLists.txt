@@ -19,6 +19,10 @@ option(RCLIENT_BUILD_EXAMPLES "Build rl-c-client examples" OFF)
 option(RCLIENT_ENABLE_INSTALL "Enable rl-c-client install rules"
        "${PROJECT_IS_TOP_LEVEL}")
 option(RCLIENT_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
+option(RCLIENT_BUNDLE_OPENSSL
+       "Statically link OpenSSL into the shared library" OFF)
+option(RCLIENT_RELOCATABLE_PKGCONFIG
+       "Make installed pkg-config metadata relocatable" OFF)
 set(RCLIENT_PACKAGE_FORMAT "" CACHE STRING
     "Native package profile (debian13, ubuntu24.04, or fedora44)")
 
@@ -58,6 +62,9 @@ set(RCLIENT_EMBED_SOURCES
     ${RCLIENT_WORKFLOW_SOURCES}
     ${RCLIENT_RUNTIME_SOURCES})
 
+if(RCLIENT_BUNDLE_OPENSSL)
+    set(OPENSSL_USE_STATIC_LIBS TRUE)
+endif()
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 if(NOT WIN32)
     find_package(Threads REQUIRED)
@@ -120,6 +127,19 @@ if(RCLIENT_BUILD_SHARED)
         VERSION "${PROJECT_VERSION}"
         SOVERSION "${PROJECT_VERSION_MAJOR}"
         C_VISIBILITY_PRESET hidden)
+    if(APPLE)
+        file(STRINGS
+            "${CMAKE_CURRENT_SOURCE_DIR}/manifest/public-api.symbols"
+            rclient_public_symbols)
+        list(TRANSFORM rclient_public_symbols PREPEND "_")
+        list(JOIN rclient_public_symbols "\n" rclient_exported_symbols)
+        set(rclient_exported_symbols_file
+            "${CMAKE_CURRENT_BINARY_DIR}/rclient-exported.symbols")
+        file(WRITE "${rclient_exported_symbols_file}"
+            "${rclient_exported_symbols}\n")
+        target_link_options(rclient_shared PRIVATE
+            "LINKER:-exported_symbols_list,${rclient_exported_symbols_file}")
+    endif()
     add_library(rclient::shared ALIAS rclient_shared)
 endif()
 
@@ -187,6 +207,11 @@ if(RCLIENT_ENABLE_INSTALL)
         set(RCLIENT_PC_PRIVATE_LIBS "-lws2_32 -ldnsapi")
     else()
         set(RCLIENT_PC_PRIVATE_LIBS "-lresolv -pthread")
+    endif()
+    if(RCLIENT_RELOCATABLE_PKGCONFIG)
+        set(RCLIENT_PC_PREFIX "\${pcfiledir}/../..")
+    else()
+        set(RCLIENT_PC_PREFIX "${CMAKE_INSTALL_PREFIX}")
     endif()
     configure_file(
         cmake/rclient.pc.in
