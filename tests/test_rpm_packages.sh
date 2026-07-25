@@ -50,6 +50,14 @@ rpm -qlp "${development_package}" | grep -E "/librclient\\.a$"
 rpm -qlp "${development_package}" | grep -F "/pkgconfig/rclient.pc"
 rpm -qlp "${development_package}" |
     grep -F "/cmake/rclient/rclient-config.cmake"
+
+mkdir /work/release
+cp "${runtime_package}" \
+    /work/release/rl-c-client-v1.2.3-fedora44-amd64-runtime.rpm
+cp "${development_package}" \
+    /work/release/rl-c-client-v1.2.3-fedora44-amd64-development.rpm
+bash /work/packaging/linux/verify-packages.sh \
+    fedora44 /work/release /work/tests/fixtures/installed_consumer
 '
 
 echo "test_rpm_packages: PASS"

@@ -10,10 +10,8 @@ on:
       - 'manifest/**'
       - 'packaging/**'
       - 'src/**'
-      - 'tests/fixtures/*-package.Dockerfile'
-      - 'tests/test_*release*'
-      - 'tools/package_*.py'
-      - 'tools/assemble_release.py'
+      - 'tests/**'
+      - 'tools/**'
   push:
     tags:
       - 'v*'
@@ -92,6 +90,28 @@ jobs:
             echo "version=$version"
           } >> "$GITHUB_OUTPUT"
 
+  contracts:
+    name: Focused release contracts
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Run focused release contract tests
+        env:
+          SOURCE_DATE_EPOCH: ${{ needs.metadata.outputs.epoch }}
+        run: |
+          python3 tests/test_release_workflow.py
+          python3 tests/test_release_docs.py
+          python3 tests/test_dependency_sbom.py
+          python3 tests/test_windows_x64_release.py
+          python3 tests/test_windows_arm64_release.py
+          bash tests/test_shared_abi.sh
+
   source:
     name: Source archives
     needs: metadata
@@ -104,7 +124,10 @@ jobs:
           persist-credentials: false
 
       - name: Test source archive contract
-        run: python3 tests/test_source_release.py
+        run: |
+          python3 tests/test_source_release.py
+          bash tests/test_source_embed_direct.sh
+          bash tests/test_source_embed_subdirectory.sh
 
       - name: Build deterministic source archives
         env:
@@ -395,6 +418,7 @@ jobs:
     name: Validate complete release
     needs:
       - metadata
+      - contracts
       - source
       - linux
       - macos

@@ -57,6 +57,14 @@ dpkg-deb --contents "${development_package}" |
     grep -F "/pkgconfig/rclient.pc"
 dpkg-deb --contents "${development_package}" |
     grep -F "/cmake/rclient/rclient-config.cmake"
+
+mkdir /work/release
+cp "${runtime_package}" \
+    /work/release/rl-c-client-v1.2.3-debian13-amd64-runtime.deb
+cp "${development_package}" \
+    /work/release/rl-c-client-v1.2.3-debian13-amd64-development.deb
+bash /work/packaging/linux/verify-packages.sh \
+    debian13 /work/release /work/tests/fixtures/installed_consumer
 '
 
 echo "test_deb_packages: PASS"

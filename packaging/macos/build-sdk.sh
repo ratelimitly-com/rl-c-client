@@ -74,6 +74,29 @@ if otool -L "${library}" | grep -Ei "homebrew|libcrypto"; then
     echo "macOS SDK dylib has a non-system crypto load dependency" >&2
     exit 1
 fi
+nm -gU "${library}" |
+    awk '$2 ~ /^[TDSB]$/ {print $3}' |
+    sed 's/^_//' |
+    LC_ALL=C sort >"${build_root}/public-api.symbols"
+diff -u \
+    "${source_dir}/manifest/public-api.symbols" \
+    "${build_root}/public-api.symbols"
+
+PKG_CONFIG_PATH="${build_root}/stage/lib/pkgconfig" \
+    cc "${source_dir}/tests/fixtures/installed_consumer/main.c" \
+    $(PKG_CONFIG_PATH="${build_root}/stage/lib/pkgconfig" \
+        pkg-config --cflags --libs rclient) \
+    -o "${build_root}/pkg-config-consumer"
+DYLD_LIBRARY_PATH="${build_root}/stage/lib" \
+    "${build_root}/pkg-config-consumer"
+
+cmake -S "${source_dir}/tests/fixtures/installed_consumer" \
+    -B "${build_root}/consumer-build" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_PREFIX_PATH="${build_root}/stage"
+cmake --build "${build_root}/consumer-build" --parallel
+DYLD_LIBRARY_PATH="${build_root}/stage/lib" \
+    "${build_root}/consumer-build/rclient-installed-consumer"
 
 python3 "${source_dir}/tools/package_sdk.py" \
     --stage "${build_root}/stage" \

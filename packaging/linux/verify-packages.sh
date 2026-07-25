@@ -16,39 +16,98 @@ case "${profile}" in
             find "${package_dir}" -maxdepth 1 -name "*.deb" -print
         )
         test "${#packages[@]}" -eq 2
+        runtime_package="$(
+            find "${package_dir}" -maxdepth 1 -name "*-runtime.deb"
+        )"
+        development_package="$(
+            find "${package_dir}" -maxdepth 1 -name "*-development.deb"
+        )"
+        test -n "${runtime_package}"
+        test -n "${development_package}"
         for package in "${packages[@]}"; do
             package_arch="$(dpkg-deb --field "${package}" Architecture)"
             test "${package_arch}" = "$(dpkg --print-architecture)"
         done
+        runtime_name="$(dpkg-deb --field "${runtime_package}" Package)"
+        runtime_version="$(dpkg-deb --field "${runtime_package}" Version)"
+        development_name="$(
+            dpkg-deb --field "${development_package}" Package
+        )"
+        test "${development_name}" = librclient-dev
+        dpkg-deb --field "${runtime_package}" Depends | grep -Eq "libssl3"
+        dpkg-deb --field "${development_package}" Depends |
+            grep -F "${runtime_name} (= ${runtime_version})"
+        runtime_contents="$(dpkg-deb --contents "${runtime_package}")"
+        development_contents="$(
+            dpkg-deb --contents "${development_package}"
+        )"
+        grep -F "usr/share/doc/rl-c-client/LICENSE" \
+            <<<"${runtime_contents}"
+        grep -E "/librclient[.]so[.][0-9]+([.][0-9]+){2}$" \
+            <<<"${runtime_contents}"
+        if grep -Eq "/include/|/librclient[.]a$|/rclient[.]pc$|/cmake/" \
+            <<<"${runtime_contents}"; then
+            echo "Debian runtime package contains development files" >&2
+            exit 1
+        fi
+        for pattern in \
+            "usr/include/r_client.h" \
+            "/librclient.a" \
+            "/pkgconfig/rclient.pc" \
+            "/cmake/rclient/rclient-config.cmake"; do
+            grep -F "${pattern}" <<<"${development_contents}"
+        done
         apt-get update
         apt-get install -y "${packages[@]}"
-        runtime_name="$(
-            dpkg-deb --field \
-                "$(find "${package_dir}" -name "*-runtime.deb")" Package
-        )"
-        development_name="$(
-            dpkg-deb --field \
-                "$(find "${package_dir}" -name "*-development.deb")" Package
-        )"
         ;;
     fedora44)
         mapfile -t packages < <(
             find "${package_dir}" -maxdepth 1 -name "*.rpm" -print
         )
         test "${#packages[@]}" -eq 2
+        runtime_package="$(
+            find "${package_dir}" -maxdepth 1 -name "*-runtime.rpm"
+        )"
+        development_package="$(
+            find "${package_dir}" -maxdepth 1 -name "*-development.rpm"
+        )"
+        test -n "${runtime_package}"
+        test -n "${development_package}"
         for package in "${packages[@]}"; do
             package_arch="$(rpm -qp --qf '%{ARCH}' "${package}")"
             test "${package_arch}" = "$(uname -m)"
         done
-        dnf install -y "${packages[@]}"
-        runtime_name="$(
-            rpm -qp --qf '%{NAME}' \
-                "$(find "${package_dir}" -name "*-runtime.rpm")"
+        runtime_name="$(rpm -qp --qf '%{NAME}' "${runtime_package}")"
+        runtime_version="$(
+            rpm -qp --qf '%{VERSION}-%{RELEASE}' "${runtime_package}"
         )"
         development_name="$(
-            rpm -qp --qf '%{NAME}' \
-                "$(find "${package_dir}" -name "*-development.rpm")"
+            rpm -qp --qf '%{NAME}' "${development_package}"
         )"
+        test "${runtime_name}" = rclient-libs
+        test "${development_name}" = rclient-devel
+        rpm -qp --requires "${runtime_package}" | grep -F "openssl-libs"
+        rpm -qp --requires "${development_package}" |
+            grep -F "${runtime_name} = ${runtime_version}"
+        runtime_contents="$(rpm -qlp "${runtime_package}")"
+        development_contents="$(rpm -qlp "${development_package}")"
+        grep -F "/usr/share/doc/rl-c-client/LICENSE" \
+            <<<"${runtime_contents}"
+        grep -E "/librclient[.]so[.][0-9]+([.][0-9]+){2}$" \
+            <<<"${runtime_contents}"
+        if grep -Eq "/include/|/librclient[.]a$|/rclient[.]pc$|/cmake/" \
+            <<<"${runtime_contents}"; then
+            echo "RPM runtime package contains development files" >&2
+            exit 1
+        fi
+        for pattern in \
+            "/usr/include/r_client.h" \
+            "/librclient.a" \
+            "/pkgconfig/rclient.pc" \
+            "/cmake/rclient/rclient-config.cmake"; do
+            grep -F "${pattern}" <<<"${development_contents}"
+        done
+        dnf install -y "${packages[@]}"
         ;;
     *)
         echo "unsupported Linux package profile: ${profile}" >&2

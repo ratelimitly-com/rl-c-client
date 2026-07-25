@@ -90,9 +90,22 @@ def main():
     ):
         assert token in tag_verifier
 
+    contracts = job(text, "contracts")
+    for token in (
+        "tests/test_release_workflow.py",
+        "tests/test_release_docs.py",
+        "tests/test_dependency_sbom.py",
+        "tests/test_windows_x64_release.py",
+        "tests/test_windows_arm64_release.py",
+        "tests/test_shared_abi.sh",
+    ):
+        assert token in contracts
+
     source = job(text, "source")
     assert "tools/package_source.py" in source
     assert "tests/test_source_release.py" in source
+    assert "tests/test_source_embed_direct.sh" in source
+    assert "tests/test_source_embed_subdirectory.sh" in source
 
     linux = job(text, "linux")
     for token in (
@@ -131,7 +144,14 @@ def main():
         assert token in windows
 
     aggregate = job(text, "aggregate")
-    for dependency in ("source", "linux", "macos", "macos_universal", "windows"):
+    for dependency in (
+        "contracts",
+        "source",
+        "linux",
+        "macos",
+        "macos_universal",
+        "windows",
+    ):
         assert dependency in aggregate
     assert "tools/assemble_release.py" in aggregate
     assert "release-assets" in aggregate
@@ -160,6 +180,30 @@ def main():
 
     assert "secrets." not in text
     assert "write-all" not in text
+
+    linux_verifier = (
+        ROOT / "packaging" / "linux" / "verify-packages.sh"
+    ).read_text(encoding="utf-8")
+    for token in (
+        "dpkg-deb --contents",
+        "dpkg-deb --field",
+        "rpm -qlp",
+        "rpm -qp --requires",
+        "rclient-config.cmake",
+        "rclient.pc",
+    ):
+        assert token in linux_verifier
+
+    macos_builder = (
+        ROOT / "packaging" / "macos" / "build-sdk.sh"
+    ).read_text(encoding="utf-8")
+    for token in (
+        "manifest/public-api.symbols",
+        "pkg-config --cflags --libs rclient",
+        "tests/fixtures/installed_consumer",
+    ):
+        assert token in macos_builder
+
     print("test_release_workflow: PASS")
     return 0
 
