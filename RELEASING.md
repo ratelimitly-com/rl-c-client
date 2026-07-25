@@ -23,6 +23,10 @@ job accepts exactly 19 payload artifacts: 12 Linux packages, three macOS SDKs,
 two Windows SDKs, and two source archives. It then adds
 `RELEASE-MANIFEST.json` and `SHA256SUMS`.
 
+The macOS and Windows SDKs statically link OpenSSL. They include the exact
+OpenSSL license used by the build and a deterministic SPDX dependency inventory
+that records the bundled OpenSSL version and `STATIC_LINK` relationship.
+
 ## Windows compatibility policy
 
 Windows releases use the pinned WDK NuGet toolchain version `10.0.26100.6584`

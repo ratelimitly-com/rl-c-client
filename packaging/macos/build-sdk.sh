@@ -43,6 +43,28 @@ cmake --build "${build_root}/build" --parallel
 ctest --test-dir "${build_root}/build" --output-on-failure
 cmake --install "${build_root}/build" --config Release
 
+openssl_root="${OPENSSL_ROOT_DIR:-$(brew --prefix openssl@3)}"
+openssl_root="$(cd "${openssl_root}" && pwd -P)"
+openssl_license="${openssl_root}/LICENSE.txt"
+if [[ ! -f "${openssl_license}" ]]; then
+    echo "OpenSSL license not found at ${openssl_license}" >&2
+    exit 1
+fi
+openssl_version="$("${openssl_root}/bin/openssl" version | awk '{print $2}')"
+if [[ ! "${openssl_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "could not determine the bundled OpenSSL version" >&2
+    exit 1
+fi
+mkdir -p \
+    "${build_root}/stage/share/doc/rl-c-client/third-party" \
+    "${build_root}/stage/share/rl-c-client"
+cp "${openssl_license}" \
+    "${build_root}/stage/share/doc/rl-c-client/third-party/OpenSSL-LICENSE.txt"
+python3 "${source_dir}/tools/write_dependency_sbom.py" \
+    --output "${build_root}/stage/share/rl-c-client/dependencies.spdx.json" \
+    --project-version "${version}" \
+    --openssl-version "${openssl_version}"
+
 library="${build_root}/stage/lib/librclient.${version}.dylib"
 test -f "${library}"
 file "${library}" | grep -F "$(uname -m)"

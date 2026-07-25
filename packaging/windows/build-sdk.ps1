@@ -137,6 +137,39 @@ try {
     $toolchainMetadataDirectory = Join-Path $stageDirectory "share/rl-c-client"
     New-Item -ItemType Directory -Force `
         -Path $toolchainMetadataDirectory | Out-Null
+    $opensslCopyright = Join-Path $resolvedVcpkgRoot (
+        "installed/$($architectureConfig.vcpkg_triplet)/share/openssl/copyright"
+    )
+    if (-not (Test-Path $opensslCopyright -PathType Leaf)) {
+        throw "Installed OpenSSL license does not exist: $opensslCopyright"
+    }
+    $opensslPackage = & (Join-Path $resolvedVcpkgRoot "vcpkg.exe") list (
+        "openssl:$($architectureConfig.vcpkg_triplet)"
+    )
+    Assert-NativeSuccess "OpenSSL version query"
+    $opensslLine = $opensslPackage |
+        Where-Object { $_ -match "^openssl:" } |
+        Select-Object -First 1
+    if ($null -eq $opensslLine -or $opensslLine -notmatch "\s([0-9]+\.[0-9]+\.[0-9]+)") {
+        throw "Could not determine the installed OpenSSL version"
+    }
+    $opensslVersion = $Matches[1]
+    $thirdPartyLicenseDirectory = Join-Path $stageDirectory (
+        "share/doc/rl-c-client/third-party"
+    )
+    New-Item -ItemType Directory -Force `
+        -Path $thirdPartyLicenseDirectory | Out-Null
+    Copy-Item $opensslCopyright (
+        Join-Path $thirdPartyLicenseDirectory "OpenSSL-LICENSE.txt"
+    )
+    & python (Join-Path $sourceDirectory "tools/write_dependency_sbom.py") `
+        --output (
+            Join-Path $toolchainMetadataDirectory "dependencies.spdx.json"
+        ) `
+        --project-version $Version `
+        --openssl-version $opensslVersion
+    Assert-NativeSuccess "Dependency SPDX SBOM generation"
+
     [ordered]@{
         architecture = $Architecture
         msvc_runtime = "MultiThreaded"

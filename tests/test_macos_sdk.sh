@@ -35,6 +35,9 @@ test -f "${archive}"
 tar -xzf "${archive}" -C "${tmp_dir}"
 sdk_root="${tmp_dir}/rl-c-client-1.2.3-macos-${release_arch}"
 library="${sdk_root}/lib/librclient.1.2.3.dylib"
+test -s \
+    "${sdk_root}/share/doc/rl-c-client/third-party/OpenSSL-LICENSE.txt"
+test -s "${sdk_root}/share/rl-c-client/dependencies.spdx.json"
 
 file "${library}" | grep -F "${machine}"
 otool -D "${library}" | grep -F "@rpath/librclient.1.dylib"
@@ -76,6 +79,19 @@ assert manifest["commit"] == "0123456789abcdef0123456789abcdef01234567"
 assert manifest["files"] == sorted(
     manifest["files"], key=lambda item: item["path"]
 )
+paths = {entry["path"] for entry in manifest["files"]}
+assert "share/doc/rl-c-client/third-party/OpenSSL-LICENSE.txt" in paths
+assert "share/rl-c-client/dependencies.spdx.json" in paths
+
+dependencies = json.loads(
+    (
+        Path(sys.argv[1]).parent
+        / "share/rl-c-client/dependencies.spdx.json"
+    ).read_text(encoding="utf-8")
+)
+packages = {package["name"]: package for package in dependencies["packages"]}
+assert packages["OpenSSL"]["licenseDeclared"] == "Apache-2.0"
+assert packages["OpenSSL"]["versionInfo"].count(".") == 2
 PY
 
 echo "test_macos_sdk: PASS"
