@@ -1,4 +1,4 @@
-if(NOT PROJECT_IS_TOP_LEVEL)
+if(NOT RCLIENT_IS_TOP_LEVEL)
     message(FATAL_ERROR
         "RCLIENT_PACKAGE_FORMAT may only be used for a top-level build")
 endif()

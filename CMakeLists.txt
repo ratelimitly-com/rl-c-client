@@ -14,6 +14,11 @@ endif()
 
 project(rl-c-client VERSION "${RCLIENT_VERSION}" LANGUAGES C)
 
+set(RCLIENT_IS_TOP_LEVEL OFF)
+if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
+    set(RCLIENT_IS_TOP_LEVEL ON)
+endif()
+
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 include(cmake/rclient-msvc-runtime.cmake)
@@ -23,7 +28,7 @@ option(RCLIENT_BUILD_SHARED "Build the shared rl-c-client library" ON)
 option(RCLIENT_BUILD_TESTS "Build rl-c-client tests" OFF)
 option(RCLIENT_BUILD_EXAMPLES "Build rl-c-client examples" OFF)
 option(RCLIENT_ENABLE_INSTALL "Enable rl-c-client install rules"
-       "${PROJECT_IS_TOP_LEVEL}")
+       "${RCLIENT_IS_TOP_LEVEL}")
 option(RCLIENT_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(RCLIENT_BUNDLE_OPENSSL
        "Statically link OpenSSL into the shared library" OFF)
