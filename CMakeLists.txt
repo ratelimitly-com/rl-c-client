@@ -9,7 +9,6 @@ endif()
 
 project(rl-c-client VERSION "${RCLIENT_VERSION}" LANGUAGES C)
 
-include(CTest)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
@@ -146,6 +145,7 @@ endif()
 add_library(rclient::rclient ALIAS rclient)
 
 if(RCLIENT_BUILD_TESTS)
+    include(CTest)
     enable_testing()
     add_executable(rclient-test-public-api tests/test_public_api.c)
     target_compile_features(rclient-test-public-api PRIVATE c_std_11)
