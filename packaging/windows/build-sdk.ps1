@@ -176,13 +176,17 @@ try {
     )
     & cmake @configureArguments
     Assert-NativeSuccess "Windows CMake configure"
-    $selectedToolset = Select-String `
-        -Path (Join-Path $buildDirectory "CMakeCache.txt") `
-        -Pattern "^CMAKE_VS_PLATFORM_TOOLSET_VERSION:[^=]+=(.+)$"
+    $selectedToolsetFile = Join-Path $buildDirectory (
+        "rclient-vs-toolset-version.txt"
+    )
+    if (-not (Test-Path $selectedToolsetFile -PathType Leaf)) {
+        throw "CMake did not report the selected MSVC toolset"
+    }
+    $selectedToolset = (
+        Get-Content $selectedToolsetFile -Raw
+    ).Trim()
     if (
-        $null -eq $selectedToolset -or
-        $selectedToolset.Matches[0].Groups[1].Value -ne
-        $config.msvc_toolset_version
+        $selectedToolset -ne $config.msvc_toolset_version
     ) {
         throw "CMake did not select the pinned MSVC toolset"
     }
