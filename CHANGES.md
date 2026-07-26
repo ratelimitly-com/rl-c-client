@@ -1,5 +1,13 @@
 # Changes
 
+## 0.4.0 - 2026-07-26
+
+- Made oldest-trusted-server response selection the default resource-request
+  strategy.
+- Added 20 ms attempt timing and retries through the 300 ms deduplication
+  window when no valid response arrives.
+- Documented the logical-request retry and response-selection behavior.
+
 ## Unreleased
 
 - Added native Ubuntu, Debian, Fedora, macOS, and Windows release artifacts for

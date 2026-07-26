@@ -7,7 +7,7 @@ import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_VERSION = "0.3.0"
+EXPECTED_VERSION = "0.4.0"
 
 
 def main():
