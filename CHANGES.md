@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+- Added the opt-in `R_RESEND_MISSING_BEFORE_RETURN` policy. When the first
+  oldest-first interval has a valid result, it makes a best-effort
+  fire-and-forget resend to servers that did not answer before returning the
+  selected result.
 - Added the explicit two-round oldest-first HA response mode and made it the
   default. It resends once after a silent first interval, then uses a
   receive-only first-valid grace interval after a silent second interval. Its

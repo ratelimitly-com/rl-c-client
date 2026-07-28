@@ -109,6 +109,7 @@ static const char *perf_retry_on_label(r_retry_on_t retry_on) {
 
 static const char *perf_retry_resend_label(r_resend_policy_t resend) {
     switch (resend) {
+        case R_RESEND_MISSING_BEFORE_RETURN: return "missing-before-return";
         case R_RESEND_MISSING_ONLY: return "missing";
         case R_RESEND_ALL:
         default: return "all";
@@ -993,6 +994,10 @@ static bool perf_parse_retry_resend(const char *value, r_resend_policy_t *out) {
         *out = R_RESEND_MISSING_ONLY;
         return true;
     }
+    if (strcmp(value, "missing-before-return") == 0) {
+        *out = R_RESEND_MISSING_BEFORE_RETURN;
+        return true;
+    }
     return false;
 }
 
@@ -1008,7 +1013,7 @@ static perf_config_t perf_config_from_args(int argc, char **argv) {
     cfg.has_duration = false;
     cfg.duration_secs = 0;
     cfg.bucket_prefix = "perf_bucket";
-    cfg.attempt_timeout_ms = 500;
+    cfg.attempt_timeout_ms = 20;
     cfg.retry_attempts = 0;
     cfg.retry_on = R_RETRY_NEVER;
     cfg.retry_resend = R_RESEND_ALL;
@@ -1076,7 +1081,8 @@ static perf_config_t perf_config_from_args(int argc, char **argv) {
 
     const char *retry_resend = perf_find_arg(argc, argv, "--retry-resend");
     if (retry_resend && !perf_parse_retry_resend(retry_resend, &cfg.retry_resend)) {
-        fprintf(stderr, "Invalid --retry-resend value '%s' (expected all / missing)\n",
+        fprintf(stderr, "Invalid --retry-resend value '%s' "
+                "(expected all / missing / missing-before-return)\n",
                 retry_resend);
         exit(2);
     }
@@ -1105,10 +1111,10 @@ static void perf_print_help(void) {
     printf("  --auth=<bech32>         Tenant auth Bech32 key (rl-cookie... or rl-aes...)\n");
     printf("                         Tenant ID is derived from the embedded key_id\n");
     printf("  --bucket-prefix=<name>  Bucket name prefix (default: perf_bucket)\n");
-    printf("  --attempt-timeout-ms=<n> Per-attempt UDP reply deadline (default: 500)\n");
+    printf("  --attempt-timeout-ms=<n> Per-attempt UDP reply deadline (default: 20)\n");
     printf("  --retry-attempts=<n>    Retry count after the first attempt (default: 0)\n");
     printf("  --retry-on=<mode>       Retry trigger: timeout | quorum | inconsistent | never\n");
-    printf("  --retry-resend=<mode>   Retry resend policy: all | missing\n");
+    printf("  --retry-resend=<mode>   Retry resend: all | missing | missing-before-return\n");
     printf("  --retry-total-timeout-ms=<n> Overall timeout cap across retries (0 disables cap)\n");
     printf("  --retry-refresh-dns     Refresh DNS before retry attempts\n");
     printf("  --ignore-steering       Ignore steering_feedback from server\n");
@@ -1117,7 +1123,7 @@ static void perf_print_help(void) {
     printf("  perf_client --clients=50 --requests=10000 --auth=rl-aes1...\n");
     printf("  perf_client --duration=60 --auth=rl-aes1...\n");
     printf("  perf_client --srv=custom.example.com --duration=30 --clients=50 --auth=rl-aes1...\n");
-    printf("  perf_client --attempt-timeout-ms=750 --retry-attempts=2 --retry-on=timeout --auth=rl-aes1...\n");
+    printf("  perf_client --attempt-timeout-ms=50 --retry-resend=missing-before-return --auth=rl-aes1...\n");
 }
 
 static void *perf_progress_thread(void *arg) {

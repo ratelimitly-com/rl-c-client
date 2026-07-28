@@ -111,6 +111,9 @@ typedef enum r_retry_on {
 typedef enum r_resend_policy {
     R_RESEND_ALL = 0,
     R_RESEND_MISSING_ONLY = 1,
+    // In the two-round oldest-first mode, best-effort resend to servers that
+    // did not answer phase one before returning its selected result.
+    R_RESEND_MISSING_BEFORE_RETURN = 2,
 } r_resend_policy_t;
 
 typedef enum r_backoff_kind {

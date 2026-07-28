@@ -267,7 +267,7 @@ the request with `RCLIENT_ERR_TIMEOUT`. The final interval sends no datagram.
 This mode has exactly one resend; `retry.retry_attempts` applies to the generic
 wait policies and does not change the mode's three phases. The second send
 always targets the request's original endpoint snapshot; the generic retry
-selection, backoff, and DNS-refresh fields do not alter this choreography.
+count, trigger, backoff, and DNS-refresh fields do not alter this choreography.
 Phase deadlines are absolute at one, two, and three base intervals after the
 request starts, so late host timer delivery cannot extend the request lifetime.
 Its effective deduplication TTL is exactly `3 * attempt_timeout_ms`;
@@ -275,6 +275,21 @@ Its effective deduplication TTL is exactly `3 * attempt_timeout_ms`;
 creation fails with `RCLIENT_ERR_CONFIG` if the multiplication overflows the
 wire field, exceeds the API key's `dedup_ttl_ms_max` quota, or a nonzero
 `retry.total_timeout_ms` is shorter than the derived TTL.
+
+Set
+`policy.retry.resend = R_RESEND_MISSING_BEFORE_RETURN` to enable an optional
+phase-one convergence fan-out. If phase one reaches its deadline with at least
+one valid response, the client first makes a best-effort resend of the same
+logical request, with the same `unique_id`, to every server in the request
+snapshot that did not provide a valid response, and then returns the normally
+selected result. A server with multiple resolved addresses is considered to
+have responded when any valid authenticated response carrying that server ID
+arrives. When server IDs are unavailable, matching falls back to source
+addresses. The client does not wait for responses to these sends, and a send
+failure cannot replace the selected result. This option does not run when the
+oldest server responds before the deadline and does not extend any phase or the
+deduplication TTL. `R_RESEND_ALL`, the default, preserves the base heuristic
+without this completion fan-out.
 
 `cfg.request_policy` is borrowed only for the duration of `r_client_create`; the
 client copies the policy by value and does not retain the caller's pointer.

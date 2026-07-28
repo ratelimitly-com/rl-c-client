@@ -98,7 +98,7 @@ struct r_client_req {
     bool owns_guards;
     bool owns_metrics_label;
 
-    r_addr_t *targets;
+    r_server_endpoint_t *targets;
     size_t target_count;
     uint64_t *allowed_ids;
     size_t allowed_id_count;
@@ -1090,14 +1090,17 @@ static int r_request_snapshot_targets(r_client_t *client, r_client_req_t *req) {
     if (!client || !req || client->server_count == 0) {
         return RCLIENT_ERR_DNS;
     }
-    req->targets = (r_addr_t *)calloc(client->server_count, sizeof(r_addr_t));
+    req->targets = (r_server_endpoint_t *)calloc(
+        client->server_count,
+        sizeof(r_server_endpoint_t)
+    );
     if (!req->targets) {
         return RCLIENT_ERR_NOMEM;
     }
     req->target_count = client->server_count;
     bool has_unknown = false;
     for (size_t i = 0; i < client->server_count; i++) {
-        req->targets[i] = client->servers[i].addr;
+        req->targets[i] = client->servers[i];
         if (!client->servers[i].has_server_id) {
             has_unknown = true;
         }
@@ -1253,12 +1256,71 @@ static int r_send_packet_to_targets(r_client_t *client, r_client_req_t *req, con
         return RCLIENT_ERR_IO;
     }
     for (size_t i = 0; i < req->target_count; i++) {
-        int rc = client->io.udp_send(client->io.ctx, &req->targets[i], packet, packet_len);
+        int rc = client->io.udp_send(
+            client->io.ctx,
+            &req->targets[i].addr,
+            packet,
+            packet_len
+        );
         if (rc != 0) {
             return RCLIENT_ERR_IO;
         }
     }
     return RCLIENT_OK;
+}
+
+static bool r_request_target_responded(
+    const r_client_req_t *req,
+    const r_server_endpoint_t *target
+) {
+    if (!req || !target) {
+        return false;
+    }
+    if (target->has_server_id) {
+        for (size_t i = 0; i < req->seen_server_id_count; i++) {
+            if (req->seen_server_ids[i] == target->server_id) {
+                return true;
+            }
+        }
+        return false;
+    }
+    for (size_t i = 0; i < req->seen_addr_count; i++) {
+        if (r_addr_equal(&req->seen_addrs[i], &target->addr)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void r_request_resend_missing_best_effort(
+    r_client_t *client,
+    r_client_req_t *req
+) {
+    if (!client || !req || !client->io.udp_send) {
+        return;
+    }
+    uint8_t packet[R_MAX_PACKET_SIZE];
+    size_t packet_len = 0;
+    if (r_build_rate_request_packet(
+            client,
+            req,
+            packet,
+            sizeof(packet),
+            &packet_len
+        ) != RCLIENT_OK) {
+        return;
+    }
+    for (size_t i = 0; i < req->target_count; i++) {
+        if (r_request_target_responded(req, &req->targets[i])) {
+            continue;
+        }
+        (void)client->io.udp_send(
+            client->io.ctx,
+            &req->targets[i].addr,
+            packet,
+            packet_len
+        );
+    }
 }
 
 static int r_extract_pdu_data(
@@ -2289,6 +2351,12 @@ int r_client_on_timeout(
                         (void)r_dns_maybe_refresh(client, true);
                     }
                     return r_request_retry_now(client, req, now_ms);
+                }
+                if (client->policy.wait == R_WAIT_TWO_ROUND_OLDEST_THEN_FIRST
+                    && req->phase == R_REQUEST_PHASE_TWO_ROUND_FIRST
+                    && client->policy.retry.resend
+                        == R_RESEND_MISSING_BEFORE_RETURN) {
+                    r_request_resend_missing_best_effort(client, req);
                 }
                 r_request_complete(client, req, RCLIENT_OK, selected);
                 return RCLIENT_OK;

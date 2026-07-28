@@ -77,6 +77,12 @@ sends nothing and returns the first valid response received. The request fails
 if that interval is also silent. This mode derives its deduplication TTL as
 exactly three times `attempt_timeout_ms`.
 
+Callers may opt into a best-effort convergence fan-out by setting
+`policy.retry.resend = R_RESEND_MISSING_BEFORE_RETURN`. When phase one times out
+with a valid result, the client resends the same logical request only to
+servers that did not answer, then returns the selected result without waiting
+for their responses.
+
 This repository contains the public C API and integration contract. Applications
 do not construct or parse Ratelimitly packets directly; the library owns packet
 encoding, authentication, response parsing, retry policy, and server selection.
@@ -384,7 +390,7 @@ bin/perf_client --clients=50 --requests=10000 --auth=rl-aes1...
 bin/perf_client --duration=60 --auth=rl-aes1...
 bin/perf_client --srv=api-key.example.com --duration=30 --clients=50 --auth=rl-aes1...
 RCLIENT_DNS_SERVER=127.0.0.1:5353 bin/perf_client --auth=rl-aes1...
-bin/perf_client --attempt-timeout-ms=750 --retry-attempts=2 --retry-on=timeout --auth=rl-aes1...
+bin/perf_client --attempt-timeout-ms=50 --retry-resend=missing-before-return --auth=rl-aes1...
 ```
 
 Without `--srv`, the perf client derives
@@ -396,7 +402,7 @@ Retry-related flags:
 - `--attempt-timeout-ms=<n>`
 - `--retry-attempts=<n>`
 - `--retry-on=timeout|quorum|inconsistent|never`
-- `--retry-resend=all|missing`
+- `--retry-resend=all|missing|missing-before-return`
 - `--retry-total-timeout-ms=<n>`
 - `--retry-refresh-dns`
 

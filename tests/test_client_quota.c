@@ -17,6 +17,8 @@ typedef struct test_ctx {
     uint8_t last_packet[R_MAX_PACKET_SIZE];
     size_t last_packet_len;
     size_t send_count;
+    size_t fail_send_number;
+    r_addr_t last_to;
     uint64_t now_ms;
     char last_srv_name[256];
     r_dns_srv_cb pending_srv_cb;
@@ -40,12 +42,15 @@ typedef struct result_cb_ctx {
 } result_cb_ctx_t;
 
 static int test_udp_send(void *ctx, const r_addr_t *to, const uint8_t *buf, size_t len) {
-    (void)to;
     test_ctx_t *test = (test_ctx_t *)ctx;
     assert(len <= sizeof(test->last_packet));
     memcpy(test->last_packet, buf, len);
     test->last_packet_len = len;
+    test->last_to = *to;
     test->send_count += 1;
+    if (test->fail_send_number == test->send_count) {
+        return -1;
+    }
     return 0;
 }
 
@@ -257,12 +262,25 @@ static void cancel_same_request_cb(
     r_client_cancel_request(ctx->client, req);
 }
 
-static void fill_loopback_addr(r_addr_t *addr) {
+static void fill_ipv4_addr(r_addr_t *addr, const char *ip) {
     memset(addr, 0, sizeof(*addr));
     struct sockaddr_in *sin = (struct sockaddr_in *)&addr->sa;
     sin->sin_family = AF_INET;
-    inet_pton(AF_INET, "127.0.0.1", &sin->sin_addr);
+    assert(inet_pton(AF_INET, ip, &sin->sin_addr) == 1);
     addr->len = sizeof(*sin);
+}
+
+static void fill_loopback_addr(r_addr_t *addr) {
+    fill_ipv4_addr(addr, "127.0.0.1");
+}
+
+static void assert_ipv4_addr(const r_addr_t *addr, const char *expected_ip) {
+    assert(addr != NULL);
+    assert(addr->sa.ss_family == AF_INET);
+    struct in_addr expected;
+    assert(inet_pton(AF_INET, expected_ip, &expected) == 1);
+    const struct sockaddr_in *sin = (const struct sockaddr_in *)&addr->sa;
+    assert(memcmp(&sin->sin_addr, &expected, sizeof(expected)) == 0);
 }
 
 static void write_le16(uint8_t *p, uint16_t v) {
@@ -299,7 +317,10 @@ static r_client_t *make_client(test_ctx_t *ctx) {
     return client;
 }
 
-static r_client_t *make_two_server_client(test_ctx_t *ctx) {
+static r_client_t *make_two_server_client_with_policy(
+    test_ctx_t *ctx,
+    const r_request_policy_t *policy
+) {
     r_io_ops_t io = {
         .ctx = ctx,
         .udp_send = test_udp_send,
@@ -317,11 +338,16 @@ static r_client_t *make_two_server_client(test_ctx_t *ctx) {
     config.tenant.key_id = 2;
     config.tenant.auth.type = R_AUTH_COOKIE;
     config.tenant.auth.secret = SAMPLE_COOKIE_KEY_TENANT_2;
+    config.request_policy = policy;
 
     r_client_t *client = NULL;
     assert(r_client_create(&config, &io, &resolver, &client) == RCLIENT_OK);
     assert(client != NULL);
     return client;
+}
+
+static r_client_t *make_two_server_client(test_ctx_t *ctx) {
+    return make_two_server_client_with_policy(ctx, NULL);
 }
 
 static r_client_t *make_client_with_policy(
@@ -1090,6 +1116,98 @@ static void test_two_round_policy_waits_for_oldest_and_returns_best_at_deadline(
     r_client_destroy(client);
 }
 
+static void test_two_round_policy_can_resend_missing_before_return(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    r_request_policy_t policy;
+    r_client_default_request_policy(&policy);
+    policy.retry.resend = R_RESEND_MISSING_BEFORE_RETURN;
+    r_client_t *client = make_two_server_client_with_policy(&ctx, &policy);
+    result_cb_ctx_t result;
+    memset(&result, 0, sizeof(result));
+    r_resource_request_t resource = sample_resource();
+    r_client_req_t *req = NULL;
+    assert(r_client_check_rate_limit_async(
+        client, &resource, 1, NULL, 0, NULL, 0,
+        record_rate_limit_cb, &result, &req
+    ) == RCLIENT_OK);
+    assert(ctx.send_count == 2u);
+
+    r_tenant_header_t request_tenant;
+    size_t pos = 0;
+    assert(r_parse_tenant_header(
+        ctx.last_packet, ctx.last_packet_len, &request_tenant, &pos
+    ) == RCLIENT_OK);
+    uint8_t request_id[sizeof(request_tenant.unique_id)];
+    memcpy(request_id, request_tenant.unique_id, sizeof(request_id));
+
+    uint8_t response[R_MAX_PACKET_SIZE];
+    size_t response_len = build_cookie_success_response_from(
+        2u, request_id, response, sizeof(response));
+    r_addr_t from;
+    fill_ipv4_addr(&from, "127.0.0.2");
+    assert(r_client_on_datagram(client, response, response_len, &from) == RCLIENT_OK);
+    assert(result.calls == 0);
+
+    uint64_t deadline = 0;
+    assert(r_client_request_deadline_ms(req, &deadline) == RCLIENT_OK);
+    assert(r_client_on_timeout(client, req, deadline) == RCLIENT_OK);
+    assert(result.calls == 1);
+    assert(result.status == RCLIENT_OK);
+    assert(result.server_id == 2u);
+    assert(ctx.send_count == 3u);
+    assert_ipv4_addr(&ctx.last_to, "127.0.0.1");
+
+    r_tenant_header_t resent_tenant;
+    pos = 0;
+    assert(r_parse_tenant_header(
+        ctx.last_packet, ctx.last_packet_len, &resent_tenant, &pos
+    ) == RCLIENT_OK);
+    assert(memcmp(
+        resent_tenant.unique_id, request_id, sizeof(request_id)
+    ) == 0);
+    r_client_destroy(client);
+}
+
+static void test_two_round_missing_resend_failure_does_not_replace_result(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    r_request_policy_t policy;
+    r_client_default_request_policy(&policy);
+    policy.retry.resend = R_RESEND_MISSING_BEFORE_RETURN;
+    r_client_t *client = make_two_server_client_with_policy(&ctx, &policy);
+    result_cb_ctx_t result;
+    memset(&result, 0, sizeof(result));
+    r_resource_request_t resource = sample_resource();
+    r_client_req_t *req = NULL;
+    assert(r_client_check_rate_limit_async(
+        client, &resource, 1, NULL, 0, NULL, 0,
+        record_rate_limit_cb, &result, &req
+    ) == RCLIENT_OK);
+
+    r_tenant_header_t request_tenant;
+    size_t pos = 0;
+    assert(r_parse_tenant_header(
+        ctx.last_packet, ctx.last_packet_len, &request_tenant, &pos
+    ) == RCLIENT_OK);
+    uint8_t response[R_MAX_PACKET_SIZE];
+    size_t response_len = build_cookie_success_response_from(
+        2u, request_tenant.unique_id, response, sizeof(response));
+    r_addr_t from;
+    fill_ipv4_addr(&from, "127.0.0.2");
+    assert(r_client_on_datagram(client, response, response_len, &from) == RCLIENT_OK);
+
+    ctx.fail_send_number = 3u;
+    uint64_t deadline = 0;
+    assert(r_client_request_deadline_ms(req, &deadline) == RCLIENT_OK);
+    assert(r_client_on_timeout(client, req, deadline) == RCLIENT_OK);
+    assert(ctx.send_count == 3u);
+    assert(result.calls == 1);
+    assert(result.status == RCLIENT_OK);
+    assert(result.server_id == 2u);
+    r_client_destroy(client);
+}
+
 static void test_two_round_policy_returns_oldest_immediately(void) {
     test_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
@@ -1171,6 +1289,8 @@ int main(void) {
     test_two_round_policy_late_timers_remain_bounded_by_dedup_ttl();
     test_two_round_policy_grace_returns_first_valid_without_resend();
     test_two_round_policy_waits_for_oldest_and_returns_best_at_deadline();
+    test_two_round_policy_can_resend_missing_before_return();
+    test_two_round_missing_resend_failure_does_not_replace_result();
     test_two_round_policy_returns_oldest_immediately();
     test_two_round_policy_rejects_ttl_above_credential_limit();
     test_two_round_policy_rejects_shorter_total_timeout();
