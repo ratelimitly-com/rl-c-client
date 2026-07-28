@@ -10,6 +10,9 @@
 
 ## Unreleased
 
+- Added the explicit two-round oldest-first HA response mode and made it the
+  default. It resends once after a silent first interval, then uses a
+  receive-only first-valid grace interval after a silent second interval.
 - Added native Ubuntu, Debian, Fedora, macOS, and Windows release artifacts for
   AMD64 and AArch64, including a universal macOS SDK.
 - Added deterministic embeddable source archives, exact-set checksums and

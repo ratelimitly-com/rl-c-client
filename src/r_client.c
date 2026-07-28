@@ -73,6 +73,13 @@ typedef struct r_candidate {
     r_resource_result_t *resources;
 } r_candidate_t;
 
+typedef enum r_request_phase {
+    R_REQUEST_PHASE_STANDARD = 0,
+    R_REQUEST_PHASE_TWO_ROUND_FIRST,
+    R_REQUEST_PHASE_TWO_ROUND_SECOND,
+    R_REQUEST_PHASE_TWO_ROUND_GRACE,
+} r_request_phase_t;
+
 struct r_client_req {
     struct r_client_req *next;
     struct r_client *client;
@@ -104,6 +111,7 @@ struct r_client_req {
     uint32_t attempt;
     uint32_t total_attempts;
     uint32_t dedup_ttl_ms;
+    r_request_phase_t phase;
 
     r_addr_t *seen_addrs;
     size_t seen_addr_count;
@@ -457,7 +465,6 @@ static bool r_is_better_candidate(
     if (cand_start_s != best_start_s) {
         return cand_start_s < best_start_s;
     }
-
     uint64_t cand_valid = cand_stats ? cand_stats->valid_responses : 0;
     uint64_t best_valid = best_stats ? best_stats->valid_responses : 0;
     if (cand_valid != best_valid) {
@@ -471,6 +478,13 @@ static bool r_is_better_candidate(
         ? (best_stats->auth_fail + best_stats->decrypt_fail + best_stats->timeouts + best_stats->id_mismatch)
         : 0;
     return cand_penalty < best_penalty;
+}
+
+static bool r_server_is_older(uint64_t candidate_id, uint64_t current_id) {
+    uint64_t candidate_start_s = r_server_start_s_from_id(candidate_id);
+    uint64_t current_start_s = r_server_start_s_from_id(current_id);
+    return candidate_start_s < current_start_s
+        || (candidate_start_s == current_start_s && candidate_id < current_id);
 }
 
 static bool r_is_oldest_known_server(const r_client_req_t *req, uint64_t server_id) {
@@ -1754,6 +1768,8 @@ static int r_client_check_rate_limit_async_impl(
     req->dedup_deadline_ms = req->start_ms + (uint64_t)req->dedup_ttl_ms;
     req->attempt = 0;
     req->total_attempts = client->policy.retry.retry_attempts + 1;
+    req->phase = client->policy.wait == R_WAIT_TWO_ROUND_OLDEST_THEN_FIRST
+        ? R_REQUEST_PHASE_TWO_ROUND_FIRST : R_REQUEST_PHASE_STANDARD;
     if (client->policy.retry.total_timeout_ms > 0) {
         req->total_deadline_ms = req->start_ms + client->policy.retry.total_timeout_ms;
     } else {
@@ -2101,6 +2117,14 @@ int r_client_on_datagram(
                 guard_results, guard_count, resource_results, resource_count);
             kept = true;
         }
+    } else if (client->policy.wait == R_WAIT_TWO_ROUND_OLDEST_THEN_FIRST) {
+        if (!req->best.has
+            || r_server_is_older(result.server_id, req->best.result.server_id)) {
+            r_candidate_set(&req->best, result.server_id,
+                result.steering_feedback, result.success,
+                guard_results, guard_count, resource_results, resource_count);
+            kept = true;
+        }
     } else {
         switch (client->policy.select) {
         case R_SELECT_FIRST_VALID:
@@ -2137,8 +2161,15 @@ int r_client_on_datagram(
         if (req->best.has) {
             r_request_complete(client, req, RCLIENT_OK, &req->best);
         }
-    } else if (client->policy.wait == R_WAIT_RETURN_ON_OLDEST) {
+    } else if (client->policy.wait == R_WAIT_RETURN_ON_OLDEST
+        || (client->policy.wait == R_WAIT_TWO_ROUND_OLDEST_THEN_FIRST
+            && req->phase != R_REQUEST_PHASE_TWO_ROUND_GRACE)) {
         if (req->best.has && r_is_oldest_known_server(req, server_id)) {
+            r_request_complete(client, req, RCLIENT_OK, &req->best);
+        }
+    } else if (client->policy.wait == R_WAIT_TWO_ROUND_OLDEST_THEN_FIRST
+        && req->phase == R_REQUEST_PHASE_TWO_ROUND_GRACE) {
+        if (req->best.has) {
             r_request_complete(client, req, RCLIENT_OK, &req->best);
         }
     } else if (client->policy.wait == R_WAIT_RETURN_ON_FIRST_STABLE) {
@@ -2238,6 +2269,27 @@ int r_client_on_timeout(
 
     if (!(req->best.has || req->best_allow.has || req->best_deny.has)) {
         r_stats_timeout_all(client, now_ms);
+    }
+
+    if (client->policy.wait == R_WAIT_TWO_ROUND_OLDEST_THEN_FIRST) {
+        if (req->phase == R_REQUEST_PHASE_TWO_ROUND_FIRST) {
+            req->phase = R_REQUEST_PHASE_TWO_ROUND_SECOND;
+            return r_request_retry_now(client, req, now_ms);
+        }
+        if (req->phase == R_REQUEST_PHASE_TWO_ROUND_SECOND) {
+            req->phase = R_REQUEST_PHASE_TWO_ROUND_GRACE;
+            r_request_reset_attempt_state(req);
+            req->attempt_deadline_ms = now_ms + client->policy.attempt_timeout_ms;
+            if (req->total_deadline_ms > 0
+                && req->attempt_deadline_ms > req->total_deadline_ms) {
+                req->attempt_deadline_ms = req->total_deadline_ms;
+            }
+            return RCLIENT_OK;
+        }
+        if (req->phase == R_REQUEST_PHASE_TWO_ROUND_GRACE) {
+            r_request_complete(client, req, RCLIENT_ERR_TIMEOUT, NULL);
+            return RCLIENT_OK;
+        }
     }
 
     bool should_retry = false;

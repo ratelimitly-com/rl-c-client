@@ -73,6 +73,9 @@ typedef enum r_wait_policy {
     // Prefer the oldest trusted server and retry all servers when no response
     // arrives before the attempt deadline.
     R_WAIT_RETURN_ON_OLDEST = 4,
+    // Two oldest-first fan-out rounds, followed after two silent deadlines by
+    // one receive-only interval that returns the first valid response.
+    R_WAIT_TWO_ROUND_OLDEST_THEN_FIRST = 5,
 } r_wait_policy_t;
 
 typedef enum r_response_quorum_kind {
