@@ -5,7 +5,7 @@ void r_client_default_request_policy(r_request_policy_t *out_policy) {
         return;
     }
     out_policy->attempt_timeout_ms = 20;
-    out_policy->dedup_ttl_ms = 300;
+    out_policy->dedup_ttl_ms = 60;
     out_policy->wait = R_WAIT_TWO_ROUND_OLDEST_THEN_FIRST;
     out_policy->quorum.kind = R_QUORUM_ALL;
     out_policy->quorum.count = 0;

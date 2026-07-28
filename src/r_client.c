@@ -247,16 +247,35 @@ static bool r_latency_buffer_size_quota(const r_client_t *client, uint32_t *out_
     return true;
 }
 
-static uint32_t r_effective_dedup_ttl_ms(const r_client_t *client) {
-    if (!client) {
-        return 0;
+static int r_effective_dedup_ttl_ms(
+    const r_client_t *client,
+    uint32_t *out_ttl_ms
+) {
+    if (!client || !out_ttl_ms) {
+        return RCLIENT_ERR_CONFIG;
+    }
+    if (client->policy.wait == R_WAIT_TWO_ROUND_OLDEST_THEN_FIRST) {
+        if (client->policy.attempt_timeout_ms == 0u
+            || client->policy.attempt_timeout_ms > UINT32_MAX / 3u) {
+            return RCLIENT_ERR_CONFIG;
+        }
+        uint32_t derived = (uint32_t)client->policy.attempt_timeout_ms * 3u;
+        if (client->has_quotas
+            && client->quotas.dedup_ttl_ms_max > 0u
+            && derived > client->quotas.dedup_ttl_ms_max) {
+            return RCLIENT_ERR_CONFIG;
+        }
+        *out_ttl_ms = derived;
+        return RCLIENT_OK;
     }
     if (client->has_quotas
         && client->quotas.dedup_ttl_ms_max > 0
         && client->policy.dedup_ttl_ms > client->quotas.dedup_ttl_ms_max) {
-        return client->quotas.dedup_ttl_ms_max;
+        *out_ttl_ms = client->quotas.dedup_ttl_ms_max;
+        return RCLIENT_OK;
     }
-    return client->policy.dedup_ttl_ms;
+    *out_ttl_ms = client->policy.dedup_ttl_ms;
+    return RCLIENT_OK;
 }
 
 static int r_validate_latency_guards(
@@ -1760,10 +1779,10 @@ static int r_client_check_rate_limit_async_impl(
 
     r_generate_request_id(req->request_id);
     req->start_ms = r_now_ms(client);
-    req->dedup_ttl_ms = r_effective_dedup_ttl_ms(client);
-    if (req->dedup_ttl_ms == 0u) {
+    rc = r_effective_dedup_ttl_ms(client, &req->dedup_ttl_ms);
+    if (rc != RCLIENT_OK || req->dedup_ttl_ms == 0u) {
         r_request_free(req);
-        return RCLIENT_ERR_CONFIG;
+        return rc != RCLIENT_OK ? rc : RCLIENT_ERR_CONFIG;
     }
     req->dedup_deadline_ms = req->start_ms + (uint64_t)req->dedup_ttl_ms;
     req->attempt = 0;

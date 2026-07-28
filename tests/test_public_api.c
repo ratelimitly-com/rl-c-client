@@ -75,7 +75,7 @@ static void test_default_policy_uses_two_round_oldest_then_first(void) {
     r_client_default_request_policy(&policy);
 
     assert(policy.attempt_timeout_ms == 20u);
-    assert(policy.dedup_ttl_ms == 300u);
+    assert(policy.dedup_ttl_ms == 60u);
     assert(policy.wait == R_WAIT_TWO_ROUND_OLDEST_THEN_FIRST);
     assert(policy.select == R_SELECT_BEST_BY_RELIABILITY);
     assert(policy.retry.retry_on == R_RETRY_TIMEOUT_ONLY);

@@ -323,6 +323,33 @@ static r_client_t *make_two_server_client(test_ctx_t *ctx) {
     return client;
 }
 
+static r_client_t *make_client_with_policy(
+    test_ctx_t *ctx,
+    const r_request_policy_t *policy
+) {
+    r_io_ops_t io = {
+        .ctx = ctx,
+        .udp_send = test_udp_send,
+        .now_ms = test_now_ms,
+    };
+    r_resolver_ops_t resolver = {
+        .ctx = ctx,
+        .resolve_srv = test_resolve_srv,
+        .resolve_addrs = test_resolve_addrs,
+        .cancel = test_cancel,
+    };
+    r_client_config_t config;
+    memset(&config, 0, sizeof(config));
+    config.tenant.dns_name = "example.local";
+    config.tenant.key_id = 2;
+    config.tenant.auth.type = R_AUTH_COOKIE;
+    config.tenant.auth.secret = SAMPLE_COOKIE_KEY_TENANT_2;
+    config.request_policy = policy;
+    r_client_t *client = NULL;
+    assert(r_client_create(&config, &io, &resolver, &client) == RCLIENT_OK);
+    return client;
+}
+
 static r_client_t *make_client_with_ops(
     test_ctx_t *ctx,
     const r_io_ops_t *io,
@@ -1052,6 +1079,22 @@ static void test_two_round_policy_returns_oldest_immediately(void) {
     r_client_destroy(client);
 }
 
+static void test_two_round_policy_rejects_ttl_above_credential_limit(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    r_request_policy_t policy;
+    r_client_default_request_policy(&policy);
+    policy.attempt_timeout_ms = 101u;
+    r_client_t *client = make_client_with_policy(&ctx, &policy);
+    r_resource_request_t resource = sample_resource();
+    assert(r_client_check_rate_limit_async(
+        client, &resource, 1, NULL, 0, NULL, 0,
+        noop_rate_limit_cb, NULL, NULL
+    ) == RCLIENT_ERR_CONFIG);
+    assert(ctx.send_count == 0u);
+    r_client_destroy(client);
+}
+
 int main(void) {
     test_client_derives_production_tenant_from_key();
     test_client_preserves_explicit_tenant_override();
@@ -1068,5 +1111,6 @@ int main(void) {
     test_two_round_policy_grace_returns_first_valid_without_resend();
     test_two_round_policy_waits_for_oldest_and_returns_best_at_deadline();
     test_two_round_policy_returns_oldest_immediately();
+    test_two_round_policy_rejects_ttl_above_credential_limit();
     return 0;
 }
