@@ -241,7 +241,8 @@ handles remain valid until `r_runtime_client_destroy()`.
 The host owns network receive and timers:
 
 - call `r_client_on_datagram` for UDP packets received on the client socket
-- call `r_client_request_deadline_ms` after submitting a request
+- call `r_client_request_deadline_ms` after submitting a request and again
+  after every nonterminal datagram or timeout event
 - call `r_client_on_timeout` when the host timer fires
 - call `r_client_cancel_request` if the HTTP/request context is abandoned
 
@@ -249,6 +250,11 @@ The host owns network receive and timers:
 `r_client_on_timeout` use the same Unix-epoch millisecond clock domain. This is
 separate from the monotonic duration clock used to measure protected-work
 latency.
+
+A valid non-oldest response can move the next deadline earlier, from the replay
+deadline to the response-preference deadline. Hosts must therefore re-arm from
+the value returned after processing that datagram rather than retaining the
+previous timer.
 
 AES response replay handling is tied to the request lifecycle. The authenticated
 `unique_id` in the authenticated packet header must match an in-flight request.
@@ -274,12 +280,18 @@ Its parameters are:
 | `final_preference_units` | Oldest preference within the final interval. Zero makes its first valid response immediate. |
 | `completion_delivery` | Before returning a selected allow or deny, fire-and-forget the same request to servers still missing a valid response. |
 
+`r_client_default_oldest_first_ha_policy()` initializes a standalone strategy
+block. `r_client_default_request_policy()` selects that strategy and embeds its
+defaults in the complete request policy.
+
 Both schedules use `r_ha_schedule_t`. A fixed schedule always uses
 `initial_units`; a linear schedule adds `growth.linear_step_units` per round;
 and an exponential schedule multiplies by
 `growth.exponential_factor` per round. Every schedule is capped by
 `max_units`. The policy requires positive replay gaps and
-`P(k) <= B(k)` for every transmission round.
+`P(k) <= B(k)` for every transmission round. `replay_count` must not exceed
+`R_CLIENT_HA_MAX_REPLAY_COUNT`; the credential TTL normally imposes a much
+smaller practical bound.
 
 For transmission rounds `0..N`, the complete horizon is:
 

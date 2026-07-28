@@ -33,10 +33,6 @@ typedef struct perf_config {
     const char *bucket_prefix;
     uint64_t attempt_timeout_ms;
     uint32_t retry_attempts;
-    r_retry_on_t retry_on;
-    r_resend_policy_t retry_resend;
-    bool retry_refresh_dns_on_retry;
-    uint64_t retry_total_timeout_ms;
     bool ignore_steering;
     bool debug_steering;
     const struct perf_dns_cache *dns_cache;
@@ -94,24 +90,6 @@ static const char *perf_auth_label(r_auth_type_t auth_type) {
         case R_AUTH_COOKIE: return "Cookie";
         case R_AUTH_AES_GCM: return "AES";
         default: return "Unknown";
-    }
-}
-
-static const char *perf_retry_on_label(r_retry_on_t retry_on) {
-    switch (retry_on) {
-        case R_RETRY_TIMEOUT_ONLY: return "timeout";
-        case R_RETRY_QUORUM_NOT_MET: return "quorum";
-        case R_RETRY_INCONSISTENT: return "inconsistent";
-        case R_RETRY_NEVER:
-        default: return "never";
-    }
-}
-
-static const char *perf_retry_resend_label(r_resend_policy_t resend) {
-    switch (resend) {
-        case R_RESEND_MISSING_ONLY: return "missing";
-        case R_RESEND_ALL:
-        default: return "all";
     }
 }
 
@@ -802,17 +780,8 @@ static void *perf_worker(void *arg) {
 
     r_request_policy_t policy;
     r_client_default_request_policy(&policy);
-    policy.attempt_timeout_ms = worker->config->attempt_timeout_ms;
-    policy.retry.retry_attempts = worker->config->retry_attempts;
-    policy.retry.retry_on = worker->config->retry_on;
-    policy.retry.resend = worker->config->retry_resend;
-    policy.retry.backoff.kind = R_BACKOFF_NONE;
-    policy.retry.backoff.delay_ms = 0;
-    policy.retry.backoff.base_delay_ms = 0;
-    policy.retry.backoff.max_delay_ms = 0;
-    policy.retry.backoff.jitter_ms = 0;
-    policy.retry.refresh_dns_on_retry = worker->config->retry_refresh_dns_on_retry;
-    policy.retry.total_timeout_ms = worker->config->retry_total_timeout_ms;
+    policy.oldest_first_ha.unit_ms = worker->config->attempt_timeout_ms;
+    policy.oldest_first_ha.replay_count = worker->config->retry_attempts;
     policy.dns_resync.refresh_interval_ms = 3600u * 1000u;
 
     r_auth_config_t auth;
@@ -958,44 +927,6 @@ static uint64_t perf_parse_u64(const char *value, uint64_t fallback) {
     return (uint64_t)out;
 }
 
-static bool perf_parse_retry_on(const char *value, r_retry_on_t *out) {
-    if (!value || !out) {
-        return false;
-    }
-    if (strcmp(value, "timeout") == 0) {
-        *out = R_RETRY_TIMEOUT_ONLY;
-        return true;
-    }
-    if (strcmp(value, "quorum") == 0) {
-        *out = R_RETRY_QUORUM_NOT_MET;
-        return true;
-    }
-    if (strcmp(value, "inconsistent") == 0) {
-        *out = R_RETRY_INCONSISTENT;
-        return true;
-    }
-    if (strcmp(value, "never") == 0) {
-        *out = R_RETRY_NEVER;
-        return true;
-    }
-    return false;
-}
-
-static bool perf_parse_retry_resend(const char *value, r_resend_policy_t *out) {
-    if (!value || !out) {
-        return false;
-    }
-    if (strcmp(value, "all") == 0) {
-        *out = R_RESEND_ALL;
-        return true;
-    }
-    if (strcmp(value, "missing") == 0) {
-        *out = R_RESEND_MISSING_ONLY;
-        return true;
-    }
-    return false;
-}
-
 static perf_config_t perf_config_from_args(int argc, char **argv) {
     perf_config_t cfg;
     memset(&cfg, 0, sizeof(cfg));
@@ -1008,12 +939,8 @@ static perf_config_t perf_config_from_args(int argc, char **argv) {
     cfg.has_duration = false;
     cfg.duration_secs = 0;
     cfg.bucket_prefix = "perf_bucket";
-    cfg.attempt_timeout_ms = 500;
-    cfg.retry_attempts = 0;
-    cfg.retry_on = R_RETRY_NEVER;
-    cfg.retry_resend = R_RESEND_ALL;
-    cfg.retry_refresh_dns_on_retry = false;
-    cfg.retry_total_timeout_ms = 0;
+    cfg.attempt_timeout_ms = 20;
+    cfg.retry_attempts = 1;
     cfg.ignore_steering = false;
     cfg.debug_steering = false;
 
@@ -1066,27 +993,6 @@ static perf_config_t perf_config_from_args(int argc, char **argv) {
     if (retry_attempts) {
         cfg.retry_attempts = (uint32_t)perf_parse_u64(retry_attempts, cfg.retry_attempts);
     }
-
-    const char *retry_on = perf_find_arg(argc, argv, "--retry-on");
-    if (retry_on && !perf_parse_retry_on(retry_on, &cfg.retry_on)) {
-        fprintf(stderr, "Invalid --retry-on value '%s' (expected timeout / quorum / inconsistent / never)\n",
-                retry_on);
-        exit(2);
-    }
-
-    const char *retry_resend = perf_find_arg(argc, argv, "--retry-resend");
-    if (retry_resend && !perf_parse_retry_resend(retry_resend, &cfg.retry_resend)) {
-        fprintf(stderr, "Invalid --retry-resend value '%s' (expected all / missing)\n",
-                retry_resend);
-        exit(2);
-    }
-
-    const char *retry_total_timeout = perf_find_arg(argc, argv, "--retry-total-timeout-ms");
-    if (retry_total_timeout) {
-        cfg.retry_total_timeout_ms = perf_parse_u64(retry_total_timeout, cfg.retry_total_timeout_ms);
-    }
-
-    cfg.retry_refresh_dns_on_retry = perf_has_flag(argc, argv, "--retry-refresh-dns");
 
     cfg.ignore_steering = perf_has_flag(argc, argv, "--ignore-steering");
     cfg.debug_steering = perf_has_flag(argc, argv, "--debug-steering");
@@ -1178,18 +1084,11 @@ int main(int argc, char **argv) {
     printf("Auth: %s\n", perf_auth_label(cfg.auth_type));
     printf("Tenant: %llu\n", (unsigned long long)cfg.tenant_id);
     printf("Concurrent clients: %zu\n", cfg.concurrent_clients);
-    printf("Attempt timeout: %llu ms\n", (unsigned long long)cfg.attempt_timeout_ms);
-    printf("Retry policy: attempts=%u on=%s resend=%s backoff=none",
-           cfg.retry_attempts,
-           perf_retry_on_label(cfg.retry_on),
-           perf_retry_resend_label(cfg.retry_resend));
-    if (cfg.retry_total_timeout_ms > 0) {
-        printf(" total_timeout=%llu ms", (unsigned long long)cfg.retry_total_timeout_ms);
-    }
-    if (cfg.retry_refresh_dns_on_retry) {
-        printf(" refresh_dns=true");
-    }
-    printf("\n");
+    printf(
+        "HA policy: unit=%llu ms replays=%u completion_delivery=true\n",
+        (unsigned long long)cfg.attempt_timeout_ms,
+        cfg.retry_attempts
+    );
     if (cfg.has_duration) {
         printf("Duration: %llu s\n", (unsigned long long)cfg.duration_secs);
     } else {

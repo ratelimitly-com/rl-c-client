@@ -279,6 +279,7 @@ Core operations:
 - `r_client_request_deadline_ms`
 - `r_client_on_timeout`
 - `r_client_cancel_request`
+- `r_client_default_oldest_first_ha_policy`
 - `r_client_default_request_policy`
 - `r_client_hash_id`
 - `r_client_parse_auth_key`
@@ -386,21 +387,22 @@ bin/perf_client --clients=50 --requests=10000 --auth=rl-aes1...
 bin/perf_client --duration=60 --auth=rl-aes1...
 bin/perf_client --srv=api-key.example.com --duration=30 --clients=50 --auth=rl-aes1...
 RCLIENT_DNS_SERVER=127.0.0.1:5353 bin/perf_client --auth=rl-aes1...
-bin/perf_client --attempt-timeout-ms=750 --retry-attempts=2 --retry-on=timeout --auth=rl-aes1...
+bin/perf_client --attempt-timeout-ms=20 --retry-attempts=1 --auth=rl-aes1...
 ```
 
 Without `--srv`, the perf client derives
 `c-<key-id>.p0.ratelimitly.com` from `--auth`, matching the library default.
 Use `--srv` only for a custom, development, or staging DNS zone.
 
-Retry-related flags:
+HA-policy flags:
 
 - `--attempt-timeout-ms=<n>`
 - `--retry-attempts=<n>`
-- `--retry-on=timeout|quorum|inconsistent|never`
-- `--retry-resend=all|missing`
-- `--retry-total-timeout-ms=<n>`
-- `--retry-refresh-dns`
+
+These map to the strategy's base unit `U` and replay count `N`. The perf client
+uses the default fixed replay and preference schedules, final receive-only
+interval, and completion delivery. Applications can configure the full
+strategy through `r_request_policy_t`.
 
 ## Glossary
 

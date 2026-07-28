@@ -14,6 +14,8 @@ extern "C" {
 
 /* Includes space for c-<uint64>.p0.ratelimitly.com and its trailing NUL. */
 #define R_CLIENT_DEFAULT_TENANT_DNS_CAPACITY 42u
+/* Bounds policy validation and per-request scheduler state. */
+#define R_CLIENT_HA_MAX_REPLAY_COUNT 65535u
 
 // Opaque handles.
 typedef struct r_client r_client_t;
@@ -188,9 +190,6 @@ typedef struct r_retry_policy {
 } r_retry_policy_t;
 
 typedef struct r_request_policy {
-    r_request_policy_kind_t kind;
-    r_oldest_first_ha_policy_t oldest_first_ha;
-
     // Compatibility policy. These fields are used only when kind is
     // R_REQUEST_POLICY_COMPOSED.
     uint64_t attempt_timeout_ms;
@@ -201,6 +200,10 @@ typedef struct r_request_policy {
     r_select_policy_t select;
     r_retry_policy_t retry;
     r_dns_resync_policy_t dns_resync;
+
+    // Appended so existing positional initializers retain their field order.
+    r_request_policy_kind_t kind;
+    r_oldest_first_ha_policy_t oldest_first_ha;
 } r_request_policy_t;
 
 // Client configuration.
