@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+- Replaced the hard-coded default HA choreography with one parameterized
+  oldest-first policy. Replay pacing and response preference are independent,
+  fixed/linear/exponential schedules are supported, and optional
+  outcome-independent completion delivery improves eventual convergence.
 - Added the explicit two-round oldest-first HA response mode and made it the
   default. It resends once after a silent first interval, then uses a
   receive-only first-valid grace interval after a silent second interval. Its

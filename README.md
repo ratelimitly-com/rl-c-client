@@ -61,21 +61,23 @@ framework README can focus on its readiness, timer, and shutdown rules.
 - Cookie and AES-256-GCM authentication using OpenSSL libcrypto.
 - SRV discovery for `_ratelimitly._udp.<configured-dns-name>`, followed by A/AAAA
   resolution for returned SRV targets.
-- Per-request deadlines, timeout/retry policy, quorum policy, and server
-  response selection.
+- A single parameterized oldest-first HA policy, plus compatibility policies
+  for custom wait, quorum, retry, and response-selection behavior.
 - Optional metrics labels.
 - Optional steering feedback callback for source-port rebinding.
 - Static and shared library builds.
 
-The default wait policy uses three consecutive intervals of
-`attempt_timeout_ms` (20 ms by default). In each of the first two intervals it
-prefers the oldest trusted r-server, returning that server's valid response
-immediately or the oldest valid response available at the interval deadline.
-The same logical request is retransmitted to all servers only when the first
-interval is silent. If the second interval is also silent, the final interval
-sends nothing and returns the first valid response received. The request fails
-if that interval is also silent. This mode derives its deduplication TTL as
-exactly three times `attempt_timeout_ms`.
+The default `R_REQUEST_POLICY_OLDEST_FIRST_HA` strategy uses a 20 ms base unit,
+one replay, two 20 ms oldest-preference intervals, and one final 20 ms
+receive-only interval whose first valid response wins. It derives the
+deduplication TTL as exactly 60 ms and validates it against the API-key limit.
+
+The same strategy can be configured with any bounded replay count and fixed,
+linear, or exponential replay gaps. Response-preference timing is independent
+of replay pacing: a long exponential gap never forces the client to retain an
+available response for the whole gap. Optional completion delivery
+fire-and-forgets the same deduplicated request to servers still missing a valid
+response before returning either an allow or a deny.
 
 This repository contains the public C API and integration contract. Applications
 do not construct or parse Ratelimitly packets directly; the library owns packet

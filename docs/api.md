@@ -41,7 +41,7 @@ cfg.tenant.auth.secret = auth_key;
 
 r_request_policy_t policy;
 r_client_default_request_policy(&policy);
-policy.attempt_timeout_ms = 20;
+policy.oldest_first_ha.unit_ms = 20;
 cfg.request_policy = &policy;
 
 r_client_t *client = NULL;
@@ -257,24 +257,73 @@ the same `unique_id` are ignored. The authenticated timestamp is retained as
 protocol framing, but the client does not apply a separate clock-skew freshness
 check. Keep request deadlines short and deliver timeout/cancel events promptly.
 
-The default `R_WAIT_TWO_ROUND_OLDEST_THEN_FIRST` policy uses
-`attempt_timeout_ms` as its base interval. It sends to every endpoint, returns
-immediately if the oldest server responds, and otherwise retains the oldest
-valid response until the deadline. A silent first interval causes exactly one
-resend of the same logical request. A silent second interval starts one final
-receive-only interval; its first valid response wins, and its timeout completes
-the request with `RCLIENT_ERR_TIMEOUT`. The final interval sends no datagram.
-This mode has exactly one resend; `retry.retry_attempts` applies to the generic
-wait policies and does not change the mode's three phases. The second send
-always targets the request's original endpoint snapshot; the generic retry
-selection, backoff, and DNS-refresh fields do not alter this choreography.
-Phase deadlines are absolute at one, two, and three base intervals after the
-request starts, so late host timer delivery cannot extend the request lifetime.
-Its effective deduplication TTL is exactly `3 * attempt_timeout_ms`;
-`dedup_ttl_ms` remains the configurable TTL for the generic modes. Request
-creation fails with `RCLIENT_ERR_CONFIG` if the multiplication overflows the
-wire field, exceeds the API key's `dedup_ttl_ms_max` quota, or a nonzero
-`retry.total_timeout_ms` is shorter than the derived TTL.
+The default `R_REQUEST_POLICY_OLDEST_FIRST_HA` policy is one coherent
+resource-request strategy. It owns fan-out, response selection, replay
+scheduling, completion delivery, and deduplication-TTL derivation. The generic
+`wait`, `select`, and `retry` fields are not composed with this strategy.
+
+Its parameters are:
+
+| Field | Meaning |
+| --- | --- |
+| `unit_ms` | Base time unit `U`, frozen for one request. |
+| `replay_count` | Number of replays `N` after the initial transmission. |
+| `replay_gap` | Round-duration schedule `B(k)`, in units of `U`. |
+| `preference` | Oldest-server preference schedule `P(k)`, in units of `U`. |
+| `final_receive_units` | Final receive-only duration `F`. |
+| `final_preference_units` | Oldest preference within the final interval. Zero makes its first valid response immediate. |
+| `completion_delivery` | Before returning a selected allow or deny, fire-and-forget the same request to servers still missing a valid response. |
+
+Both schedules use `r_ha_schedule_t`. A fixed schedule always uses
+`initial_units`; a linear schedule adds `growth.linear_step_units` per round;
+and an exponential schedule multiplies by
+`growth.exponential_factor` per round. Every schedule is capped by
+`max_units`. The policy requires positive replay gaps and
+`P(k) <= B(k)` for every transmission round.
+
+For transmission rounds `0..N`, the complete horizon is:
+
+```text
+H = U * (sum(B(k), k = 0..N) + F)
+```
+
+The strategy uses `H` as its wire deduplication TTL. Request creation fails
+with `RCLIENT_ERR_CONFIG` if any schedule is invalid, arithmetic overflows,
+`H` cannot be represented by the wire field, or `H` exceeds the API key's
+`dedup_ttl_ms_max`. All deadlines are absolute, and the client never initiates
+a replay or completion-delivery send at or after the deduplication deadline.
+
+At round zero the client sends to the immutable request membership snapshot.
+A valid response from the oldest server completes immediately. Other valid
+responses update the oldest candidate and wait only until that round's
+preference deadline. If the preference deadline already passed, the response
+completes immediately. A response-free replay deadline starts the next round
+and sends only to servers still missing a valid response. After the last
+transmission round, the final receive-only interval sends nothing.
+
+Completion delivery is outcome-independent and best effort. It runs before
+every successful selection path—including an immediate oldest response,
+preference-deadline fallback, and final-phase response—and never changes or
+delays the selected result.
+
+The default configuration is:
+
+```text
+U = 20 ms
+N = 1
+B(0) = B(1) = 1
+P(0) = P(1) = 1
+F = 1
+P_final = 0
+completion_delivery = true
+TTL = 3 * U = 60 ms
+```
+
+Set `policy.kind = R_REQUEST_POLICY_COMPOSED` to use the compatibility
+`wait`, quorum, selection, and generic retry fields. The retained
+`R_WAIT_TWO_ROUND_OLDEST_THEN_FIRST` value maps to the old fixed three-phase
+behavior for source compatibility; new code should configure
+`oldest_first_ha` instead.
 
 `cfg.request_policy` is borrowed only for the duration of `r_client_create`; the
 client copies the policy by value and does not retain the caller's pointer.
