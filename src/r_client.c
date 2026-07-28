@@ -265,6 +265,10 @@ static int r_effective_dedup_ttl_ms(
             && derived > client->quotas.dedup_ttl_ms_max) {
             return RCLIENT_ERR_CONFIG;
         }
+        if (client->policy.retry.total_timeout_ms > 0u
+            && client->policy.retry.total_timeout_ms < derived) {
+            return RCLIENT_ERR_CONFIG;
+        }
         *out_ttl_ms = derived;
         return RCLIENT_OK;
     }
@@ -1468,9 +1472,15 @@ static int r_request_start_attempt(r_client_t *client, r_client_req_t *req) {
         return rc;
     }
 
-    uint64_t now = r_now_ms(client);
     uint64_t attempt_timeout = client->policy.attempt_timeout_ms;
-    req->attempt_deadline_ms = now + attempt_timeout;
+    if (client->policy.wait == R_WAIT_TWO_ROUND_OLDEST_THEN_FIRST
+        && (req->phase == R_REQUEST_PHASE_TWO_ROUND_FIRST
+            || req->phase == R_REQUEST_PHASE_TWO_ROUND_SECOND)) {
+        uint64_t round = req->phase == R_REQUEST_PHASE_TWO_ROUND_FIRST ? 1u : 2u;
+        req->attempt_deadline_ms = req->start_ms + (attempt_timeout * round);
+    } else {
+        req->attempt_deadline_ms = r_now_ms(client) + attempt_timeout;
+    }
     if (req->total_deadline_ms > 0 && req->attempt_deadline_ms > req->total_deadline_ms) {
         req->attempt_deadline_ms = req->total_deadline_ms;
     }
@@ -2298,7 +2308,7 @@ int r_client_on_timeout(
         if (req->phase == R_REQUEST_PHASE_TWO_ROUND_SECOND) {
             req->phase = R_REQUEST_PHASE_TWO_ROUND_GRACE;
             r_request_reset_attempt_state(req);
-            req->attempt_deadline_ms = now_ms + client->policy.attempt_timeout_ms;
+            req->attempt_deadline_ms = req->dedup_deadline_ms;
             if (req->total_deadline_ms > 0
                 && req->attempt_deadline_ms > req->total_deadline_ms) {
                 req->attempt_deadline_ms = req->total_deadline_ms;

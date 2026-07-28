@@ -265,11 +265,16 @@ resend of the same logical request. A silent second interval starts one final
 receive-only interval; its first valid response wins, and its timeout completes
 the request with `RCLIENT_ERR_TIMEOUT`. The final interval sends no datagram.
 This mode has exactly one resend; `retry.retry_attempts` applies to the generic
-wait policies and does not change the mode's three phases. Its effective
-deduplication TTL is exactly `3 * attempt_timeout_ms`; `dedup_ttl_ms` remains
-the configurable TTL for the generic modes. Request creation fails with
-`RCLIENT_ERR_CONFIG` if the multiplication overflows the wire field or exceeds
-the API key's `dedup_ttl_ms_max` quota.
+wait policies and does not change the mode's three phases. The second send
+always targets the request's original endpoint snapshot; the generic retry
+selection, backoff, and DNS-refresh fields do not alter this choreography.
+Phase deadlines are absolute at one, two, and three base intervals after the
+request starts, so late host timer delivery cannot extend the request lifetime.
+Its effective deduplication TTL is exactly `3 * attempt_timeout_ms`;
+`dedup_ttl_ms` remains the configurable TTL for the generic modes. Request
+creation fails with `RCLIENT_ERR_CONFIG` if the multiplication overflows the
+wire field, exceeds the API key's `dedup_ttl_ms_max` quota, or a nonzero
+`retry.total_timeout_ms` is shorter than the derived TTL.
 
 `cfg.request_policy` is borrowed only for the duration of `r_client_create`; the
 client copies the policy by value and does not retain the caller's pointer.

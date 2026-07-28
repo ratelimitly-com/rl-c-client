@@ -17,6 +17,7 @@ typedef struct test_ctx {
     uint8_t last_packet[R_MAX_PACKET_SIZE];
     size_t last_packet_len;
     size_t send_count;
+    uint64_t now_ms;
     char last_srv_name[256];
     r_dns_srv_cb pending_srv_cb;
     void *pending_srv_user;
@@ -49,8 +50,8 @@ static int test_udp_send(void *ctx, const r_addr_t *to, const uint8_t *buf, size
 }
 
 static uint64_t test_now_ms(void *ctx) {
-    (void)ctx;
-    return 123456789u;
+    test_ctx_t *test = (test_ctx_t *)ctx;
+    return test && test->now_ms != 0u ? test->now_ms : 123456789u;
 }
 
 static int test_resolve_srv(
@@ -933,6 +934,7 @@ static void test_destroy_handles_dns_cancel_callback(void) {
 static void test_two_round_policy_resends_once_then_enters_receive_only_grace(void) {
     test_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
+    ctx.now_ms = 123456789u;
     r_client_t *client = make_client(&ctx);
     result_cb_ctx_t result;
     memset(&result, 0, sizeof(result));
@@ -947,19 +949,61 @@ static void test_two_round_policy_resends_once_then_enters_receive_only_grace(vo
 
     uint64_t deadline = 0;
     assert(r_client_request_deadline_ms(req, &deadline) == RCLIENT_OK);
-    assert(deadline == test_now_ms(NULL) + 20u);
+    assert(deadline == 123456789u + 20u);
+    ctx.now_ms = deadline;
     assert(r_client_on_timeout(client, req, deadline) == RCLIENT_OK);
     assert(ctx.send_count == 2u);
     assert(result.calls == 0);
 
     assert(r_client_request_deadline_ms(req, &deadline) == RCLIENT_OK);
-    assert(deadline == test_now_ms(NULL) + 20u);
+    assert(deadline == 123456789u + 40u);
+    ctx.now_ms = deadline;
     assert(r_client_on_timeout(client, req, deadline) == RCLIENT_OK);
     assert(ctx.send_count == 2u);
     assert(result.calls == 0);
 
     assert(r_client_request_deadline_ms(req, &deadline) == RCLIENT_OK);
-    assert(deadline == test_now_ms(NULL) + 40u);
+    assert(deadline == 123456789u + 60u);
+    ctx.now_ms = deadline;
+    assert(r_client_on_timeout(client, req, deadline) == RCLIENT_OK);
+    assert(result.calls == 1);
+    assert(result.status == RCLIENT_ERR_TIMEOUT);
+
+    r_client_destroy(client);
+}
+
+static void test_two_round_policy_late_timers_remain_bounded_by_dedup_ttl(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.now_ms = 123456789u;
+    r_client_t *client = make_client(&ctx);
+    result_cb_ctx_t result;
+    memset(&result, 0, sizeof(result));
+
+    r_resource_request_t resource = sample_resource();
+    r_client_req_t *req = NULL;
+    assert(r_client_check_rate_limit_async(
+        client, &resource, 1, NULL, 0, NULL, 0,
+        record_rate_limit_cb, &result, &req
+    ) == RCLIENT_OK);
+
+    uint64_t deadline = 0;
+    assert(r_client_request_deadline_ms(req, &deadline) == RCLIENT_OK);
+    assert(deadline == 123456789u + 20u);
+
+    ctx.now_ms = 123456789u + 35u;
+    assert(r_client_on_timeout(client, req, ctx.now_ms) == RCLIENT_OK);
+    assert(ctx.send_count == 2u);
+    assert(r_client_request_deadline_ms(req, &deadline) == RCLIENT_OK);
+    assert(deadline == 123456789u + 40u);
+
+    ctx.now_ms = 123456789u + 45u;
+    assert(r_client_on_timeout(client, req, ctx.now_ms) == RCLIENT_OK);
+    assert(ctx.send_count == 2u);
+    assert(r_client_request_deadline_ms(req, &deadline) == RCLIENT_OK);
+    assert(deadline == 123456789u + 60u);
+
+    ctx.now_ms = deadline;
     assert(r_client_on_timeout(client, req, deadline) == RCLIENT_OK);
     assert(result.calls == 1);
     assert(result.status == RCLIENT_ERR_TIMEOUT);
@@ -1095,6 +1139,22 @@ static void test_two_round_policy_rejects_ttl_above_credential_limit(void) {
     r_client_destroy(client);
 }
 
+static void test_two_round_policy_rejects_shorter_total_timeout(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    r_request_policy_t policy;
+    r_client_default_request_policy(&policy);
+    policy.retry.total_timeout_ms = 59u;
+    r_client_t *client = make_client_with_policy(&ctx, &policy);
+    r_resource_request_t resource = sample_resource();
+    assert(r_client_check_rate_limit_async(
+        client, &resource, 1, NULL, 0, NULL, 0,
+        noop_rate_limit_cb, NULL, NULL
+    ) == RCLIENT_ERR_CONFIG);
+    assert(ctx.send_count == 0u);
+    r_client_destroy(client);
+}
+
 int main(void) {
     test_client_derives_production_tenant_from_key();
     test_client_preserves_explicit_tenant_override();
@@ -1108,9 +1168,11 @@ int main(void) {
     test_destroy_ignores_late_dns_addr_callback();
     test_destroy_handles_dns_cancel_callback();
     test_two_round_policy_resends_once_then_enters_receive_only_grace();
+    test_two_round_policy_late_timers_remain_bounded_by_dedup_ttl();
     test_two_round_policy_grace_returns_first_valid_without_resend();
     test_two_round_policy_waits_for_oldest_and_returns_best_at_deadline();
     test_two_round_policy_returns_oldest_immediately();
     test_two_round_policy_rejects_ttl_above_credential_limit();
+    test_two_round_policy_rejects_shorter_total_timeout();
     return 0;
 }
