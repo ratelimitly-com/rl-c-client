@@ -5,16 +5,17 @@ void r_client_default_request_policy(r_request_policy_t *out_policy) {
         return;
     }
     out_policy->attempt_timeout_ms = 20;
-    out_policy->dedup_ttl_ms = 300;
-    out_policy->wait = R_WAIT_RETURN_ON_OLDEST;
+    out_policy->dedup_ttl_ms = 60;
+    out_policy->wait = R_WAIT_TWO_ROUND_OLDEST_THEN_FIRST;
     out_policy->quorum.kind = R_QUORUM_ALL;
     out_policy->quorum.count = 0;
     out_policy->quorum_requirement = R_QUORUM_SOFT;
     out_policy->select = R_SELECT_BEST_BY_RELIABILITY;
 
-    // 14 retries plus the initial send cover a 300 ms deduplication window
-    // at 20 ms attempt intervals.
-    out_policy->retry.retry_attempts = 14;
+    // The default HA mode performs exactly one resend after a silent first
+    // interval, then enters its receive-only grace interval after a silent
+    // second interval.
+    out_policy->retry.retry_attempts = 1;
     out_policy->retry.retry_on = R_RETRY_TIMEOUT_ONLY;
     out_policy->retry.backoff.kind = R_BACKOFF_NONE;
     out_policy->retry.backoff.delay_ms = 0;

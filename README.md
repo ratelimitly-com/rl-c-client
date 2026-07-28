@@ -67,11 +67,15 @@ framework README can focus on its readiness, timer, and shutdown rules.
 - Optional steering feedback callback for source-port rebinding.
 - Static and shared library builds.
 
-The default wait policy prefers the oldest trusted r-server. A valid response
-from that server completes the request immediately. At an attempt timeout, the
-oldest valid response received is selected; if no response was received, the
-same logical request is retransmitted to all servers until its deduplication
-window expires.
+The default wait policy uses three consecutive intervals of
+`attempt_timeout_ms` (20 ms by default). In each of the first two intervals it
+prefers the oldest trusted r-server, returning that server's valid response
+immediately or the oldest valid response available at the interval deadline.
+The same logical request is retransmitted to all servers only when the first
+interval is silent. If the second interval is also silent, the final interval
+sends nothing and returns the first valid response received. The request fails
+if that interval is also silent. This mode derives its deduplication TTL as
+exactly three times `attempt_timeout_ms`.
 
 This repository contains the public C API and integration contract. Applications
 do not construct or parse Ratelimitly packets directly; the library owns packet

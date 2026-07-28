@@ -42,7 +42,6 @@ cfg.tenant.auth.secret = auth_key;
 r_request_policy_t policy;
 r_client_default_request_policy(&policy);
 policy.attempt_timeout_ms = 20;
-policy.retry.retry_attempts = 0;
 cfg.request_policy = &policy;
 
 r_client_t *client = NULL;
@@ -257,6 +256,25 @@ Once that request completes, times out, or is canceled, later datagrams with
 the same `unique_id` are ignored. The authenticated timestamp is retained as
 protocol framing, but the client does not apply a separate clock-skew freshness
 check. Keep request deadlines short and deliver timeout/cancel events promptly.
+
+The default `R_WAIT_TWO_ROUND_OLDEST_THEN_FIRST` policy uses
+`attempt_timeout_ms` as its base interval. It sends to every endpoint, returns
+immediately if the oldest server responds, and otherwise retains the oldest
+valid response until the deadline. A silent first interval causes exactly one
+resend of the same logical request. A silent second interval starts one final
+receive-only interval; its first valid response wins, and its timeout completes
+the request with `RCLIENT_ERR_TIMEOUT`. The final interval sends no datagram.
+This mode has exactly one resend; `retry.retry_attempts` applies to the generic
+wait policies and does not change the mode's three phases. The second send
+always targets the request's original endpoint snapshot; the generic retry
+selection, backoff, and DNS-refresh fields do not alter this choreography.
+Phase deadlines are absolute at one, two, and three base intervals after the
+request starts, so late host timer delivery cannot extend the request lifetime.
+Its effective deduplication TTL is exactly `3 * attempt_timeout_ms`;
+`dedup_ttl_ms` remains the configurable TTL for the generic modes. Request
+creation fails with `RCLIENT_ERR_CONFIG` if the multiplication overflows the
+wire field, exceeds the API key's `dedup_ttl_ms_max` quota, or a nonzero
+`retry.total_timeout_ms` is shorter than the derived TTL.
 
 `cfg.request_policy` is borrowed only for the duration of `r_client_create`; the
 client copies the policy by value and does not retain the caller's pointer.
