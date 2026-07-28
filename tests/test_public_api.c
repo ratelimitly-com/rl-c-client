@@ -69,11 +69,38 @@ static void test_hash_id_known_vector(void) {
     assert(memcmp(id, expected, sizeof(expected)) == 0);
 }
 
-static void test_default_policy_uses_two_round_oldest_then_first(void) {
+static void assert_default_oldest_first_ha(
+    const r_oldest_first_ha_policy_t *policy
+) {
+    assert(policy->unit_ms == 20u);
+    assert(policy->replay_count == 1u);
+    assert(policy->replay_gap.kind == R_HA_SCHEDULE_FIXED);
+    assert(policy->replay_gap.initial_units == 1u);
+    assert(policy->replay_gap.max_units == 1u);
+    assert(policy->preference.kind == R_HA_SCHEDULE_FIXED);
+    assert(policy->preference.initial_units == 1u);
+    assert(policy->preference.max_units == 1u);
+    assert(policy->final_receive_units == 1u);
+    assert(policy->final_preference_units == 0u);
+    assert(policy->completion_delivery);
+}
+
+static void test_default_oldest_first_ha_policy(void) {
+    r_oldest_first_ha_policy_t policy;
+    memset(&policy, 0xff, sizeof(policy));
+    r_client_default_oldest_first_ha_policy(&policy);
+    assert_default_oldest_first_ha(&policy);
+}
+
+static void test_default_request_policy_uses_parameterized_ha(void) {
     r_request_policy_t policy;
     memset(&policy, 0, sizeof(policy));
     r_client_default_request_policy(&policy);
 
+    assert(policy.kind == R_REQUEST_POLICY_OLDEST_FIRST_HA);
+    assert_default_oldest_first_ha(&policy.oldest_first_ha);
+
+    // Retained compatibility defaults remain fully initialized.
     assert(policy.attempt_timeout_ms == 20u);
     assert(policy.dedup_ttl_ms == 60u);
     assert(policy.wait == R_WAIT_TWO_ROUND_OLDEST_THEN_FIRST);
@@ -121,7 +148,8 @@ int main(void) {
     test_parse_aes_key();
     test_reject_invalid_key();
     test_hash_id_known_vector();
-    test_default_policy_uses_two_round_oldest_then_first();
+    test_default_oldest_first_ha_policy();
+    test_default_request_policy_uses_parameterized_ha();
     test_format_default_tenant_dns();
     return 0;
 }

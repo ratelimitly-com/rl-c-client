@@ -142,6 +142,42 @@ typedef struct r_dns_resync_policy {
     uint64_t jitter_ms;
 } r_dns_resync_policy_t;
 
+typedef enum r_request_policy_kind {
+    // Compatibility composition of wait, quorum, selection, retry, and DNS
+    // fields below.
+    R_REQUEST_POLICY_COMPOSED = 0,
+    // One coherent oldest-first HA strategy configured by oldest_first_ha.
+    R_REQUEST_POLICY_OLDEST_FIRST_HA = 1,
+} r_request_policy_kind_t;
+
+typedef enum r_ha_schedule_kind {
+    R_HA_SCHEDULE_FIXED = 0,
+    R_HA_SCHEDULE_LINEAR = 1,
+    R_HA_SCHEDULE_EXPONENTIAL = 2,
+} r_ha_schedule_kind_t;
+
+typedef union r_ha_schedule_growth {
+    uint32_t linear_step_units;
+    uint32_t exponential_factor;
+} r_ha_schedule_growth_t;
+
+typedef struct r_ha_schedule {
+    r_ha_schedule_kind_t kind;
+    uint32_t initial_units;
+    uint32_t max_units;
+    r_ha_schedule_growth_t growth;
+} r_ha_schedule_t;
+
+typedef struct r_oldest_first_ha_policy {
+    uint64_t unit_ms;
+    uint32_t replay_count;
+    r_ha_schedule_t replay_gap;
+    r_ha_schedule_t preference;
+    uint32_t final_receive_units;
+    uint32_t final_preference_units;
+    bool completion_delivery;
+} r_oldest_first_ha_policy_t;
+
 typedef struct r_retry_policy {
     uint32_t retry_attempts;
     r_retry_on_t retry_on;
@@ -152,6 +188,11 @@ typedef struct r_retry_policy {
 } r_retry_policy_t;
 
 typedef struct r_request_policy {
+    r_request_policy_kind_t kind;
+    r_oldest_first_ha_policy_t oldest_first_ha;
+
+    // Compatibility policy. These fields are used only when kind is
+    // R_REQUEST_POLICY_COMPOSED.
     uint64_t attempt_timeout_ms;
     uint32_t dedup_ttl_ms;
     r_wait_policy_t wait;
@@ -301,6 +342,9 @@ RCLIENT_API void r_client_cancel_request(
 );
 
 // Helpers.
+RCLIENT_API void r_client_default_oldest_first_ha_policy(
+    r_oldest_first_ha_policy_t *out_policy
+);
 RCLIENT_API void r_client_default_request_policy(
     r_request_policy_t *out_policy
 );

@@ -17,6 +17,8 @@ typedef struct test_ctx {
     uint8_t last_packet[R_MAX_PACKET_SIZE];
     size_t last_packet_len;
     size_t send_count;
+    r_addr_t sent_to[64];
+    size_t fail_send_number;
     uint64_t now_ms;
     char last_srv_name[256];
     r_dns_srv_cb pending_srv_cb;
@@ -37,15 +39,20 @@ typedef struct result_cb_ctx {
     int calls;
     int status;
     uint64_t server_id;
+    bool success;
 } result_cb_ctx_t;
 
 static int test_udp_send(void *ctx, const r_addr_t *to, const uint8_t *buf, size_t len) {
-    (void)to;
     test_ctx_t *test = (test_ctx_t *)ctx;
     assert(len <= sizeof(test->last_packet));
+    assert(test->send_count < sizeof(test->sent_to) / sizeof(test->sent_to[0]));
     memcpy(test->last_packet, buf, len);
     test->last_packet_len = len;
+    test->sent_to[test->send_count] = *to;
     test->send_count += 1;
+    if (test->fail_send_number == test->send_count) {
+        return -1;
+    }
     return 0;
 }
 
@@ -242,6 +249,7 @@ static void record_rate_limit_cb(
     ctx->calls += 1;
     ctx->status = status;
     ctx->server_id = result ? result->server_id : 0u;
+    ctx->success = result && result->success;
 }
 
 static void cancel_same_request_cb(
@@ -257,17 +265,37 @@ static void cancel_same_request_cb(
     r_client_cancel_request(ctx->client, req);
 }
 
-static void fill_loopback_addr(r_addr_t *addr) {
+static void fill_ipv4_addr(r_addr_t *addr, const char *ip) {
     memset(addr, 0, sizeof(*addr));
     struct sockaddr_in *sin = (struct sockaddr_in *)&addr->sa;
     sin->sin_family = AF_INET;
-    inet_pton(AF_INET, "127.0.0.1", &sin->sin_addr);
+    assert(inet_pton(AF_INET, ip, &sin->sin_addr) == 1);
     addr->len = sizeof(*sin);
+}
+
+static void fill_loopback_addr(r_addr_t *addr) {
+    fill_ipv4_addr(addr, "127.0.0.1");
+}
+
+static void assert_ipv4_addr(const r_addr_t *addr, const char *expected_ip) {
+    assert(addr != NULL);
+    assert(addr->sa.ss_family == AF_INET);
+    struct in_addr expected;
+    assert(inet_pton(AF_INET, expected_ip, &expected) == 1);
+    const struct sockaddr_in *sin = (const struct sockaddr_in *)&addr->sa;
+    assert(memcmp(&sin->sin_addr, &expected, sizeof(expected)) == 0);
 }
 
 static void write_le16(uint8_t *p, uint16_t v) {
     p[0] = (uint8_t)(v & 0xff);
     p[1] = (uint8_t)((v >> 8) & 0xff);
+}
+
+static uint32_t read_le32(const uint8_t *p) {
+    return (uint32_t)p[0]
+        | ((uint32_t)p[1] << 8)
+        | ((uint32_t)p[2] << 16)
+        | ((uint32_t)p[3] << 24);
 }
 
 static r_client_t *make_client(test_ctx_t *ctx) {
@@ -299,7 +327,10 @@ static r_client_t *make_client(test_ctx_t *ctx) {
     return client;
 }
 
-static r_client_t *make_two_server_client(test_ctx_t *ctx) {
+static r_client_t *make_two_server_client_with_policy(
+    test_ctx_t *ctx,
+    const r_request_policy_t *policy
+) {
     r_io_ops_t io = {
         .ctx = ctx,
         .udp_send = test_udp_send,
@@ -317,11 +348,16 @@ static r_client_t *make_two_server_client(test_ctx_t *ctx) {
     config.tenant.key_id = 2;
     config.tenant.auth.type = R_AUTH_COOKIE;
     config.tenant.auth.secret = SAMPLE_COOKIE_KEY_TENANT_2;
+    config.request_policy = policy;
 
     r_client_t *client = NULL;
     assert(r_client_create(&config, &io, &resolver, &client) == RCLIENT_OK);
     assert(client != NULL);
     return client;
+}
+
+static r_client_t *make_two_server_client(test_ctx_t *ctx) {
+    return make_two_server_client_with_policy(ctx, NULL);
 }
 
 static r_client_t *make_client_with_policy(
@@ -540,6 +576,43 @@ static r_resource_request_t sample_resource(void) {
     return resource;
 }
 
+static r_client_req_t *start_sample_request(
+    r_client_t *client,
+    result_cb_ctx_t *result
+) {
+    r_resource_request_t resource = sample_resource();
+    r_client_req_t *req = NULL;
+    assert(r_client_check_rate_limit_async(
+        client,
+        &resource,
+        1,
+        NULL,
+        0,
+        NULL,
+        0,
+        record_rate_limit_cb,
+        result,
+        &req
+    ) == RCLIENT_OK);
+    assert(req != NULL);
+    return req;
+}
+
+static void copy_last_request_id(
+    const test_ctx_t *ctx,
+    uint8_t out_request_id[16]
+) {
+    r_tenant_header_t tenant;
+    size_t pos = 0;
+    assert(r_parse_tenant_header(
+        ctx->last_packet,
+        ctx->last_packet_len,
+        &tenant,
+        &pos
+    ) == RCLIENT_OK);
+    memcpy(out_request_id, tenant.unique_id, 16);
+}
+
 static size_t build_cookie_success_response_from(
     uint64_t server_id,
     const uint8_t unique_id[16],
@@ -566,6 +639,51 @@ static size_t build_cookie_success_response_from(
     pos += 32;
 
     const uint8_t body[4] = {0, 0, 0, 0};
+    size_t pdu_len = 0;
+    int rc = r_build_pdu(
+        R_PDU_RATE_RESPONSE,
+        body,
+        sizeof(body),
+        out + pos,
+        out_cap - pos,
+        &pdu_len
+    );
+    assert(rc == RCLIENT_OK);
+    return pos + pdu_len;
+}
+
+static size_t build_cookie_denied_response_from(
+    uint64_t server_id,
+    const uint8_t unique_id[16],
+    uint8_t *out,
+    size_t out_cap
+) {
+    assert(out_cap >= R_MAX_PACKET_SIZE);
+    r_tenant_header_t tenant;
+    memset(&tenant, 0, sizeof(tenant));
+    tenant.tlv_type = R_TLV_TENANT;
+    tenant.tlv_size = R_TENANT_TLV_LEN;
+    tenant.key_id = server_id;
+    memcpy(tenant.unique_id, unique_id, 16);
+    tenant.time_stamp = test_now_ms(NULL);
+    tenant.steering_feedback = 1;
+
+    size_t pos = 0;
+    r_tenant_header_write(&tenant, out, out_cap);
+    pos += R_TENANT_TLV_LEN;
+    write_le16(out + pos, R_TLV_AUTH_COOKIE);
+    write_le16(out + pos + 2, 36);
+    pos += 4;
+    memset(out + pos, 2, 32);
+    pos += 32;
+
+    uint8_t body[4 + R_RESOURCE_BLOCK_WIRE_LEN];
+    memset(body, 0, sizeof(body));
+    write_le16(body, 0u);
+    write_le16(body + 2, 1u);
+    memcpy(body + 4, "bucket", 6);
+    write_le16(body + 4 + 24, 1u);
+
     size_t pdu_len = 0;
     int rc = r_build_pdu(
         R_PDU_RATE_RESPONSE,
@@ -1086,7 +1204,8 @@ static void test_two_round_policy_waits_for_oldest_and_returns_best_at_deadline(
     assert(result.calls == 1);
     assert(result.status == RCLIENT_OK);
     assert(result.server_id == 2u);
-    assert(ctx.send_count == 2u);
+    assert(ctx.send_count == 3u);
+    assert_ipv4_addr(&ctx.sent_to[2], "127.0.0.1");
     r_client_destroy(client);
 }
 
@@ -1128,7 +1247,7 @@ static void test_two_round_policy_rejects_ttl_above_credential_limit(void) {
     memset(&ctx, 0, sizeof(ctx));
     r_request_policy_t policy;
     r_client_default_request_policy(&policy);
-    policy.attempt_timeout_ms = 101u;
+    policy.oldest_first_ha.unit_ms = 101u;
     r_client_t *client = make_client_with_policy(&ctx, &policy);
     r_resource_request_t resource = sample_resource();
     assert(r_client_check_rate_limit_async(
@@ -1144,6 +1263,7 @@ static void test_two_round_policy_rejects_shorter_total_timeout(void) {
     memset(&ctx, 0, sizeof(ctx));
     r_request_policy_t policy;
     r_client_default_request_policy(&policy);
+    policy.kind = R_REQUEST_POLICY_COMPOSED;
     policy.retry.total_timeout_ms = 59u;
     r_client_t *client = make_client_with_policy(&ctx, &policy);
     r_resource_request_t resource = sample_resource();
@@ -1152,6 +1272,407 @@ static void test_two_round_policy_rejects_shorter_total_timeout(void) {
         noop_rate_limit_cb, NULL, NULL
     ) == RCLIENT_ERR_CONFIG);
     assert(ctx.send_count == 0u);
+    r_client_destroy(client);
+}
+
+static void set_ha_schedule(
+    r_ha_schedule_t *schedule,
+    r_ha_schedule_kind_t kind,
+    uint32_t initial_units,
+    uint32_t max_units,
+    uint32_t growth
+) {
+    memset(schedule, 0, sizeof(*schedule));
+    schedule->kind = kind;
+    schedule->initial_units = initial_units;
+    schedule->max_units = max_units;
+    if (kind == R_HA_SCHEDULE_LINEAR) {
+        schedule->growth.linear_step_units = growth;
+    } else if (kind == R_HA_SCHEDULE_EXPONENTIAL) {
+        schedule->growth.exponential_factor = growth;
+    }
+}
+
+static uint32_t last_cookie_request_ttl(const test_ctx_t *ctx) {
+    size_t pdu_pos = R_TENANT_TLV_LEN + 4u + 32u;
+    assert(ctx->last_packet_len >= pdu_pos + R_PDU_HEADER_LEN);
+    assert(
+        ((uint16_t)ctx->last_packet[pdu_pos]
+            | ((uint16_t)ctx->last_packet[pdu_pos + 1] << 8))
+        == R_PDU_RATE_REQUEST
+    );
+    return read_le32(ctx->last_packet + pdu_pos + 4u);
+}
+
+static void test_parameterized_exponential_schedule_uses_absolute_deadlines(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.now_ms = 1000u;
+
+    r_request_policy_t policy;
+    r_client_default_request_policy(&policy);
+    policy.oldest_first_ha.unit_ms = 10u;
+    policy.oldest_first_ha.replay_count = 2u;
+    set_ha_schedule(
+        &policy.oldest_first_ha.replay_gap,
+        R_HA_SCHEDULE_EXPONENTIAL,
+        1u,
+        4u,
+        2u
+    );
+    set_ha_schedule(
+        &policy.oldest_first_ha.preference,
+        R_HA_SCHEDULE_FIXED,
+        1u,
+        1u,
+        0u
+    );
+    policy.oldest_first_ha.final_receive_units = 1u;
+    policy.oldest_first_ha.final_preference_units = 0u;
+    policy.oldest_first_ha.completion_delivery = false;
+
+    r_client_t *client = make_client_with_policy(&ctx, &policy);
+    result_cb_ctx_t result = {0};
+    r_client_req_t *req = start_sample_request(client, &result);
+    assert(ctx.send_count == 1u);
+    assert(last_cookie_request_ttl(&ctx) == 80u);
+
+    const uint64_t expected_deadlines[] = {1010u, 1030u, 1070u, 1080u};
+    for (size_t i = 0; i < 4u; i++) {
+        uint64_t deadline = 0;
+        assert(r_client_request_deadline_ms(req, &deadline) == RCLIENT_OK);
+        assert(deadline == expected_deadlines[i]);
+        ctx.now_ms = deadline;
+        assert(r_client_on_timeout(client, req, deadline) == RCLIENT_OK);
+        if (i < 2u) {
+            assert(ctx.send_count == i + 2u);
+        } else {
+            assert(ctx.send_count == 3u);
+        }
+    }
+    assert(result.calls == 1);
+    assert(result.status == RCLIENT_ERR_TIMEOUT);
+    r_client_destroy(client);
+}
+
+static void test_parameterized_linear_schedule_has_distinct_gaps(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.now_ms = 2000u;
+
+    r_request_policy_t policy;
+    r_client_default_request_policy(&policy);
+    policy.oldest_first_ha.unit_ms = 10u;
+    policy.oldest_first_ha.replay_count = 2u;
+    set_ha_schedule(
+        &policy.oldest_first_ha.replay_gap,
+        R_HA_SCHEDULE_LINEAR,
+        1u,
+        3u,
+        1u
+    );
+    set_ha_schedule(
+        &policy.oldest_first_ha.preference,
+        R_HA_SCHEDULE_FIXED,
+        1u,
+        1u,
+        0u
+    );
+    policy.oldest_first_ha.final_receive_units = 0u;
+    policy.oldest_first_ha.final_preference_units = 0u;
+    policy.oldest_first_ha.completion_delivery = false;
+
+    r_client_t *client = make_client_with_policy(&ctx, &policy);
+    result_cb_ctx_t result = {0};
+    r_client_req_t *req = start_sample_request(client, &result);
+    assert(last_cookie_request_ttl(&ctx) == 60u);
+
+    const uint64_t expected_deadlines[] = {2010u, 2030u, 2060u};
+    for (size_t i = 0; i < 3u; i++) {
+        uint64_t deadline = 0;
+        assert(r_client_request_deadline_ms(req, &deadline) == RCLIENT_OK);
+        assert(deadline == expected_deadlines[i]);
+        ctx.now_ms = deadline;
+        assert(r_client_on_timeout(client, req, deadline) == RCLIENT_OK);
+    }
+    assert(ctx.send_count == 3u);
+    assert(result.calls == 1);
+    assert(result.status == RCLIENT_ERR_TIMEOUT);
+    r_client_destroy(client);
+}
+
+static void test_parameterized_preference_is_independent_of_replay_gap(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.now_ms = 3000u;
+
+    r_request_policy_t policy;
+    r_client_default_request_policy(&policy);
+    policy.oldest_first_ha.unit_ms = 10u;
+    policy.oldest_first_ha.replay_count = 0u;
+    set_ha_schedule(
+        &policy.oldest_first_ha.replay_gap,
+        R_HA_SCHEDULE_FIXED,
+        5u,
+        5u,
+        0u
+    );
+    set_ha_schedule(
+        &policy.oldest_first_ha.preference,
+        R_HA_SCHEDULE_FIXED,
+        1u,
+        1u,
+        0u
+    );
+    policy.oldest_first_ha.final_receive_units = 0u;
+    policy.oldest_first_ha.completion_delivery = false;
+
+    r_client_t *client = make_two_server_client_with_policy(&ctx, &policy);
+    result_cb_ctx_t result = {0};
+    r_client_req_t *req = start_sample_request(client, &result);
+    uint8_t request_id[16];
+    copy_last_request_id(&ctx, request_id);
+
+    ctx.now_ms = 3005u;
+    uint8_t response[R_MAX_PACKET_SIZE];
+    size_t response_len = build_cookie_success_response_from(
+        2u, request_id, response, sizeof(response)
+    );
+    r_addr_t from;
+    fill_ipv4_addr(&from, "127.0.0.2");
+    assert(r_client_on_datagram(
+        client, response, response_len, &from
+    ) == RCLIENT_OK);
+    assert(result.calls == 0);
+
+    uint64_t deadline = 0;
+    assert(r_client_request_deadline_ms(req, &deadline) == RCLIENT_OK);
+    assert(deadline == 3010u);
+    ctx.now_ms = deadline;
+    assert(r_client_on_timeout(client, req, deadline) == RCLIENT_OK);
+    assert(result.calls == 1);
+    assert(result.server_id == 2u);
+    r_client_destroy(client);
+}
+
+static void test_parameterized_response_after_preference_returns_immediately(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.now_ms = 4000u;
+
+    r_request_policy_t policy;
+    r_client_default_request_policy(&policy);
+    policy.oldest_first_ha.unit_ms = 10u;
+    policy.oldest_first_ha.replay_count = 0u;
+    set_ha_schedule(
+        &policy.oldest_first_ha.replay_gap,
+        R_HA_SCHEDULE_FIXED,
+        5u,
+        5u,
+        0u
+    );
+    set_ha_schedule(
+        &policy.oldest_first_ha.preference,
+        R_HA_SCHEDULE_FIXED,
+        1u,
+        1u,
+        0u
+    );
+    policy.oldest_first_ha.final_receive_units = 0u;
+    policy.oldest_first_ha.completion_delivery = false;
+
+    r_client_t *client = make_two_server_client_with_policy(&ctx, &policy);
+    result_cb_ctx_t result = {0};
+    (void)start_sample_request(client, &result);
+    uint8_t request_id[16];
+    copy_last_request_id(&ctx, request_id);
+
+    ctx.now_ms = 4015u;
+    uint8_t response[R_MAX_PACKET_SIZE];
+    size_t response_len = build_cookie_success_response_from(
+        2u, request_id, response, sizeof(response)
+    );
+    r_addr_t from;
+    fill_ipv4_addr(&from, "127.0.0.2");
+    assert(r_client_on_datagram(
+        client, response, response_len, &from
+    ) == RCLIENT_OK);
+    assert(result.calls == 1);
+    assert(result.server_id == 2u);
+    r_client_destroy(client);
+}
+
+static void test_parameterized_completion_delivery_covers_allow_and_deny(void) {
+    for (size_t denied = 0; denied < 2u; denied++) {
+        test_ctx_t ctx;
+        memset(&ctx, 0, sizeof(ctx));
+        ctx.now_ms = 5000u + denied * 100u;
+        r_client_t *client = make_two_server_client(&ctx);
+        result_cb_ctx_t result = {0};
+        (void)start_sample_request(client, &result);
+        uint8_t request_id[16];
+        copy_last_request_id(&ctx, request_id);
+
+        uint8_t response[R_MAX_PACKET_SIZE];
+        size_t response_len = denied
+            ? build_cookie_denied_response_from(
+                1u, request_id, response, sizeof(response))
+            : build_cookie_success_response_from(
+                1u, request_id, response, sizeof(response));
+        r_addr_t from;
+        fill_ipv4_addr(&from, "127.0.0.1");
+        assert(r_client_on_datagram(
+            client, response, response_len, &from
+        ) == RCLIENT_OK);
+        assert(result.calls == 1);
+        assert(result.server_id == 1u);
+        assert(result.success == !denied);
+        assert(ctx.send_count == 3u);
+        assert_ipv4_addr(&ctx.sent_to[2], "127.0.0.2");
+
+        uint8_t resent_id[16];
+        copy_last_request_id(&ctx, resent_id);
+        assert(memcmp(resent_id, request_id, sizeof(request_id)) == 0);
+        r_client_destroy(client);
+    }
+}
+
+static void test_parameterized_completion_delivery_can_be_disabled(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    r_request_policy_t policy;
+    r_client_default_request_policy(&policy);
+    policy.oldest_first_ha.completion_delivery = false;
+    r_client_t *client = make_two_server_client_with_policy(&ctx, &policy);
+    result_cb_ctx_t result = {0};
+    (void)start_sample_request(client, &result);
+    uint8_t request_id[16];
+    copy_last_request_id(&ctx, request_id);
+
+    uint8_t response[R_MAX_PACKET_SIZE];
+    size_t response_len = build_cookie_success_response_from(
+        1u, request_id, response, sizeof(response)
+    );
+    r_addr_t from;
+    fill_ipv4_addr(&from, "127.0.0.1");
+    assert(r_client_on_datagram(
+        client, response, response_len, &from
+    ) == RCLIENT_OK);
+    assert(result.calls == 1);
+    assert(ctx.send_count == 2u);
+    r_client_destroy(client);
+}
+
+static void test_parameterized_final_phase_completion_delivery(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.now_ms = 6000u;
+    r_client_t *client = make_two_server_client(&ctx);
+    result_cb_ctx_t result = {0};
+    r_client_req_t *req = start_sample_request(client, &result);
+    uint8_t request_id[16];
+    copy_last_request_id(&ctx, request_id);
+    assert(ctx.send_count == 2u);
+
+    uint64_t deadline = 0;
+    assert(r_client_request_deadline_ms(req, &deadline) == RCLIENT_OK);
+    ctx.now_ms = deadline;
+    assert(r_client_on_timeout(client, req, deadline) == RCLIENT_OK);
+    assert(ctx.send_count == 4u);
+    assert(r_client_request_deadline_ms(req, &deadline) == RCLIENT_OK);
+    ctx.now_ms = deadline;
+    assert(r_client_on_timeout(client, req, deadline) == RCLIENT_OK);
+    assert(ctx.send_count == 4u);
+
+    ctx.now_ms += 1u;
+    uint8_t response[R_MAX_PACKET_SIZE];
+    size_t response_len = build_cookie_success_response_from(
+        2u, request_id, response, sizeof(response)
+    );
+    r_addr_t from;
+    fill_ipv4_addr(&from, "127.0.0.2");
+    assert(r_client_on_datagram(
+        client, response, response_len, &from
+    ) == RCLIENT_OK);
+    assert(result.calls == 1);
+    assert(result.server_id == 2u);
+    assert(ctx.send_count == 5u);
+    assert_ipv4_addr(&ctx.sent_to[4], "127.0.0.1");
+    r_client_destroy(client);
+}
+
+static void assert_parameterized_policy_rejected(
+    r_request_policy_t *policy
+) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    r_client_t *client = make_client_with_policy(&ctx, policy);
+    r_resource_request_t resource = sample_resource();
+    assert(r_client_check_rate_limit_async(
+        client,
+        &resource,
+        1,
+        NULL,
+        0,
+        NULL,
+        0,
+        noop_rate_limit_cb,
+        NULL,
+        NULL
+    ) == RCLIENT_ERR_CONFIG);
+    assert(ctx.send_count == 0u);
+    r_client_destroy(client);
+}
+
+static void test_parameterized_policy_rejects_invalid_schedules(void) {
+    r_request_policy_t policy;
+
+    r_client_default_request_policy(&policy);
+    policy.oldest_first_ha.unit_ms = 0u;
+    assert_parameterized_policy_rejected(&policy);
+
+    r_client_default_request_policy(&policy);
+    policy.oldest_first_ha.replay_gap.initial_units = 0u;
+    assert_parameterized_policy_rejected(&policy);
+
+    r_client_default_request_policy(&policy);
+    policy.oldest_first_ha.preference.initial_units = 2u;
+    policy.oldest_first_ha.preference.max_units = 2u;
+    assert_parameterized_policy_rejected(&policy);
+
+    r_client_default_request_policy(&policy);
+    set_ha_schedule(
+        &policy.oldest_first_ha.replay_gap,
+        R_HA_SCHEDULE_EXPONENTIAL,
+        1u,
+        2u,
+        0u
+    );
+    assert_parameterized_policy_rejected(&policy);
+
+    r_client_default_request_policy(&policy);
+    policy.oldest_first_ha.unit_ms = 101u;
+    assert_parameterized_policy_rejected(&policy);
+}
+
+static void test_composed_two_round_policy_remains_compatible(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.now_ms = 7000u;
+    r_request_policy_t policy;
+    r_client_default_request_policy(&policy);
+    policy.kind = R_REQUEST_POLICY_COMPOSED;
+    policy.attempt_timeout_ms = 7u;
+    policy.retry.total_timeout_ms = 0u;
+
+    r_client_t *client = make_client_with_policy(&ctx, &policy);
+    result_cb_ctx_t result = {0};
+    r_client_req_t *req = start_sample_request(client, &result);
+    assert(last_cookie_request_ttl(&ctx) == 21u);
+    uint64_t deadline = 0;
+    assert(r_client_request_deadline_ms(req, &deadline) == RCLIENT_OK);
+    assert(deadline == 7007u);
+    r_client_cancel_request(client, req);
     r_client_destroy(client);
 }
 
@@ -1174,5 +1695,14 @@ int main(void) {
     test_two_round_policy_returns_oldest_immediately();
     test_two_round_policy_rejects_ttl_above_credential_limit();
     test_two_round_policy_rejects_shorter_total_timeout();
+    test_parameterized_exponential_schedule_uses_absolute_deadlines();
+    test_parameterized_linear_schedule_has_distinct_gaps();
+    test_parameterized_preference_is_independent_of_replay_gap();
+    test_parameterized_response_after_preference_returns_immediately();
+    test_parameterized_completion_delivery_covers_allow_and_deny();
+    test_parameterized_completion_delivery_can_be_disabled();
+    test_parameterized_final_phase_completion_delivery();
+    test_parameterized_policy_rejects_invalid_schedules();
+    test_composed_two_round_policy_remains_compatible();
     return 0;
 }
