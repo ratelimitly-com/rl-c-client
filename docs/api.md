@@ -1,7 +1,8 @@
 # Public API
 
-This document describes the supported public C API. Headers under `src/` are
-private and may change without compatibility guarantees.
+This document describes the public C API. The library is still at its first
+MVP: the public API and private implementation may change without backward-
+compatibility adapters.
 
 ## Headers
 
@@ -41,7 +42,7 @@ cfg.tenant.auth.secret = auth_key;
 
 r_request_policy_t policy;
 r_client_default_request_policy(&policy);
-policy.oldest_first_ha.unit_ms = 20;
+policy.unit_ms = 20;
 cfg.request_policy = &policy;
 
 r_client_t *client = NULL;
@@ -263,10 +264,9 @@ the same `unique_id` are ignored. The authenticated timestamp is retained as
 protocol framing, but the client does not apply a separate clock-skew freshness
 check. Keep request deadlines short and deliver timeout/cancel events promptly.
 
-The default `R_REQUEST_POLICY_OLDEST_FIRST_HA` policy is one coherent
-resource-request strategy. It owns fan-out, response selection, replay
-scheduling, completion delivery, and deduplication-TTL derivation. The generic
-`wait`, `select`, and `retry` fields are not composed with this strategy.
+`r_request_policy_t` configures the client's sole resource-request strategy.
+It owns fan-out, oldest-first response selection, replay scheduling, completion
+delivery, and deduplication-TTL derivation.
 
 Its parameters are:
 
@@ -280,9 +280,8 @@ Its parameters are:
 | `final_preference_units` | Oldest preference within the final interval. Zero makes its first valid response immediate. |
 | `completion_delivery` | Before returning a selected allow or deny, fire-and-forget the same request to servers still missing a valid response. |
 
-`r_client_default_oldest_first_ha_policy()` initializes a standalone strategy
-block. `r_client_default_request_policy()` selects that strategy and embeds its
-defaults in the complete request policy.
+Always initialize the policy with `r_client_default_request_policy()` before
+overriding individual fields.
 
 Both schedules use `r_ha_schedule_t`. A fixed schedule always uses
 `initial_units`; a linear schedule adds `growth.linear_step_units` per round;
@@ -331,14 +330,15 @@ completion_delivery = true
 TTL = 3 * U = 60 ms
 ```
 
-Set `policy.kind = R_REQUEST_POLICY_COMPOSED` to use the compatibility
-`wait`, quorum, selection, and generic retry fields. The retained
-`R_WAIT_TWO_ROUND_OLDEST_THEN_FIRST` value maps to the old fixed three-phase
-behavior for source compatibility; new code should configure
-`oldest_first_ha` instead.
-
 `cfg.request_policy` is borrowed only for the duration of `r_client_create`; the
 client copies the policy by value and does not retain the caller's pointer.
+
+DNS refresh pacing is client configuration rather than request-selection
+policy. Set `cfg.dns_refresh.refresh_interval_ms`,
+`cfg.dns_refresh.forced_refresh_min_interval_ms`, or
+`cfg.dns_refresh.forced_refresh_jitter_ms` before `r_client_create`. Zero
+selects the documented defaults of 300 seconds for periodic refresh and one
+second for the minimum forced-refresh interval; jitter defaults to zero.
 
 ## Error Codes
 
@@ -354,9 +354,11 @@ All errors are negative:
 
 `RCLIENT_ERR_CONFIG` covers invalid arguments and invalid API key credentials.
 
-## Compatibility
+## API boundary
 
 The public surface consists of `include/r_client.h`, `include/r_client_io.h`,
 `include/r_client_workflow.h`, and `include/r_client_runtime.h`. Internal
 protocol builders, crypto helpers, and packet parsers are implementation
-details.
+details. Until the project declares a stable post-MVP API, releases may remove
+or replace public declarations directly instead of carrying aliases or legacy
+execution paths.

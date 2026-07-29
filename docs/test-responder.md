@@ -141,10 +141,10 @@ These properties let downstream suites restart the responder between cases and
 obtain the same result without a private service, wall-clock rate windows, or
 network access.
 
-## Compatibility
+## Release versioning
 
 The test responder is versioned with `rl-c-client`. Its command line and JSONL
-records are a test-support contract for the tagged release, but they are not
-covered by production C API or ABI compatibility promises. Breaking fixture
-changes require release-note entries so downstream test suites can update
+records describe that tagged release only. During the MVP, a later release may
+change them directly without a compatibility layer. Breaking fixture changes
+must still be called out in release notes so downstream test suites can update
 their dependency lock deliberately.

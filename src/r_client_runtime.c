@@ -527,10 +527,6 @@ int r_runtime_client_init(
 
     r_request_policy_t policy;
     r_client_default_request_policy(&policy);
-    policy.kind = R_REQUEST_POLICY_COMPOSED;
-    policy.attempt_timeout_ms = 1000u;
-    policy.wait = R_WAIT_RETURN_ON_FIRST_VALID;
-    policy.retry.retry_attempts = 0u;
 
     r_client_config_t config = {0};
     config.tenant.dns_name = options->tenant_dns_name;

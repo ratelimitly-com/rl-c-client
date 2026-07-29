@@ -49,23 +49,6 @@ int r_client_format_default_tenant_dns(
     return RCLIENT_OK;
 }
 
-typedef struct r_server_stat {
-    uint64_t server_id;
-    uint64_t first_seen_ms;
-    uint64_t last_seen_ms;
-    uint64_t valid_responses;
-    uint64_t timeouts;
-    uint64_t decrypt_fail;
-    uint64_t auth_fail;
-    uint64_t id_mismatch;
-} r_server_stat_t;
-
-typedef struct r_server_stats {
-    r_server_stat_t *items;
-    size_t count;
-    size_t cap;
-} r_server_stats_t;
-
 typedef struct r_candidate {
     bool has;
     r_rate_limit_result_t result;
@@ -74,12 +57,8 @@ typedef struct r_candidate {
 } r_candidate_t;
 
 typedef enum r_request_phase {
-    R_REQUEST_PHASE_STANDARD = 0,
-    R_REQUEST_PHASE_TWO_ROUND_FIRST,
-    R_REQUEST_PHASE_TWO_ROUND_SECOND,
-    R_REQUEST_PHASE_TWO_ROUND_GRACE,
-    R_REQUEST_PHASE_PARAMETERIZED_HA_ROUND,
-    R_REQUEST_PHASE_PARAMETERIZED_HA_FINAL,
+    R_REQUEST_PHASE_ROUND = 0,
+    R_REQUEST_PHASE_FINAL,
 } r_request_phase_t;
 
 struct r_client_req {
@@ -104,14 +83,10 @@ struct r_client_req {
     size_t target_count;
     uint64_t *allowed_ids;
     size_t allowed_id_count;
-    size_t replica_count;
 
     uint64_t start_ms;
     uint64_t attempt_deadline_ms;
-    uint64_t total_deadline_ms;
     uint64_t dedup_deadline_ms;
-    uint32_t attempt;
-    uint32_t total_attempts;
     uint32_t dedup_ttl_ms;
     r_request_phase_t phase;
     uint32_t ha_round;
@@ -126,13 +101,9 @@ struct r_client_req {
     size_t seen_server_id_count;
     size_t seen_server_id_cap;
 
-    bool any_success;
-    bool any_failure;
     bool steering_rebind;
 
     r_candidate_t best;
-    r_candidate_t best_allow;
-    r_candidate_t best_deny;
 };
 
 struct r_client {
@@ -157,7 +128,6 @@ struct r_client {
     uint64_t dns_refresh_ttl_ms;
     bool dns_refresh_inflight;
 
-    r_server_stats_t stats;
     r_client_req_t *inflight;
     struct r_dns_refresh *dns_refresh;
 };
@@ -230,14 +200,6 @@ static uint64_t r_server_start_s_from_id(uint64_t server_id) {
     return R_SERVER_ID_EPOCH_S_2025 + (server_id >> 23);
 }
 
-static uint64_t r_server_age_ms(uint64_t server_id, uint64_t now_ms) {
-    uint64_t start_ms = r_server_start_s_from_id(server_id) * 1000ULL;
-    if (now_ms <= start_ms) {
-        return 0;
-    }
-    return now_ms - start_ms;
-}
-
 static uint64_t r_now_ms(r_client_t *client) {
     if (!client || !client->io.now_ms) {
         return 0;
@@ -251,11 +213,6 @@ static bool r_latency_buffer_size_quota(const r_client_t *client, uint32_t *out_
     }
     *out_limit = client->quotas.latency_buffer_size_max;
     return true;
-}
-
-static bool r_uses_parameterized_ha(const r_client_t *client) {
-    return client
-        && client->policy.kind == R_REQUEST_POLICY_OLDEST_FIRST_HA;
 }
 
 static int r_ha_schedule_units(
@@ -312,17 +269,17 @@ static int r_ha_schedule_units(
     return RCLIENT_OK;
 }
 
-static int r_parameterized_ha_ttl_ms(
+static int r_request_policy_ttl_ms(
     const r_client_t *client,
     uint32_t *out_ttl_ms
 ) {
     if (!client || !out_ttl_ms) {
         return RCLIENT_ERR_CONFIG;
     }
-    const r_oldest_first_ha_policy_t *ha = &client->policy.oldest_first_ha;
-    if (ha->unit_ms == 0u
-        || ha->replay_count > R_CLIENT_HA_MAX_REPLAY_COUNT
-        || ha->final_preference_units > ha->final_receive_units) {
+    const r_request_policy_t *policy = &client->policy;
+    if (policy->unit_ms == 0u
+        || policy->replay_count > R_CLIENT_HA_MAX_REPLAY_COUNT
+        || policy->final_preference_units > policy->final_receive_units) {
         return RCLIENT_ERR_CONFIG;
     }
 
@@ -330,22 +287,22 @@ static int r_parameterized_ha_ttl_ms(
     if (client->has_quotas && client->quotas.dedup_ttl_ms_max > 0u) {
         max_ttl_ms = client->quotas.dedup_ttl_ms_max;
     }
-    if (ha->unit_ms > max_ttl_ms) {
+    if (policy->unit_ms > max_ttl_ms) {
         return RCLIENT_ERR_CONFIG;
     }
 
     uint64_t total_units = 0u;
-    for (uint32_t round = 0u; round <= ha->replay_count; round++) {
+    for (uint32_t round = 0u; round <= policy->replay_count; round++) {
         uint32_t gap_units = 0u;
         uint32_t preference_units = 0u;
         if (r_ha_schedule_units(
-                &ha->replay_gap,
+                &policy->replay_gap,
                 round,
                 false,
                 &gap_units
             ) != RCLIENT_OK
             || r_ha_schedule_units(
-                &ha->preference,
+                &policy->preference,
                 round,
                 true,
                 &preference_units
@@ -357,62 +314,21 @@ static int r_parameterized_ha_ttl_ms(
             return RCLIENT_ERR_CONFIG;
         }
         total_units += gap_units;
-        if (total_units > max_ttl_ms / ha->unit_ms) {
+        if (total_units > max_ttl_ms / policy->unit_ms) {
             return RCLIENT_ERR_CONFIG;
         }
     }
-    if (total_units > UINT64_MAX - ha->final_receive_units) {
+    if (total_units > UINT64_MAX - policy->final_receive_units) {
         return RCLIENT_ERR_CONFIG;
     }
-    total_units += ha->final_receive_units;
+    total_units += policy->final_receive_units;
     if (total_units == 0u
-        || total_units > UINT32_MAX / ha->unit_ms
-        || total_units > max_ttl_ms / ha->unit_ms) {
+        || total_units > UINT32_MAX / policy->unit_ms
+        || total_units > max_ttl_ms / policy->unit_ms) {
         return RCLIENT_ERR_CONFIG;
     }
 
-    *out_ttl_ms = (uint32_t)(total_units * ha->unit_ms);
-    return RCLIENT_OK;
-}
-
-static int r_effective_dedup_ttl_ms(
-    const r_client_t *client,
-    uint32_t *out_ttl_ms
-) {
-    if (!client || !out_ttl_ms) {
-        return RCLIENT_ERR_CONFIG;
-    }
-    if (client->policy.kind == R_REQUEST_POLICY_OLDEST_FIRST_HA) {
-        return r_parameterized_ha_ttl_ms(client, out_ttl_ms);
-    }
-    if (client->policy.kind != R_REQUEST_POLICY_COMPOSED) {
-        return RCLIENT_ERR_CONFIG;
-    }
-    if (client->policy.wait == R_WAIT_TWO_ROUND_OLDEST_THEN_FIRST) {
-        if (client->policy.attempt_timeout_ms == 0u
-            || client->policy.attempt_timeout_ms > UINT32_MAX / 3u) {
-            return RCLIENT_ERR_CONFIG;
-        }
-        uint32_t derived = (uint32_t)client->policy.attempt_timeout_ms * 3u;
-        if (client->has_quotas
-            && client->quotas.dedup_ttl_ms_max > 0u
-            && derived > client->quotas.dedup_ttl_ms_max) {
-            return RCLIENT_ERR_CONFIG;
-        }
-        if (client->policy.retry.total_timeout_ms > 0u
-            && client->policy.retry.total_timeout_ms < derived) {
-            return RCLIENT_ERR_CONFIG;
-        }
-        *out_ttl_ms = derived;
-        return RCLIENT_OK;
-    }
-    if (client->has_quotas
-        && client->quotas.dedup_ttl_ms_max > 0
-        && client->policy.dedup_ttl_ms > client->quotas.dedup_ttl_ms_max) {
-        *out_ttl_ms = client->quotas.dedup_ttl_ms_max;
-        return RCLIENT_OK;
-    }
-    *out_ttl_ms = client->policy.dedup_ttl_ms;
+    *out_ttl_ms = (uint32_t)(total_units * policy->unit_ms);
     return RCLIENT_OK;
 }
 
@@ -485,75 +401,6 @@ static int r_filter_latency_reports(
 }
 
 
-static int r_stats_grow(r_server_stats_t *stats, size_t need) {
-    if (stats->count + need <= stats->cap) {
-        return 0;
-    }
-    size_t next_cap = stats->cap == 0 ? 8 : stats->cap * 2;
-    while (next_cap < stats->count + need) {
-        next_cap *= 2;
-    }
-    r_server_stat_t *items = (r_server_stat_t *)realloc(stats->items, next_cap * sizeof(r_server_stat_t));
-    if (!items) {
-        return -1;
-    }
-    stats->items = items;
-    stats->cap = next_cap;
-    return 0;
-}
-
-static r_server_stat_t *r_stats_get_or_add(r_client_t *client, uint64_t server_id, uint64_t now_ms) {
-    if (!client) {
-        return NULL;
-    }
-    for (size_t i = 0; i < client->stats.count; i++) {
-        if (client->stats.items[i].server_id == server_id) {
-            return &client->stats.items[i];
-        }
-    }
-    if (r_stats_grow(&client->stats, 1) != 0) {
-        return NULL;
-    }
-    r_server_stat_t *entry = &client->stats.items[client->stats.count++];
-    memset(entry, 0, sizeof(*entry));
-    entry->server_id = server_id;
-    entry->first_seen_ms = now_ms;
-    entry->last_seen_ms = now_ms;
-    return entry;
-}
-
-static r_server_stat_t *r_stats_get(r_client_t *client, uint64_t server_id) {
-    if (!client) {
-        return NULL;
-    }
-    for (size_t i = 0; i < client->stats.count; i++) {
-        if (client->stats.items[i].server_id == server_id) {
-            return &client->stats.items[i];
-        }
-    }
-    return NULL;
-}
-
-static void r_stats_timeout_all(r_client_t *client, uint64_t now_ms) {
-    if (!client) {
-        return;
-    }
-    for (size_t i = 0; i < client->stats.count; i++) {
-        client->stats.items[i].last_seen_ms = now_ms;
-        client->stats.items[i].timeouts += 1;
-    }
-}
-
-static bool r_server_stable(r_client_t *client, uint64_t server_id, uint64_t now_ms) {
-    if (!client) {
-        return false;
-    }
-    if (client->config.server_stability_threshold_ms == 0) {
-        return true;
-    }
-    return r_server_age_ms(server_id, now_ms) >= client->config.server_stability_threshold_ms;
-}
-
 static int r_seen_addr_add(r_client_req_t *req, const r_addr_t *addr) {
     if (!req || !addr) {
         return -1;
@@ -605,36 +452,6 @@ static void r_candidate_clear(r_candidate_t *cand) {
     free((void *)cand->guards);
     free((void *)cand->resources);
     memset(cand, 0, sizeof(*cand));
-}
-
-static bool r_is_better_candidate(
-    r_client_t *client,
-    uint64_t cand_id,
-    uint64_t best_id,
-    uint64_t now_ms
-) {
-    (void)now_ms;
-    r_server_stat_t *cand_stats = r_stats_get(client, cand_id);
-    r_server_stat_t *best_stats = r_stats_get(client, best_id);
-
-    uint64_t cand_start_s = r_server_start_s_from_id(cand_id);
-    uint64_t best_start_s = r_server_start_s_from_id(best_id);
-    if (cand_start_s != best_start_s) {
-        return cand_start_s < best_start_s;
-    }
-    uint64_t cand_valid = cand_stats ? cand_stats->valid_responses : 0;
-    uint64_t best_valid = best_stats ? best_stats->valid_responses : 0;
-    if (cand_valid != best_valid) {
-        return cand_valid > best_valid;
-    }
-
-    uint64_t cand_penalty = cand_stats
-        ? (cand_stats->auth_fail + cand_stats->decrypt_fail + cand_stats->timeouts + cand_stats->id_mismatch)
-        : 0;
-    uint64_t best_penalty = best_stats
-        ? (best_stats->auth_fail + best_stats->decrypt_fail + best_stats->timeouts + best_stats->id_mismatch)
-        : 0;
-    return cand_penalty < best_penalty;
 }
 
 static bool r_server_is_older(uint64_t candidate_id, uint64_t current_id) {
@@ -692,7 +509,6 @@ static int r_candidate_set(
 
 
 static bool r_candidate_try_update_best(
-    r_client_t *client,
     r_candidate_t *best,
     r_rate_limit_result_t *result,
     r_guard_result_t *guards,
@@ -700,37 +516,17 @@ static bool r_candidate_try_update_best(
     r_resource_result_t *resources,
     size_t resource_count
 ) {
-    uint64_t now_ms = r_now_ms(client);
     if (!best->has) {
         r_candidate_set(best, result->server_id, result->steering_feedback, result->success,
             guards, guard_count, resources, resource_count);
         return true;
     }
-    if (r_is_better_candidate(client, result->server_id, best->result.server_id, now_ms)) {
+    if (r_server_is_older(result->server_id, best->result.server_id)) {
         r_candidate_set(best, result->server_id, result->steering_feedback, result->success,
             guards, guard_count, resources, resource_count);
         return true;
     }
     return false;
-}
-
-static size_t r_quorum_required(r_response_quorum_t quorum, size_t replica_count) {
-    switch (quorum.kind) {
-    case R_QUORUM_ONE:
-        return replica_count < 1 ? replica_count : 1;
-    case R_QUORUM_MAJORITY:
-        return replica_count == 0 ? 0 : (replica_count / 2) + 1;
-    case R_QUORUM_ALL:
-        return replica_count;
-    case R_QUORUM_COUNT:
-        return quorum.count < replica_count ? quorum.count : replica_count;
-    default:
-        return 0;
-    }
-}
-
-static bool r_request_inconsistent(r_client_req_t *req) {
-    return req->any_success && req->any_failure;
 }
 
 static int r_allowed_server_id(r_client_req_t *req, uint64_t server_id) {
@@ -778,8 +574,6 @@ static void r_request_free(r_client_req_t *req) {
     free(req->seen_addrs);
     free(req->seen_server_ids);
     r_candidate_clear(&req->best);
-    r_candidate_clear(&req->best_allow);
-    r_candidate_clear(&req->best_deny);
     free(req);
 }
 
@@ -1140,7 +934,7 @@ static int r_dns_maybe_refresh(r_client_t *client, bool force) {
         return RCLIENT_ERR_DNS;
     }
     uint64_t now_ms = r_now_ms(client);
-    uint64_t refresh_interval = client->policy.dns_resync.refresh_interval_ms;
+    uint64_t refresh_interval = client->config.dns_refresh.refresh_interval_ms;
     if (refresh_interval == 0) {
         refresh_interval = 300000;
     }
@@ -1156,9 +950,15 @@ static int r_dns_maybe_refresh(r_client_t *client, bool force) {
         return RCLIENT_OK;
     }
 
-    uint64_t min_interval = client->policy.dns_resync.min_interval_ms;
-    if (client->policy.dns_resync.jitter_ms > 0) {
-        min_interval += r_rand_range(client->policy.dns_resync.jitter_ms);
+    uint64_t min_interval =
+        client->config.dns_refresh.forced_refresh_min_interval_ms;
+    if (min_interval == 0u) {
+        min_interval = 1000u;
+    }
+    if (client->config.dns_refresh.forced_refresh_jitter_ms > 0) {
+        min_interval += r_rand_range(
+            client->config.dns_refresh.forced_refresh_jitter_ms
+        );
     }
     if (client->last_dns_refresh_ms != 0 && now_ms - client->last_dns_refresh_ms < min_interval) {
         return RCLIENT_OK;
@@ -1259,10 +1059,8 @@ static int r_request_snapshot_targets(r_client_t *client, r_client_req_t *req) {
             }
         }
         req->allowed_id_count = count;
-        req->replica_count = count;
     } else {
         req->allowed_id_count = 0;
-        req->replica_count = req->target_count;
     }
     return RCLIENT_OK;
 }
@@ -1465,12 +1263,11 @@ static int r_send_rate_request(
     );
 }
 
-static void r_parameterized_ha_completion_delivery(
+static void r_completion_delivery(
     r_client_t *client,
     r_client_req_t *req
 ) {
-    if (!r_uses_parameterized_ha(client)
-        || !client->policy.oldest_first_ha.completion_delivery
+    if (!client->policy.completion_delivery
         || r_now_ms(client) >= req->dedup_deadline_ms) {
         return;
     }
@@ -1658,29 +1455,16 @@ static uint64_t r_rand_range(uint64_t max) {
     return value % (max + 1);
 }
 
-static void r_request_reset_attempt_state(r_client_req_t *req) {
-    if (!req) {
-        return;
-    }
-    req->seen_addr_count = 0;
-    req->seen_server_id_count = 0;
-    req->any_success = false;
-    req->any_failure = false;
-    r_candidate_clear(&req->best);
-    r_candidate_clear(&req->best_allow);
-    r_candidate_clear(&req->best_deny);
-}
-
-static int r_parameterized_ha_start_round(
+static int r_start_round(
     r_client_t *client,
     r_client_req_t *req,
     uint32_t round
 ) {
-    if (!client || !req || !r_uses_parameterized_ha(client)) {
+    if (!client || !req) {
         return RCLIENT_ERR_CONFIG;
     }
-    const r_oldest_first_ha_policy_t *ha = &client->policy.oldest_first_ha;
-    if (round > ha->replay_count
+    const r_request_policy_t *policy = &client->policy;
+    if (round > policy->replay_count
         || r_now_ms(client) >= req->dedup_deadline_ms) {
         return RCLIENT_ERR_TIMEOUT;
     }
@@ -1688,7 +1472,7 @@ static int r_parameterized_ha_start_round(
     uint32_t gap_units = 0u;
     uint32_t preference_units = 0u;
     int rc = r_ha_schedule_units(
-        &ha->replay_gap,
+        &policy->replay_gap,
         round,
         false,
         &gap_units
@@ -1697,7 +1481,7 @@ static int r_parameterized_ha_start_round(
         return rc;
     }
     rc = r_ha_schedule_units(
-        &ha->preference,
+        &policy->preference,
         round,
         true,
         &preference_units
@@ -1706,99 +1490,49 @@ static int r_parameterized_ha_start_round(
         return RCLIENT_ERR_CONFIG;
     }
 
-    req->phase = R_REQUEST_PHASE_PARAMETERIZED_HA_ROUND;
+    req->phase = R_REQUEST_PHASE_ROUND;
     req->ha_round = round;
     req->ha_round_start_ms = round == 0u
         ? req->start_ms : req->ha_round_deadline_ms;
     req->ha_preference_deadline_ms =
-        req->ha_round_start_ms + ha->unit_ms * preference_units;
+        req->ha_round_start_ms + policy->unit_ms * preference_units;
     req->ha_round_deadline_ms =
-        req->ha_round_start_ms + ha->unit_ms * gap_units;
+        req->ha_round_start_ms + policy->unit_ms * gap_units;
     req->attempt_deadline_ms = req->ha_round_deadline_ms;
 
     rc = r_send_rate_request(client, req, round > 0u, false);
-    if (rc == RCLIENT_OK) {
-        req->attempt = round;
-    }
     return rc;
 }
 
-static int r_parameterized_ha_enter_final(
+static int r_enter_final(
     r_client_t *client,
     r_client_req_t *req
 ) {
-    if (!client || !req || !r_uses_parameterized_ha(client)) {
-        return RCLIENT_ERR_CONFIG;
-    }
-    const r_oldest_first_ha_policy_t *ha = &client->policy.oldest_first_ha;
-    if (ha->final_receive_units == 0u) {
-        return RCLIENT_ERR_TIMEOUT;
-    }
-    req->phase = R_REQUEST_PHASE_PARAMETERIZED_HA_FINAL;
-    req->ha_round_start_ms = req->ha_round_deadline_ms;
-    req->ha_preference_deadline_ms = req->ha_round_start_ms
-        + ha->unit_ms * ha->final_preference_units;
-    req->ha_round_deadline_ms = req->ha_round_start_ms
-        + ha->unit_ms * ha->final_receive_units;
-    req->attempt_deadline_ms = req->ha_round_deadline_ms;
-    return RCLIENT_OK;
-}
-
-static int r_request_start_attempt(r_client_t *client, r_client_req_t *req) {
     if (!client || !req) {
         return RCLIENT_ERR_CONFIG;
     }
-    r_request_reset_attempt_state(req);
-
-    int rc = r_send_rate_request(client, req, false, false);
-    if (rc != RCLIENT_OK) {
-        return rc;
+    const r_request_policy_t *policy = &client->policy;
+    if (policy->final_receive_units == 0u) {
+        return RCLIENT_ERR_TIMEOUT;
     }
-
-    uint64_t attempt_timeout = client->policy.attempt_timeout_ms;
-    if (client->policy.wait == R_WAIT_TWO_ROUND_OLDEST_THEN_FIRST
-        && (req->phase == R_REQUEST_PHASE_TWO_ROUND_FIRST
-            || req->phase == R_REQUEST_PHASE_TWO_ROUND_SECOND)) {
-        uint64_t round = req->phase == R_REQUEST_PHASE_TWO_ROUND_FIRST ? 1u : 2u;
-        req->attempt_deadline_ms = req->start_ms + (attempt_timeout * round);
-    } else {
-        req->attempt_deadline_ms = r_now_ms(client) + attempt_timeout;
-    }
-    if (req->total_deadline_ms > 0 && req->attempt_deadline_ms > req->total_deadline_ms) {
-        req->attempt_deadline_ms = req->total_deadline_ms;
-    }
+    req->phase = R_REQUEST_PHASE_FINAL;
+    req->ha_round_start_ms = req->ha_round_deadline_ms;
+    req->ha_preference_deadline_ms = req->ha_round_start_ms
+        + policy->unit_ms * policy->final_preference_units;
+    req->ha_round_deadline_ms = req->ha_round_start_ms
+        + policy->unit_ms * policy->final_receive_units;
+    req->attempt_deadline_ms = req->ha_round_deadline_ms;
     return RCLIENT_OK;
 }
 
 static void r_request_complete(r_client_t *client, r_client_req_t *req, int status, r_candidate_t *selected);
-
-static int r_request_retry_now(r_client_t *client, r_client_req_t *req, uint64_t now_ms) {
-    if (!client || !req) {
-        return RCLIENT_ERR_CONFIG;
-    }
-    if (now_ms >= req->dedup_deadline_ms) {
-        r_request_complete(client, req, RCLIENT_ERR_TIMEOUT, NULL);
-        return RCLIENT_OK;
-    }
-    if (req->total_deadline_ms > 0 && now_ms >= req->total_deadline_ms) {
-        r_request_complete(client, req, RCLIENT_ERR_TIMEOUT, NULL);
-        return RCLIENT_OK;
-    }
-
-    req->attempt++;
-    int rc = r_request_start_attempt(client, req);
-    if (rc != RCLIENT_OK) {
-        r_request_complete(client, req, rc, NULL);
-    }
-    return RCLIENT_OK;
-}
 
 static void r_request_complete(r_client_t *client, r_client_req_t *req, int status, r_candidate_t *selected) {
     if (!client || !req) {
         return;
     }
     if (status == RCLIENT_OK && selected && selected->has) {
-        r_parameterized_ha_completion_delivery(client, req);
+        r_completion_delivery(client, req);
     }
     r_request_remove(client, req);
     if (req->cb) {
@@ -1951,9 +1685,6 @@ int r_client_create(
     client->servers = NULL;
     client->server_count = 0;
     client->server_cap = 0;
-    client->stats.items = NULL;
-    client->stats.count = 0;
-    client->stats.cap = 0;
     client->inflight = NULL;
 
     (void)r_dns_maybe_refresh(client, true);
@@ -1976,7 +1707,6 @@ void r_client_destroy(r_client_t *client) {
         r_dns_refresh_detach(client->dns_refresh);
     }
     free(client->servers);
-    free(client->stats.items);
     free(client->dns_name);
     if (client->auth_secret) {
         OPENSSL_cleanse(client->auth_secret, client->auth_secret_len);
@@ -2075,7 +1805,7 @@ static int r_client_check_rate_limit_async_impl(
 
     r_generate_request_id(req->request_id);
     req->start_ms = r_now_ms(client);
-    rc = r_effective_dedup_ttl_ms(client, &req->dedup_ttl_ms);
+    rc = r_request_policy_ttl_ms(client, &req->dedup_ttl_ms);
     if (rc != RCLIENT_OK || req->dedup_ttl_ms == 0u) {
         r_request_free(req);
         return rc != RCLIENT_OK ? rc : RCLIENT_ERR_CONFIG;
@@ -2085,22 +1815,7 @@ static int r_client_check_rate_limit_async_impl(
         return RCLIENT_ERR_CONFIG;
     }
     req->dedup_deadline_ms = req->start_ms + (uint64_t)req->dedup_ttl_ms;
-    req->attempt = 0;
-    if (r_uses_parameterized_ha(client)) {
-        req->total_attempts = client->policy.oldest_first_ha.replay_count + 1u;
-        req->phase = R_REQUEST_PHASE_PARAMETERIZED_HA_ROUND;
-        req->total_deadline_ms = req->dedup_deadline_ms;
-    } else {
-        req->total_attempts = client->policy.retry.retry_attempts + 1u;
-        req->phase = client->policy.wait == R_WAIT_TWO_ROUND_OLDEST_THEN_FIRST
-            ? R_REQUEST_PHASE_TWO_ROUND_FIRST : R_REQUEST_PHASE_STANDARD;
-    }
-    if (!r_uses_parameterized_ha(client)
-        && client->policy.retry.total_timeout_ms > 0) {
-        req->total_deadline_ms = req->start_ms + client->policy.retry.total_timeout_ms;
-    } else if (!r_uses_parameterized_ha(client)) {
-        req->total_deadline_ms = 0;
-    }
+    req->phase = R_REQUEST_PHASE_ROUND;
 
     rc = r_request_snapshot_targets(client, req);
     if (rc != RCLIENT_OK) {
@@ -2108,9 +1823,7 @@ static int r_client_check_rate_limit_async_impl(
         return rc;
     }
 
-    rc = r_uses_parameterized_ha(client)
-        ? r_parameterized_ha_start_round(client, req, 0u)
-        : r_request_start_attempt(client, req);
+    rc = r_start_round(client, req, 0u);
     if (rc != RCLIENT_OK) {
         r_request_free(req);
         return rc;
@@ -2364,18 +2077,11 @@ int r_client_on_datagram(
     if (!req) {
         return RCLIENT_OK;
     }
-    if (r_uses_parameterized_ha(client)
-        && r_now_ms(client) > req->dedup_deadline_ms) {
+    if (r_now_ms(client) > req->dedup_deadline_ms) {
         return RCLIENT_OK;
     }
     uint64_t server_id = tenant.key_id;
     if (!r_allowed_server_id(req, server_id)) {
-        uint64_t now_ms = r_now_ms(client);
-        r_server_stat_t *stat = r_stats_get_or_add(client, server_id, now_ms);
-        if (stat) {
-            stat->last_seen_ms = now_ms;
-            stat->id_mismatch += 1;
-        }
         return RCLIENT_OK;
     }
 
@@ -2384,16 +2090,6 @@ int r_client_on_datagram(
     size_t pdu_len = 0;
     rc = r_extract_pdu_data(client, buf, len, pos, pdu_buf, sizeof(pdu_buf), &pdu, &pdu_len);
     if (rc != RCLIENT_OK) {
-        uint64_t now_ms = r_now_ms(client);
-        r_server_stat_t *stat = r_stats_get_or_add(client, server_id, now_ms);
-        if (stat) {
-            stat->last_seen_ms = now_ms;
-            if (rc == RCLIENT_ERR_AUTH) {
-                stat->auth_fail += 1;
-            } else {
-                stat->decrypt_fail += 1;
-            }
-        }
         return rc;
     }
 
@@ -2420,20 +2116,8 @@ int r_client_on_datagram(
     }
 
     uint64_t now_ms = r_now_ms(client);
-    r_server_stat_t *stat = r_stats_get_or_add(client, server_id, now_ms);
-    if (stat) {
-        stat->last_seen_ms = now_ms;
-        stat->valid_responses += 1;
-    }
-
     (void)r_seen_addr_add(req, from);
     (void)r_seen_server_add(req, server_id);
-
-    if (success) {
-        req->any_success = true;
-    } else {
-        req->any_failure = true;
-    }
 
     r_rate_limit_result_t result;
     memset(&result, 0, sizeof(result));
@@ -2441,128 +2125,26 @@ int r_client_on_datagram(
     result.server_id = server_id;
     result.steering_feedback = tenant.steering_feedback != 0;
 
-    bool kept = false;
-    if (r_uses_parameterized_ha(client)) {
-        if (!req->best.has
-            || r_server_is_older(result.server_id, req->best.result.server_id)) {
-            r_candidate_set(&req->best, result.server_id,
-                result.steering_feedback, result.success,
-                guard_results, guard_count, resource_results, resource_count);
-            kept = true;
-        }
-    } else if (client->policy.wait == R_WAIT_RETURN_ON_FIRST_VALID
-        || client->policy.wait == R_WAIT_RETURN_ON_FIRST_STABLE) {
-        if (!req->best.has) {
-            r_candidate_set(&req->best, result.server_id, result.steering_feedback, result.success,
-                guard_results, guard_count, resource_results, resource_count);
-            kept = true;
-        }
-    } else if (client->policy.wait == R_WAIT_TWO_ROUND_OLDEST_THEN_FIRST) {
-        if (!req->best.has
-            || r_server_is_older(result.server_id, req->best.result.server_id)) {
-            r_candidate_set(&req->best, result.server_id,
-                result.steering_feedback, result.success,
-                guard_results, guard_count, resource_results, resource_count);
-            kept = true;
-        }
-    } else {
-        switch (client->policy.select) {
-        case R_SELECT_FIRST_VALID:
-            if (!req->best.has) {
-                r_candidate_set(&req->best, result.server_id, result.steering_feedback, result.success,
-                    guard_results, guard_count, resource_results, resource_count);
-                kept = true;
-            }
-            break;
-        case R_SELECT_BEST_BY_RELIABILITY:
-            kept = r_candidate_try_update_best(client, &req->best, &result, guard_results, guard_count, resource_results, resource_count);
-            break;
-        case R_SELECT_CONSERVATIVE_DENY:
-            if (success) {
-                kept = r_candidate_try_update_best(client, &req->best_allow, &result, guard_results, guard_count, resource_results, resource_count);
-            } else {
-                kept = r_candidate_try_update_best(client, &req->best_deny, &result, guard_results, guard_count, resource_results, resource_count);
-            }
-            break;
-        default:
-            break;
-        }
-    }
+    bool kept = r_candidate_try_update_best(
+        &req->best,
+        &result,
+        guard_results,
+        guard_count,
+        resource_results,
+        resource_count
+    );
     if (!kept) {
         free(guard_results);
         free(resource_results);
     }
 
-    size_t quorum_required = r_quorum_required(client->policy.quorum, req->replica_count);
-    bool quorum_met = req->seen_server_id_count >= quorum_required;
-    bool all_targets_responded = req->target_count > 0 && req->seen_addr_count >= req->target_count;
-
-    if (r_uses_parameterized_ha(client)) {
-        if (req->best.has
-            && (r_is_oldest_known_server(
-                    req,
-                    req->best.result.server_id
-                )
-                || now_ms >= req->ha_preference_deadline_ms)) {
-            r_request_complete(client, req, RCLIENT_OK, &req->best);
-        } else if (req->best.has
-            && req->ha_preference_deadline_ms
-                < req->attempt_deadline_ms) {
-            req->attempt_deadline_ms = req->ha_preference_deadline_ms;
-        }
-    } else if (client->policy.wait == R_WAIT_RETURN_ON_FIRST_VALID) {
-        if (req->best.has) {
-            r_request_complete(client, req, RCLIENT_OK, &req->best);
-        }
-    } else if (client->policy.wait == R_WAIT_RETURN_ON_OLDEST
-        || (client->policy.wait == R_WAIT_TWO_ROUND_OLDEST_THEN_FIRST
-            && req->phase != R_REQUEST_PHASE_TWO_ROUND_GRACE)) {
-        if (req->best.has && r_is_oldest_known_server(req, server_id)) {
-            r_request_complete(client, req, RCLIENT_OK, &req->best);
-        }
-    } else if (client->policy.wait == R_WAIT_TWO_ROUND_OLDEST_THEN_FIRST
-        && req->phase == R_REQUEST_PHASE_TWO_ROUND_GRACE) {
-        if (req->best.has) {
-            r_request_complete(client, req, RCLIENT_OK, &req->best);
-        }
-    } else if (client->policy.wait == R_WAIT_RETURN_ON_FIRST_STABLE) {
-        if (r_server_stable(client, server_id, now_ms)) {
-            r_candidate_t *selected = NULL;
-            if (client->policy.select == R_SELECT_CONSERVATIVE_DENY) {
-                selected = req->best_deny.has ? &req->best_deny : &req->best_allow;
-            } else {
-                selected = &req->best;
-            }
-            if (selected && selected->has) {
-                r_request_complete(client, req, RCLIENT_OK, selected);
-            }
-        }
-    } else if (client->policy.wait == R_WAIT_FOR_DEADLINE) {
-        // Match Rust client behavior: if every target already responded, return
-        // immediately instead of idling until attempt_deadline_ms.
-        if (all_targets_responded) {
-            r_candidate_t *selected = NULL;
-            if (client->policy.select == R_SELECT_CONSERVATIVE_DENY) {
-                selected = req->best_deny.has ? &req->best_deny : &req->best_allow;
-            } else {
-                selected = &req->best;
-            }
-            if (selected && selected->has) {
-                r_request_complete(client, req, RCLIENT_OK, selected);
-            }
-        }
-    } else if (client->policy.wait == R_WAIT_FOR_QUORUM) {
-        if (quorum_met) {
-            r_candidate_t *selected = NULL;
-            if (client->policy.select == R_SELECT_CONSERVATIVE_DENY) {
-                selected = req->best_deny.has ? &req->best_deny : &req->best_allow;
-            } else {
-                selected = &req->best;
-            }
-            if (selected && selected->has) {
-                r_request_complete(client, req, RCLIENT_OK, selected);
-            }
-        }
+    if (req->best.has
+        && (r_is_oldest_known_server(req, req->best.result.server_id)
+            || now_ms >= req->ha_preference_deadline_ms)) {
+        r_request_complete(client, req, RCLIENT_OK, &req->best);
+    } else if (req->best.has
+        && req->ha_preference_deadline_ms < req->attempt_deadline_ms) {
+        req->attempt_deadline_ms = req->ha_preference_deadline_ms;
     }
     return RCLIENT_OK;
 }
@@ -2578,12 +2160,12 @@ int r_client_request_deadline_ms(
     return RCLIENT_OK;
 }
 
-static int r_parameterized_ha_on_timeout(
+static int r_request_policy_on_timeout(
     r_client_t *client,
     r_client_req_t *req,
     uint64_t now_ms
 ) {
-    if (!client || !req || !r_uses_parameterized_ha(client)) {
+    if (!client || !req) {
         return RCLIENT_ERR_CONFIG;
     }
     if (req->best.has) {
@@ -2599,10 +2181,9 @@ static int r_parameterized_ha_on_timeout(
         return RCLIENT_OK;
     }
 
-    r_stats_timeout_all(client, now_ms);
-    if (req->phase == R_REQUEST_PHASE_PARAMETERIZED_HA_ROUND) {
-        if (req->ha_round < client->policy.oldest_first_ha.replay_count) {
-            int rc = r_parameterized_ha_start_round(
+    if (req->phase == R_REQUEST_PHASE_ROUND) {
+        if (req->ha_round < client->policy.replay_count) {
+            int rc = r_start_round(
                 client,
                 req,
                 req->ha_round + 1u
@@ -2618,7 +2199,7 @@ static int r_parameterized_ha_on_timeout(
             return RCLIENT_OK;
         }
 
-        int rc = r_parameterized_ha_enter_final(client, req);
+        int rc = r_enter_final(client, req);
         if (rc == RCLIENT_ERR_TIMEOUT) {
             r_request_complete(client, req, RCLIENT_ERR_TIMEOUT, NULL);
         } else if (rc != RCLIENT_OK) {
@@ -2627,7 +2208,7 @@ static int r_parameterized_ha_on_timeout(
         return RCLIENT_OK;
     }
 
-    if (req->phase == R_REQUEST_PHASE_PARAMETERIZED_HA_FINAL) {
+    if (req->phase == R_REQUEST_PHASE_FINAL) {
         r_request_complete(client, req, RCLIENT_ERR_TIMEOUT, NULL);
         return RCLIENT_OK;
     }
@@ -2645,90 +2226,7 @@ int r_client_on_timeout(
     if (now_ms < req->attempt_deadline_ms) {
         return RCLIENT_OK;
     }
-    if (r_uses_parameterized_ha(client)) {
-        return r_parameterized_ha_on_timeout(client, req, now_ms);
-    }
-
-    size_t quorum_required = r_quorum_required(client->policy.quorum, req->replica_count);
-    bool quorum_met = req->seen_server_id_count >= quorum_required;
-    bool inconsistent = r_request_inconsistent(req);
-
-    bool quorum_miss = (client->policy.wait == R_WAIT_FOR_QUORUM
-        && !quorum_met
-        && client->policy.quorum_requirement == R_QUORUM_HARD);
-
-    if (req->best.has || req->best_allow.has || req->best_deny.has) {
-        if (!quorum_miss) {
-            r_candidate_t *selected = NULL;
-            if (client->policy.select == R_SELECT_CONSERVATIVE_DENY) {
-                selected = req->best_deny.has ? &req->best_deny : &req->best_allow;
-            } else {
-                selected = &req->best;
-            }
-            if (selected && selected->has) {
-                if (inconsistent && client->policy.retry.retry_on == R_RETRY_INCONSISTENT
-                    && req->attempt + 1 < req->total_attempts) {
-                    if (client->policy.retry.refresh_dns_on_retry || client->policy.dns_resync.on == R_DNS_ON_RETRY) {
-                        (void)r_dns_maybe_refresh(client, true);
-                    }
-                    return r_request_retry_now(client, req, now_ms);
-                }
-                r_request_complete(client, req, RCLIENT_OK, selected);
-                return RCLIENT_OK;
-            }
-        }
-    }
-
-    if (!(req->best.has || req->best_allow.has || req->best_deny.has)) {
-        r_stats_timeout_all(client, now_ms);
-    }
-
-    if (client->policy.wait == R_WAIT_TWO_ROUND_OLDEST_THEN_FIRST) {
-        if (req->phase == R_REQUEST_PHASE_TWO_ROUND_FIRST) {
-            req->phase = R_REQUEST_PHASE_TWO_ROUND_SECOND;
-            return r_request_retry_now(client, req, now_ms);
-        }
-        if (req->phase == R_REQUEST_PHASE_TWO_ROUND_SECOND) {
-            req->phase = R_REQUEST_PHASE_TWO_ROUND_GRACE;
-            r_request_reset_attempt_state(req);
-            req->attempt_deadline_ms = req->dedup_deadline_ms;
-            if (req->total_deadline_ms > 0
-                && req->attempt_deadline_ms > req->total_deadline_ms) {
-                req->attempt_deadline_ms = req->total_deadline_ms;
-            }
-            return RCLIENT_OK;
-        }
-        if (req->phase == R_REQUEST_PHASE_TWO_ROUND_GRACE) {
-            r_request_complete(client, req, RCLIENT_ERR_TIMEOUT, NULL);
-            return RCLIENT_OK;
-        }
-    }
-
-    bool should_retry = false;
-    if (client->policy.retry.retry_on == R_RETRY_TIMEOUT_ONLY) {
-        should_retry = !(req->best.has || req->best_allow.has || req->best_deny.has);
-    } else if (client->policy.retry.retry_on == R_RETRY_QUORUM_NOT_MET && quorum_miss) {
-        should_retry = true;
-    }
-    if (req->attempt + 1 >= req->total_attempts) {
-        should_retry = false;
-    }
-
-    if (should_retry) {
-        if (client->policy.dns_resync.on == R_DNS_ON_TIMEOUT || client->policy.dns_resync.on == R_DNS_ON_ANY_ERROR) {
-            (void)r_dns_maybe_refresh(client, true);
-        }
-        if (quorum_miss && (client->policy.dns_resync.on == R_DNS_ON_QUORUM_MISS || client->policy.dns_resync.on == R_DNS_ON_ANY_ERROR)) {
-            (void)r_dns_maybe_refresh(client, true);
-        }
-        if (client->policy.retry.refresh_dns_on_retry || client->policy.dns_resync.on == R_DNS_ON_RETRY) {
-            (void)r_dns_maybe_refresh(client, true);
-        }
-        return r_request_retry_now(client, req, now_ms);
-    }
-
-    r_request_complete(client, req, RCLIENT_ERR_TIMEOUT, NULL);
-    return RCLIENT_OK;
+    return r_request_policy_on_timeout(client, req, now_ms);
 }
 
 void r_client_cancel_request(r_client_t *client, r_client_req_t *req) {

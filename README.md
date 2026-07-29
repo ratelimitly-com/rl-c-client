@@ -61,16 +61,15 @@ framework README can focus on its readiness, timer, and shutdown rules.
 - Cookie and AES-256-GCM authentication using OpenSSL libcrypto.
 - SRV discovery for `_ratelimitly._udp.<configured-dns-name>`, followed by A/AAAA
   resolution for returned SRV targets.
-- A single parameterized oldest-first HA policy, plus compatibility policies
-  for custom wait, quorum, retry, and response-selection behavior.
+- One parameterized oldest-first HA request policy.
 - Optional metrics labels.
 - Optional steering feedback callback for source-port rebinding.
 - Static and shared library builds.
 
-The default `R_REQUEST_POLICY_OLDEST_FIRST_HA` strategy uses a 20 ms base unit,
-one replay, two 20 ms oldest-preference intervals, and one final 20 ms
-receive-only interval whose first valid response wins. It derives the
-deduplication TTL as exactly 60 ms and validates it against the API-key limit.
+The default request policy uses a 20 ms base unit, one replay, two 20 ms
+oldest-preference intervals, and one final 20 ms receive-only interval whose
+first valid response wins. It derives the deduplication TTL as exactly 60 ms
+and validates it against the API-key limit.
 
 The same strategy can be configured with any bounded replay count and fixed,
 linear, or exponential replay gaps. Response-preference timing is independent
@@ -81,7 +80,7 @@ response before returning either an allow or a deny.
 
 This repository contains the public C API and integration contract. Applications
 do not construct or parse Ratelimitly packets directly; the library owns packet
-encoding, authentication, response parsing, retry policy, and server selection.
+encoding, authentication, response parsing, replay policy, and server selection.
 Integrators provide credentials, resource IDs, latency data, UDP I/O, DNS, and
 timers through the APIs documented here.
 
@@ -279,7 +278,6 @@ Core operations:
 - `r_client_request_deadline_ms`
 - `r_client_on_timeout`
 - `r_client_cancel_request`
-- `r_client_default_oldest_first_ha_policy`
 - `r_client_default_request_policy`
 - `r_client_hash_id`
 - `r_client_parse_auth_key`
@@ -387,7 +385,7 @@ bin/perf_client --clients=50 --requests=10000 --auth=rl-aes1...
 bin/perf_client --duration=60 --auth=rl-aes1...
 bin/perf_client --srv=api-key.example.com --duration=30 --clients=50 --auth=rl-aes1...
 RCLIENT_DNS_SERVER=127.0.0.1:5353 bin/perf_client --auth=rl-aes1...
-bin/perf_client --attempt-timeout-ms=20 --retry-attempts=1 --auth=rl-aes1...
+bin/perf_client --unit-ms=20 --replay-count=1 --auth=rl-aes1...
 ```
 
 Without `--srv`, the perf client derives
@@ -396,8 +394,8 @@ Use `--srv` only for a custom, development, or staging DNS zone.
 
 HA-policy flags:
 
-- `--attempt-timeout-ms=<n>`
-- `--retry-attempts=<n>`
+- `--unit-ms=<n>`
+- `--replay-count=<n>`
 
 These map to the strategy's base unit `U` and replay count `N`. The perf client
 uses the default fixed replay and preference schedules, final receive-only
@@ -434,7 +432,6 @@ strategy through `r_request_policy_t`.
 | GCM | Galois/Counter Mode, which adds authentication to AES encryption. |
 | POSIX | Portable Operating System Interface, the Unix-like APIs used by Linux and macOS builds. |
 | backpressure | Pausing new input or work until a downstream operation has capacity again. |
-| quorum | Minimum number of consistent server responses required before the client accepts a decision. |
 | steering feedback | Server hint that lets a host rebind a UDP source port for later requests. |
 
 ## References

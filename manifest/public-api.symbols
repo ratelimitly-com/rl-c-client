@@ -10,7 +10,6 @@ r_client_cancel_request
 r_client_check_rate_limit_async
 r_client_check_rate_limit_async_borrowed
 r_client_create
-r_client_default_oldest_first_ha_policy
 r_client_default_request_policy
 r_client_destroy
 r_client_format_default_tenant_dns

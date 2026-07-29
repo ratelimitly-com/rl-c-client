@@ -60,5 +60,5 @@ declarations suitable for compiling directly into an executable.
 Both integration modes intentionally keep OpenSSL libcrypto external. Link a
 static OpenSSL build when the final executable must not depend on OpenSSL DLLs
 or shared objects. Do not copy an ad hoc subset of `src/*.c`: the canonical
-manifests are the compatibility boundary and keep the core, workflow, and
-runtime source sets synchronized.
+manifests define the complete source sets and keep the core, workflow, and
+runtime builds synchronized.

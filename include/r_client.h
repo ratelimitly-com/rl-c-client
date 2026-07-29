@@ -66,92 +66,6 @@ typedef struct r_tenant_config {
     r_auth_config_t auth;
 } r_tenant_config_t;
 
-// Request policy surface for wait, quorum, retry, and DNS refresh behavior.
-typedef enum r_wait_policy {
-    R_WAIT_RETURN_ON_FIRST_VALID = 0,
-    R_WAIT_RETURN_ON_FIRST_STABLE = 1,
-    R_WAIT_FOR_DEADLINE = 2,
-    R_WAIT_FOR_QUORUM = 3,
-    // Prefer the oldest trusted server and retry all servers when no response
-    // arrives before the attempt deadline.
-    R_WAIT_RETURN_ON_OLDEST = 4,
-    // Two oldest-first fan-out rounds, followed after two silent deadlines by
-    // one receive-only interval that returns the first valid response.
-    R_WAIT_TWO_ROUND_OLDEST_THEN_FIRST = 5,
-} r_wait_policy_t;
-
-typedef enum r_response_quorum_kind {
-    R_QUORUM_ONE = 0,
-    R_QUORUM_MAJORITY = 1,
-    R_QUORUM_ALL = 2,
-    R_QUORUM_COUNT = 3,
-} r_response_quorum_kind_t;
-
-typedef struct r_response_quorum {
-    r_response_quorum_kind_t kind;
-    size_t count; // used when kind == R_QUORUM_COUNT
-} r_response_quorum_t;
-
-typedef enum r_quorum_requirement {
-    R_QUORUM_SOFT = 0,
-    R_QUORUM_HARD = 1,
-} r_quorum_requirement_t;
-
-typedef enum r_select_policy {
-    R_SELECT_FIRST_VALID = 0,
-    R_SELECT_BEST_BY_RELIABILITY = 1,
-    R_SELECT_CONSERVATIVE_DENY = 2,
-} r_select_policy_t;
-
-typedef enum r_retry_on {
-    R_RETRY_TIMEOUT_ONLY = 0,
-    R_RETRY_QUORUM_NOT_MET = 1,
-    R_RETRY_INCONSISTENT = 2,
-    R_RETRY_NEVER = 3,
-} r_retry_on_t;
-
-typedef enum r_resend_policy {
-    R_RESEND_ALL = 0,
-    R_RESEND_MISSING_ONLY = 1,
-} r_resend_policy_t;
-
-typedef enum r_backoff_kind {
-    R_BACKOFF_NONE = 0,
-    R_BACKOFF_FIXED = 1,
-    R_BACKOFF_EXPONENTIAL = 2,
-} r_backoff_kind_t;
-
-typedef struct r_backoff_policy {
-    r_backoff_kind_t kind;
-    uint64_t delay_ms;     // fixed
-    uint64_t base_delay_ms; // exponential
-    uint64_t max_delay_ms;  // exponential
-    uint64_t jitter_ms;     // exponential
-} r_backoff_policy_t;
-
-typedef enum r_dns_resync_on {
-    R_DNS_INTERVAL_ONLY = 0,
-    R_DNS_ON_TIMEOUT = 1,
-    R_DNS_ON_RETRY = 2,
-    R_DNS_ON_QUORUM_MISS = 3,
-    R_DNS_ON_ANY_ERROR = 4,
-} r_dns_resync_on_t;
-
-typedef struct r_dns_resync_policy {
-    r_dns_resync_on_t on;
-    uint64_t refresh_interval_ms; // periodic DNS refresh; 0 uses default
-    uint64_t min_interval_ms;
-    uint64_t jitter_ms;
-} r_dns_resync_policy_t;
-
-typedef enum r_request_policy_kind {
-    // Compatibility composition of wait, quorum, selection, retry, and DNS
-    // fields below.
-    R_REQUEST_POLICY_COMPOSED = 0,
-    // One coherent oldest-first HA strategy configured by oldest_first_ha.
-    R_REQUEST_POLICY_OLDEST_FIRST_HA = 1,
-} r_request_policy_kind_t;
-
 typedef enum r_ha_schedule_kind {
     R_HA_SCHEDULE_FIXED = 0,
     R_HA_SCHEDULE_LINEAR = 1,
@@ -170,48 +84,29 @@ typedef struct r_ha_schedule {
     r_ha_schedule_growth_t growth;
 } r_ha_schedule_t;
 
-typedef struct r_oldest_first_ha_policy {
-    uint64_t unit_ms;
-    uint32_t replay_count;
-    r_ha_schedule_t replay_gap;
-    r_ha_schedule_t preference;
-    uint32_t final_receive_units;
-    uint32_t final_preference_units;
-    bool completion_delivery;
-} r_oldest_first_ha_policy_t;
-
-typedef struct r_retry_policy {
-    uint32_t retry_attempts;
-    r_retry_on_t retry_on;
-    r_backoff_policy_t backoff;
-    r_resend_policy_t resend;
-    bool refresh_dns_on_retry;
-    uint64_t total_timeout_ms; // 0 means none
-} r_retry_policy_t;
-
+// The sole resource-request policy implemented by the MVP client.
 typedef struct r_request_policy {
-    // Compatibility policy. These fields are used only when kind is
-    // R_REQUEST_POLICY_COMPOSED.
-    uint64_t attempt_timeout_ms;
-    uint32_t dedup_ttl_ms;
-    r_wait_policy_t wait;
-    r_response_quorum_t quorum;
-    r_quorum_requirement_t quorum_requirement;
-    r_select_policy_t select;
-    r_retry_policy_t retry;
-    r_dns_resync_policy_t dns_resync;
-
-    // Appended so existing positional initializers retain their field order.
-    r_request_policy_kind_t kind;
-    r_oldest_first_ha_policy_t oldest_first_ha;
+    uint64_t unit_ms;                    // Base scheduling unit U.
+    uint32_t replay_count;               // Replays after the initial send.
+    r_ha_schedule_t replay_gap;          // Round durations B(k), in U.
+    r_ha_schedule_t preference;          // Oldest-server preference P(k), in U.
+    uint32_t final_receive_units;        // Receive-only duration F, in U.
+    uint32_t final_preference_units;     // Oldest preference in final phase.
+    bool completion_delivery;            // Best-effort delivery to missing servers.
 } r_request_policy_t;
+
+typedef struct r_dns_refresh_policy {
+    uint64_t refresh_interval_ms;            // Periodic refresh; 0 uses 300 seconds.
+    uint64_t forced_refresh_min_interval_ms; // Zero uses 1 second.
+    uint64_t forced_refresh_jitter_ms;
+} r_dns_refresh_policy_t;
 
 // Client configuration.
 typedef struct r_client_config {
     r_tenant_config_t tenant;
-    uint64_t server_stability_threshold_ms;
     // Borrowed during r_client_create; NULL selects default behavior.
     const r_request_policy_t *request_policy;
+    r_dns_refresh_policy_t dns_refresh;
 } r_client_config_t;
 
 // Request inputs.
@@ -345,9 +240,6 @@ RCLIENT_API void r_client_cancel_request(
 );
 
 // Helpers.
-RCLIENT_API void r_client_default_oldest_first_ha_policy(
-    r_oldest_first_ha_policy_t *out_policy
-);
 RCLIENT_API void r_client_default_request_policy(
     r_request_policy_t *out_policy
 );

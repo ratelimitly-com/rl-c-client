@@ -31,8 +31,8 @@ typedef struct perf_config {
     bool has_duration;
     uint64_t duration_secs;
     const char *bucket_prefix;
-    uint64_t attempt_timeout_ms;
-    uint32_t retry_attempts;
+    uint64_t unit_ms;
+    uint32_t replay_count;
     bool ignore_steering;
     bool debug_steering;
     const struct perf_dns_cache *dns_cache;
@@ -780,9 +780,8 @@ static void *perf_worker(void *arg) {
 
     r_request_policy_t policy;
     r_client_default_request_policy(&policy);
-    policy.oldest_first_ha.unit_ms = worker->config->attempt_timeout_ms;
-    policy.oldest_first_ha.replay_count = worker->config->retry_attempts;
-    policy.dns_resync.refresh_interval_ms = 3600u * 1000u;
+    policy.unit_ms = worker->config->unit_ms;
+    policy.replay_count = worker->config->replay_count;
 
     r_auth_config_t auth;
     memset(&auth, 0, sizeof(auth));
@@ -798,8 +797,8 @@ static void *perf_worker(void *arg) {
     r_client_config_t client_cfg;
     memset(&client_cfg, 0, sizeof(client_cfg));
     client_cfg.tenant = tenant;
-    client_cfg.server_stability_threshold_ms = 0;
     client_cfg.request_policy = &policy;
+    client_cfg.dns_refresh.refresh_interval_ms = 3600u * 1000u;
 
     r_client_t *client = NULL;
     int rc = r_client_create(&client_cfg, &io_ops, &resolver_ops, &client);
@@ -939,8 +938,8 @@ static perf_config_t perf_config_from_args(int argc, char **argv) {
     cfg.has_duration = false;
     cfg.duration_secs = 0;
     cfg.bucket_prefix = "perf_bucket";
-    cfg.attempt_timeout_ms = 20;
-    cfg.retry_attempts = 1;
+    cfg.unit_ms = 20;
+    cfg.replay_count = 1;
     cfg.ignore_steering = false;
     cfg.debug_steering = false;
 
@@ -984,14 +983,14 @@ static perf_config_t perf_config_from_args(int argc, char **argv) {
         cfg.bucket_prefix = bucket;
     }
 
-    const char *attempt_timeout = perf_find_arg(argc, argv, "--attempt-timeout-ms");
-    if (attempt_timeout) {
-        cfg.attempt_timeout_ms = perf_parse_u64(attempt_timeout, cfg.attempt_timeout_ms);
+    const char *unit_ms = perf_find_arg(argc, argv, "--unit-ms");
+    if (unit_ms) {
+        cfg.unit_ms = perf_parse_u64(unit_ms, cfg.unit_ms);
     }
 
-    const char *retry_attempts = perf_find_arg(argc, argv, "--retry-attempts");
-    if (retry_attempts) {
-        cfg.retry_attempts = (uint32_t)perf_parse_u64(retry_attempts, cfg.retry_attempts);
+    const char *replay_count = perf_find_arg(argc, argv, "--replay-count");
+    if (replay_count) {
+        cfg.replay_count = (uint32_t)perf_parse_u64(replay_count, cfg.replay_count);
     }
 
     cfg.ignore_steering = perf_has_flag(argc, argv, "--ignore-steering");
@@ -1011,19 +1010,15 @@ static void perf_print_help(void) {
     printf("  --auth=<bech32>         Tenant auth Bech32 key (rl-cookie... or rl-aes...)\n");
     printf("                         Tenant ID is derived from the embedded key_id\n");
     printf("  --bucket-prefix=<name>  Bucket name prefix (default: perf_bucket)\n");
-    printf("  --attempt-timeout-ms=<n> Per-attempt UDP reply deadline (default: 500)\n");
-    printf("  --retry-attempts=<n>    Retry count after the first attempt (default: 0)\n");
-    printf("  --retry-on=<mode>       Retry trigger: timeout | quorum | inconsistent | never\n");
-    printf("  --retry-resend=<mode>   Retry resend policy: all | missing\n");
-    printf("  --retry-total-timeout-ms=<n> Overall timeout cap across retries (0 disables cap)\n");
-    printf("  --retry-refresh-dns     Refresh DNS before retry attempts\n");
+    printf("  --unit-ms=<n>           HA scheduling time unit (default: 20)\n");
+    printf("  --replay-count=<n>      Replay rounds after the initial send (default: 1)\n");
     printf("  --ignore-steering       Ignore steering_feedback from server\n");
     printf("  --debug-steering        Show steering_feedback values\n\n");
     printf("Examples:\n");
     printf("  perf_client --clients=50 --requests=10000 --auth=rl-aes1...\n");
     printf("  perf_client --duration=60 --auth=rl-aes1...\n");
     printf("  perf_client --srv=custom.example.com --duration=30 --clients=50 --auth=rl-aes1...\n");
-    printf("  perf_client --attempt-timeout-ms=750 --retry-attempts=2 --retry-on=timeout --auth=rl-aes1...\n");
+    printf("  perf_client --unit-ms=10 --replay-count=2 --auth=rl-aes1...\n");
 }
 
 static void *perf_progress_thread(void *arg) {
@@ -1086,8 +1081,8 @@ int main(int argc, char **argv) {
     printf("Concurrent clients: %zu\n", cfg.concurrent_clients);
     printf(
         "HA policy: unit=%llu ms replays=%u completion_delivery=true\n",
-        (unsigned long long)cfg.attempt_timeout_ms,
-        cfg.retry_attempts
+        (unsigned long long)cfg.unit_ms,
+        cfg.replay_count
     );
     if (cfg.has_duration) {
         printf("Duration: %llu s\n", (unsigned long long)cfg.duration_secs);

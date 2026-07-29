@@ -1099,7 +1099,7 @@ static void test_destroy_handles_dns_cancel_callback(void) {
     assert(ctx.pending_addr_user == NULL);
 }
 
-static void test_two_round_policy_resends_once_then_enters_receive_only_grace(void) {
+static void test_default_policy_replays_once_then_enters_receive_only_phase(void) {
     test_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
     ctx.now_ms = 123456789u;
@@ -1140,7 +1140,7 @@ static void test_two_round_policy_resends_once_then_enters_receive_only_grace(vo
     r_client_destroy(client);
 }
 
-static void test_two_round_policy_late_timers_remain_bounded_by_dedup_ttl(void) {
+static void test_default_policy_late_timers_remain_bounded_by_dedup_ttl(void) {
     test_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
     ctx.now_ms = 123456789u;
@@ -1179,7 +1179,7 @@ static void test_two_round_policy_late_timers_remain_bounded_by_dedup_ttl(void) 
     r_client_destroy(client);
 }
 
-static void test_two_round_policy_grace_returns_first_valid_without_resend(void) {
+static void test_default_policy_final_phase_returns_first_valid_without_replay(void) {
     test_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
     r_client_t *client = make_client(&ctx);
@@ -1221,7 +1221,7 @@ static void test_two_round_policy_grace_returns_first_valid_without_resend(void)
     r_client_destroy(client);
 }
 
-static void test_two_round_policy_waits_for_oldest_and_returns_best_at_deadline(void) {
+static void test_default_policy_waits_for_oldest_and_returns_best_at_deadline(void) {
     test_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
     r_client_t *client = make_two_server_client(&ctx);
@@ -1259,7 +1259,7 @@ static void test_two_round_policy_waits_for_oldest_and_returns_best_at_deadline(
     r_client_destroy(client);
 }
 
-static void test_two_round_policy_returns_oldest_immediately(void) {
+static void test_default_policy_returns_oldest_immediately(void) {
     test_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
     r_client_t *client = make_two_server_client(&ctx);
@@ -1292,29 +1292,12 @@ static void test_two_round_policy_returns_oldest_immediately(void) {
     r_client_destroy(client);
 }
 
-static void test_two_round_policy_rejects_ttl_above_credential_limit(void) {
+static void test_default_policy_rejects_ttl_above_credential_limit(void) {
     test_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
     r_request_policy_t policy;
     r_client_default_request_policy(&policy);
-    policy.oldest_first_ha.unit_ms = 101u;
-    r_client_t *client = make_client_with_policy(&ctx, &policy);
-    r_resource_request_t resource = sample_resource();
-    assert(r_client_check_rate_limit_async(
-        client, &resource, 1, NULL, 0, NULL, 0,
-        noop_rate_limit_cb, NULL, NULL
-    ) == RCLIENT_ERR_CONFIG);
-    assert(ctx.send_count == 0u);
-    r_client_destroy(client);
-}
-
-static void test_two_round_policy_rejects_shorter_total_timeout(void) {
-    test_ctx_t ctx;
-    memset(&ctx, 0, sizeof(ctx));
-    r_request_policy_t policy;
-    r_client_default_request_policy(&policy);
-    policy.kind = R_REQUEST_POLICY_COMPOSED;
-    policy.retry.total_timeout_ms = 59u;
+    policy.unit_ms = 101u;
     r_client_t *client = make_client_with_policy(&ctx, &policy);
     r_resource_request_t resource = sample_resource();
     assert(r_client_check_rate_limit_async(
@@ -1354,32 +1337,32 @@ static uint32_t last_cookie_request_ttl(const test_ctx_t *ctx) {
     return read_le32(ctx->last_packet + pdu_pos + 4u);
 }
 
-static void test_parameterized_exponential_schedule_uses_absolute_deadlines(void) {
+static void test_exponential_schedule_uses_absolute_deadlines(void) {
     test_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
     ctx.now_ms = 1000u;
 
     r_request_policy_t policy;
     r_client_default_request_policy(&policy);
-    policy.oldest_first_ha.unit_ms = 10u;
-    policy.oldest_first_ha.replay_count = 2u;
+    policy.unit_ms = 10u;
+    policy.replay_count = 2u;
     set_ha_schedule(
-        &policy.oldest_first_ha.replay_gap,
+        &policy.replay_gap,
         R_HA_SCHEDULE_EXPONENTIAL,
         1u,
         4u,
         2u
     );
     set_ha_schedule(
-        &policy.oldest_first_ha.preference,
+        &policy.preference,
         R_HA_SCHEDULE_FIXED,
         1u,
         1u,
         0u
     );
-    policy.oldest_first_ha.final_receive_units = 1u;
-    policy.oldest_first_ha.final_preference_units = 0u;
-    policy.oldest_first_ha.completion_delivery = false;
+    policy.final_receive_units = 1u;
+    policy.final_preference_units = 0u;
+    policy.completion_delivery = false;
 
     r_client_t *client = make_client_with_policy(&ctx, &policy);
     result_cb_ctx_t result = {0};
@@ -1405,32 +1388,32 @@ static void test_parameterized_exponential_schedule_uses_absolute_deadlines(void
     r_client_destroy(client);
 }
 
-static void test_parameterized_linear_schedule_has_distinct_gaps(void) {
+static void test_linear_schedule_has_distinct_gaps(void) {
     test_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
     ctx.now_ms = 2000u;
 
     r_request_policy_t policy;
     r_client_default_request_policy(&policy);
-    policy.oldest_first_ha.unit_ms = 10u;
-    policy.oldest_first_ha.replay_count = 2u;
+    policy.unit_ms = 10u;
+    policy.replay_count = 2u;
     set_ha_schedule(
-        &policy.oldest_first_ha.replay_gap,
+        &policy.replay_gap,
         R_HA_SCHEDULE_LINEAR,
         1u,
         3u,
         1u
     );
     set_ha_schedule(
-        &policy.oldest_first_ha.preference,
+        &policy.preference,
         R_HA_SCHEDULE_FIXED,
         1u,
         1u,
         0u
     );
-    policy.oldest_first_ha.final_receive_units = 0u;
-    policy.oldest_first_ha.final_preference_units = 0u;
-    policy.oldest_first_ha.completion_delivery = false;
+    policy.final_receive_units = 0u;
+    policy.final_preference_units = 0u;
+    policy.completion_delivery = false;
 
     r_client_t *client = make_client_with_policy(&ctx, &policy);
     result_cb_ctx_t result = {0};
@@ -1451,31 +1434,31 @@ static void test_parameterized_linear_schedule_has_distinct_gaps(void) {
     r_client_destroy(client);
 }
 
-static void test_parameterized_preference_is_independent_of_replay_gap(void) {
+static void test_preference_is_independent_of_replay_gap(void) {
     test_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
     ctx.now_ms = 3000u;
 
     r_request_policy_t policy;
     r_client_default_request_policy(&policy);
-    policy.oldest_first_ha.unit_ms = 10u;
-    policy.oldest_first_ha.replay_count = 0u;
+    policy.unit_ms = 10u;
+    policy.replay_count = 0u;
     set_ha_schedule(
-        &policy.oldest_first_ha.replay_gap,
+        &policy.replay_gap,
         R_HA_SCHEDULE_FIXED,
         5u,
         5u,
         0u
     );
     set_ha_schedule(
-        &policy.oldest_first_ha.preference,
+        &policy.preference,
         R_HA_SCHEDULE_FIXED,
         1u,
         1u,
         0u
     );
-    policy.oldest_first_ha.final_receive_units = 0u;
-    policy.oldest_first_ha.completion_delivery = false;
+    policy.final_receive_units = 0u;
+    policy.completion_delivery = false;
 
     r_client_t *client = make_two_server_client_with_policy(&ctx, &policy);
     result_cb_ctx_t result = {0};
@@ -1505,31 +1488,31 @@ static void test_parameterized_preference_is_independent_of_replay_gap(void) {
     r_client_destroy(client);
 }
 
-static void test_parameterized_response_after_preference_returns_immediately(void) {
+static void test_response_after_preference_returns_immediately(void) {
     test_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
     ctx.now_ms = 4000u;
 
     r_request_policy_t policy;
     r_client_default_request_policy(&policy);
-    policy.oldest_first_ha.unit_ms = 10u;
-    policy.oldest_first_ha.replay_count = 0u;
+    policy.unit_ms = 10u;
+    policy.replay_count = 0u;
     set_ha_schedule(
-        &policy.oldest_first_ha.replay_gap,
+        &policy.replay_gap,
         R_HA_SCHEDULE_FIXED,
         5u,
         5u,
         0u
     );
     set_ha_schedule(
-        &policy.oldest_first_ha.preference,
+        &policy.preference,
         R_HA_SCHEDULE_FIXED,
         1u,
         1u,
         0u
     );
-    policy.oldest_first_ha.final_receive_units = 0u;
-    policy.oldest_first_ha.completion_delivery = false;
+    policy.final_receive_units = 0u;
+    policy.completion_delivery = false;
 
     r_client_t *client = make_two_server_client_with_policy(&ctx, &policy);
     result_cb_ctx_t result = {0};
@@ -1552,7 +1535,7 @@ static void test_parameterized_response_after_preference_returns_immediately(voi
     r_client_destroy(client);
 }
 
-static void test_parameterized_completion_delivery_covers_allow_and_deny(void) {
+static void test_completion_delivery_covers_allow_and_deny(void) {
     for (size_t denied = 0; denied < 2u; denied++) {
         test_ctx_t ctx;
         memset(&ctx, 0, sizeof(ctx));
@@ -1587,12 +1570,12 @@ static void test_parameterized_completion_delivery_covers_allow_and_deny(void) {
     }
 }
 
-static void test_parameterized_completion_delivery_can_be_disabled(void) {
+static void test_completion_delivery_can_be_disabled(void) {
     test_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
     r_request_policy_t policy;
     r_client_default_request_policy(&policy);
-    policy.oldest_first_ha.completion_delivery = false;
+    policy.completion_delivery = false;
     r_client_t *client = make_two_server_client_with_policy(&ctx, &policy);
     result_cb_ctx_t result = {0};
     (void)start_sample_request(client, &result);
@@ -1613,7 +1596,7 @@ static void test_parameterized_completion_delivery_can_be_disabled(void) {
     r_client_destroy(client);
 }
 
-static void test_parameterized_final_phase_completion_delivery(void) {
+static void test_final_phase_completion_delivery(void) {
     test_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
     ctx.now_ms = 6000u;
@@ -1651,7 +1634,7 @@ static void test_parameterized_final_phase_completion_delivery(void) {
     r_client_destroy(client);
 }
 
-static void test_parameterized_completion_delivery_uses_server_identity(void) {
+static void test_completion_delivery_uses_server_identity(void) {
     test_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
     r_client_t *client = make_multiple_address_client(&ctx);
@@ -1676,7 +1659,7 @@ static void test_parameterized_completion_delivery_uses_server_identity(void) {
     r_client_destroy(client);
 }
 
-static void test_parameterized_completion_send_failure_keeps_result(void) {
+static void test_completion_send_failure_keeps_result(void) {
     test_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
     r_client_t *client = make_two_server_client(&ctx);
@@ -1702,15 +1685,15 @@ static void test_parameterized_completion_send_failure_keeps_result(void) {
     r_client_destroy(client);
 }
 
-static void test_parameterized_late_response_cannot_change_timeout(void) {
+static void test_late_response_cannot_change_timeout(void) {
     test_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
     ctx.now_ms = 8000u;
     r_request_policy_t policy;
     r_client_default_request_policy(&policy);
-    policy.oldest_first_ha.unit_ms = 10u;
-    policy.oldest_first_ha.replay_count = 0u;
-    policy.oldest_first_ha.final_receive_units = 0u;
+    policy.unit_ms = 10u;
+    policy.replay_count = 0u;
+    policy.final_receive_units = 0u;
 
     r_client_t *client = make_two_server_client_with_policy(&ctx, &policy);
     result_cb_ctx_t result = {0};
@@ -1738,15 +1721,15 @@ static void test_parameterized_late_response_cannot_change_timeout(void) {
     r_client_destroy(client);
 }
 
-static void test_parameterized_completion_does_not_send_at_deadline(void) {
+static void test_completion_does_not_send_at_deadline(void) {
     test_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
     ctx.now_ms = 9000u;
     r_request_policy_t policy;
     r_client_default_request_policy(&policy);
-    policy.oldest_first_ha.unit_ms = 10u;
-    policy.oldest_first_ha.replay_count = 0u;
-    policy.oldest_first_ha.final_receive_units = 0u;
+    policy.unit_ms = 10u;
+    policy.replay_count = 0u;
+    policy.final_receive_units = 0u;
 
     r_client_t *client = make_two_server_client_with_policy(&ctx, &policy);
     result_cb_ctx_t result = {0};
@@ -1770,7 +1753,7 @@ static void test_parameterized_completion_does_not_send_at_deadline(void) {
     r_client_destroy(client);
 }
 
-static void test_parameterized_late_timer_does_not_replay_at_dedup_deadline(void) {
+static void test_late_timer_does_not_replay_at_dedup_deadline(void) {
     test_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
     ctx.now_ms = 10000u;
@@ -1787,7 +1770,7 @@ static void test_parameterized_late_timer_does_not_replay_at_dedup_deadline(void
     r_client_destroy(client);
 }
 
-static void assert_parameterized_policy_rejected(
+static void assert_policy_rejected(
     r_request_policy_t *policy
 ) {
     test_ctx_t ctx;
@@ -1810,69 +1793,48 @@ static void assert_parameterized_policy_rejected(
     r_client_destroy(client);
 }
 
-static void test_parameterized_policy_rejects_invalid_schedules(void) {
+static void test_policy_rejects_invalid_schedules(void) {
     r_request_policy_t policy;
 
     r_client_default_request_policy(&policy);
-    policy.oldest_first_ha.unit_ms = 0u;
-    assert_parameterized_policy_rejected(&policy);
+    policy.unit_ms = 0u;
+    assert_policy_rejected(&policy);
 
     r_client_default_request_policy(&policy);
-    policy.oldest_first_ha.replay_gap.initial_units = 0u;
-    assert_parameterized_policy_rejected(&policy);
+    policy.replay_gap.initial_units = 0u;
+    assert_policy_rejected(&policy);
 
     r_client_default_request_policy(&policy);
-    policy.oldest_first_ha.preference.initial_units = 2u;
-    policy.oldest_first_ha.preference.max_units = 2u;
-    assert_parameterized_policy_rejected(&policy);
+    policy.preference.initial_units = 2u;
+    policy.preference.max_units = 2u;
+    assert_policy_rejected(&policy);
 
     r_client_default_request_policy(&policy);
-    policy.oldest_first_ha.replay_count = 1u;
-    policy.oldest_first_ha.replay_gap.initial_units = 2u;
-    policy.oldest_first_ha.replay_gap.max_units = 2u;
+    policy.replay_count = 1u;
+    policy.replay_gap.initial_units = 2u;
+    policy.replay_gap.max_units = 2u;
     set_ha_schedule(
-        &policy.oldest_first_ha.preference,
+        &policy.preference,
         R_HA_SCHEDULE_LINEAR,
         1u,
         3u,
         2u
     );
-    assert_parameterized_policy_rejected(&policy);
+    assert_policy_rejected(&policy);
 
     r_client_default_request_policy(&policy);
     set_ha_schedule(
-        &policy.oldest_first_ha.replay_gap,
+        &policy.replay_gap,
         R_HA_SCHEDULE_EXPONENTIAL,
         1u,
         2u,
         0u
     );
-    assert_parameterized_policy_rejected(&policy);
+    assert_policy_rejected(&policy);
 
     r_client_default_request_policy(&policy);
-    policy.oldest_first_ha.unit_ms = 101u;
-    assert_parameterized_policy_rejected(&policy);
-}
-
-static void test_composed_two_round_policy_remains_compatible(void) {
-    test_ctx_t ctx;
-    memset(&ctx, 0, sizeof(ctx));
-    ctx.now_ms = 7000u;
-    r_request_policy_t policy;
-    r_client_default_request_policy(&policy);
-    policy.kind = R_REQUEST_POLICY_COMPOSED;
-    policy.attempt_timeout_ms = 7u;
-    policy.retry.total_timeout_ms = 0u;
-
-    r_client_t *client = make_client_with_policy(&ctx, &policy);
-    result_cb_ctx_t result = {0};
-    r_client_req_t *req = start_sample_request(client, &result);
-    assert(last_cookie_request_ttl(&ctx) == 21u);
-    uint64_t deadline = 0;
-    assert(r_client_request_deadline_ms(req, &deadline) == RCLIENT_OK);
-    assert(deadline == 7007u);
-    r_client_cancel_request(client, req);
-    r_client_destroy(client);
+    policy.unit_ms = 101u;
+    assert_policy_rejected(&policy);
 }
 
 int main(void) {
@@ -1887,26 +1849,24 @@ int main(void) {
     test_destroy_ignores_late_dns_srv_callback();
     test_destroy_ignores_late_dns_addr_callback();
     test_destroy_handles_dns_cancel_callback();
-    test_two_round_policy_resends_once_then_enters_receive_only_grace();
-    test_two_round_policy_late_timers_remain_bounded_by_dedup_ttl();
-    test_two_round_policy_grace_returns_first_valid_without_resend();
-    test_two_round_policy_waits_for_oldest_and_returns_best_at_deadline();
-    test_two_round_policy_returns_oldest_immediately();
-    test_two_round_policy_rejects_ttl_above_credential_limit();
-    test_two_round_policy_rejects_shorter_total_timeout();
-    test_parameterized_exponential_schedule_uses_absolute_deadlines();
-    test_parameterized_linear_schedule_has_distinct_gaps();
-    test_parameterized_preference_is_independent_of_replay_gap();
-    test_parameterized_response_after_preference_returns_immediately();
-    test_parameterized_completion_delivery_covers_allow_and_deny();
-    test_parameterized_completion_delivery_can_be_disabled();
-    test_parameterized_final_phase_completion_delivery();
-    test_parameterized_completion_delivery_uses_server_identity();
-    test_parameterized_completion_send_failure_keeps_result();
-    test_parameterized_late_response_cannot_change_timeout();
-    test_parameterized_completion_does_not_send_at_deadline();
-    test_parameterized_late_timer_does_not_replay_at_dedup_deadline();
-    test_parameterized_policy_rejects_invalid_schedules();
-    test_composed_two_round_policy_remains_compatible();
+    test_default_policy_replays_once_then_enters_receive_only_phase();
+    test_default_policy_late_timers_remain_bounded_by_dedup_ttl();
+    test_default_policy_final_phase_returns_first_valid_without_replay();
+    test_default_policy_waits_for_oldest_and_returns_best_at_deadline();
+    test_default_policy_returns_oldest_immediately();
+    test_default_policy_rejects_ttl_above_credential_limit();
+    test_exponential_schedule_uses_absolute_deadlines();
+    test_linear_schedule_has_distinct_gaps();
+    test_preference_is_independent_of_replay_gap();
+    test_response_after_preference_returns_immediately();
+    test_completion_delivery_covers_allow_and_deny();
+    test_completion_delivery_can_be_disabled();
+    test_final_phase_completion_delivery();
+    test_completion_delivery_uses_server_identity();
+    test_completion_send_failure_keeps_result();
+    test_late_response_cannot_change_timeout();
+    test_completion_does_not_send_at_deadline();
+    test_late_timer_does_not_replay_at_dedup_deadline();
+    test_policy_rejects_invalid_schedules();
     return 0;
 }
