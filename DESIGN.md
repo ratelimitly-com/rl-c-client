@@ -6,11 +6,11 @@ timers, DNS, and memory lifetimes.
 
 ## Goals
 
-- Keep the public API small and stable.
+- Keep the public API small and coherent while the MVP evolves.
 - Avoid blocking calls and internal threads.
 - Support proxies and other event-loop embedders.
 - Keep packet encoding, credential handling, authentication, response parsing,
-  retry policy, and server selection inside the library.
+  replay policy, and server selection inside the library.
 - Keep transport, resolver, timer, and logging ownership in the host.
 
 ## Public Boundary
@@ -61,14 +61,26 @@ Rate-limit checks are asynchronous:
 The borrowed API is the preferred high-throughput path when the caller can keep
 request buffers alive until completion.
 
-The default request policy prefers the oldest trusted r-server. A request is
-one logical operation with one `unique_id` and deduplication window, sent to
-all currently known servers. The client returns immediately when the oldest
-trusted server responds. If the attempt deadline expires first, it returns the
-oldest valid response received; if none arrived, it retransmits the same logical
-request to all servers. This repeats until the deduplication deadline, after
-which the request fails. Applications may select another policy when a
-different availability or consistency trade-off is required.
+The default request policy is one parameterized oldest-first HA strategy. A
+request is one logical operation with one `unique_id`, one deduplication
+window, and an immutable server snapshot. The first transmission goes to every
+server. A valid response from the oldest trusted server completes immediately;
+other valid responses wait only for the independently configured preference
+deadline.
+
+When a round remains response-free, the policy may replay to missing servers
+after a fixed, linear, or exponential gap. After the replay budget it may enter
+a final receive-only interval. The complete schedule derives the wire
+deduplication TTL and must fit the API-key limit.
+
+Before returning an allow or deny, optional completion delivery
+fire-and-forgets the same logical request to servers still missing a valid
+response. This improves eventual convergence without changing the selected
+result.
+
+There is one request-policy implementation and one public policy structure.
+The MVP deliberately does not carry legacy wait, quorum, selection, retry, or
+policy-dispatch branches.
 
 ## Latency Reports
 

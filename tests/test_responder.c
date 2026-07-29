@@ -135,7 +135,9 @@ static r_client_t *create_client(test_context_t *context, const char *auth_key) 
     };
     r_request_policy_t policy;
     r_client_default_request_policy(&policy);
-    policy.wait = R_WAIT_RETURN_ON_FIRST_VALID;
+    policy.replay_count = 0u;
+    policy.final_receive_units = 0u;
+    policy.completion_delivery = false;
 
     r_client_config_t config;
     memset(&config, 0, sizeof(config));

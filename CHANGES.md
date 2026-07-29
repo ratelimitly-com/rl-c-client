@@ -10,11 +10,17 @@
 
 ## Unreleased
 
-- Added the explicit two-round oldest-first HA response mode and made it the
-  default. It resends once after a silent first interval, then uses a
-  receive-only first-valid grace interval after a silent second interval. Its
-  deduplication TTL is derived as three times the base interval and checked
-  against the credential quota.
+- **Breaking:** replaced the previous wait/quorum/selection/retry policy
+  surface with one flat `r_request_policy_t`. The first MVP carries no aliases,
+  policy discriminator, or legacy execution path.
+- Added configurable fixed, linear, and exponential replay schedules,
+  independent oldest-response preference timing, and optional
+  outcome-independent completion delivery. The complete schedule derives its
+  deduplication TTL and is checked against the credential quota.
+- Moved DNS refresh pacing to `r_client_config_t.dns_refresh`; it is not part
+  of request response-selection policy.
+- Renamed the performance client policy options to `--unit-ms` and
+  `--replay-count` and removed the former retry-oriented options.
 - Added native Ubuntu, Debian, Fedora, macOS, and Windows release artifacts for
   AMD64 and AArch64, including a universal macOS SDK.
 - Added deterministic embeddable source archives, exact-set checksums and

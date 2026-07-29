@@ -61,25 +61,26 @@ framework README can focus on its readiness, timer, and shutdown rules.
 - Cookie and AES-256-GCM authentication using OpenSSL libcrypto.
 - SRV discovery for `_ratelimitly._udp.<configured-dns-name>`, followed by A/AAAA
   resolution for returned SRV targets.
-- Per-request deadlines, timeout/retry policy, quorum policy, and server
-  response selection.
+- One parameterized oldest-first HA request policy.
 - Optional metrics labels.
 - Optional steering feedback callback for source-port rebinding.
 - Static and shared library builds.
 
-The default wait policy uses three consecutive intervals of
-`attempt_timeout_ms` (20 ms by default). In each of the first two intervals it
-prefers the oldest trusted r-server, returning that server's valid response
-immediately or the oldest valid response available at the interval deadline.
-The same logical request is retransmitted to all servers only when the first
-interval is silent. If the second interval is also silent, the final interval
-sends nothing and returns the first valid response received. The request fails
-if that interval is also silent. This mode derives its deduplication TTL as
-exactly three times `attempt_timeout_ms`.
+The default request policy uses a 20 ms base unit, one replay, two 20 ms
+oldest-preference intervals, and one final 20 ms receive-only interval whose
+first valid response wins. It derives the deduplication TTL as exactly 60 ms
+and validates it against the API-key limit.
+
+The same strategy can be configured with any bounded replay count and fixed,
+linear, or exponential replay gaps. Response-preference timing is independent
+of replay pacing: a long exponential gap never forces the client to retain an
+available response for the whole gap. Optional completion delivery
+fire-and-forgets the same deduplicated request to servers still missing a valid
+response before returning either an allow or a deny.
 
 This repository contains the public C API and integration contract. Applications
 do not construct or parse Ratelimitly packets directly; the library owns packet
-encoding, authentication, response parsing, retry policy, and server selection.
+encoding, authentication, response parsing, replay policy, and server selection.
 Integrators provide credentials, resource IDs, latency data, UDP I/O, DNS, and
 timers through the APIs documented here.
 
@@ -384,21 +385,22 @@ bin/perf_client --clients=50 --requests=10000 --auth=rl-aes1...
 bin/perf_client --duration=60 --auth=rl-aes1...
 bin/perf_client --srv=api-key.example.com --duration=30 --clients=50 --auth=rl-aes1...
 RCLIENT_DNS_SERVER=127.0.0.1:5353 bin/perf_client --auth=rl-aes1...
-bin/perf_client --attempt-timeout-ms=750 --retry-attempts=2 --retry-on=timeout --auth=rl-aes1...
+bin/perf_client --unit-ms=20 --replay-count=1 --auth=rl-aes1...
 ```
 
 Without `--srv`, the perf client derives
 `c-<key-id>.p0.ratelimitly.com` from `--auth`, matching the library default.
 Use `--srv` only for a custom, development, or staging DNS zone.
 
-Retry-related flags:
+HA-policy flags:
 
-- `--attempt-timeout-ms=<n>`
-- `--retry-attempts=<n>`
-- `--retry-on=timeout|quorum|inconsistent|never`
-- `--retry-resend=all|missing`
-- `--retry-total-timeout-ms=<n>`
-- `--retry-refresh-dns`
+- `--unit-ms=<n>`
+- `--replay-count=<n>`
+
+These map to the strategy's base unit `U` and replay count `N`. The perf client
+uses the default fixed replay and preference schedules, final receive-only
+interval, and completion delivery. Applications can configure the full
+strategy through `r_request_policy_t`.
 
 ## Glossary
 
@@ -430,7 +432,6 @@ Retry-related flags:
 | GCM | Galois/Counter Mode, which adds authentication to AES encryption. |
 | POSIX | Portable Operating System Interface, the Unix-like APIs used by Linux and macOS builds. |
 | backpressure | Pausing new input or work until a downstream operation has capacity again. |
-| quorum | Minimum number of consistent server responses required before the client accepts a decision. |
 | steering feedback | Server hint that lets a host rebind a UDP source port for later requests. |
 
 ## References
