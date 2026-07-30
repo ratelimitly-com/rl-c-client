@@ -204,11 +204,13 @@ static int runtime_udp_send(
     if (length > INT_MAX) {
         return -1;
     }
-    int sent;
-    do {
-        sent = sendto(socket_value, (const char *)buffer, (int)length, 0,
-            (const struct sockaddr *)&to->sa, to->len);
-    } while (sent == SOCKET_ERROR && WSAGetLastError() == WSAEINTR);
+    int sent = r_win32_udp_sendto(
+        socket_value,
+        (const char *)buffer,
+        (int)length,
+        (const struct sockaddr *)&to->sa,
+        to->len
+    );
     return sent == (int)length ? 0 : -1;
 #else
     ssize_t sent;

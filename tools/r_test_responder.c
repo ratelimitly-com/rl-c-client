@@ -555,11 +555,10 @@ static int send_packet(
         return -1;
     }
 #ifdef _WIN32
-    int sent = sendto(
+    int sent = r_win32_udp_sendto(
         socket_value,
         (const char *)buffer,
         (int)length,
-        0,
         (const struct sockaddr *)peer,
         peer_len
     );
