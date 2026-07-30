@@ -41,6 +41,7 @@ src/r_crypto.h
 src/r_policy.c
 src/r_protocol.c
 src/r_protocol.h
+src/r_win32_udp.h
 tools/package_sdk.py
 tools/verify_source_archive.py
 tools/write_dependency_sbom.py

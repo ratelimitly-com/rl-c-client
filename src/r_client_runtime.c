@@ -15,6 +15,8 @@
 #include <windows.h>
 #include <windns.h>
 #include <ws2tcpip.h>
+
+#include "r_win32_udp.h"
 #else
 #include <arpa/inet.h>
 #include <arpa/nameser.h>
@@ -134,6 +136,9 @@ static r_runtime_socket_t open_udp_socket(int family) {
     if (socket_value == R_RUNTIME_INVALID_SOCKET) {
         return R_RUNTIME_INVALID_SOCKET;
     }
+#ifdef _WIN32
+    r_win32_udp_disable_connreset(socket_value);
+#endif
     if (set_nonblocking(socket_value) != 0) {
         close_socket(socket_value);
         return R_RUNTIME_INVALID_SOCKET;
@@ -612,7 +617,12 @@ int r_runtime_client_on_readable(
         );
         if (length == SOCKET_ERROR) {
             int error = WSAGetLastError();
-            if (error == WSAEINTR) {
+            if (error == WSAEINTR || error == WSAECONNRESET) {
+                /*
+                 * An alternate Winsock provider may not implement
+                 * SIO_UDP_CONNRESET. Consume its asynchronous ICMP report and
+                 * keep draining; request deadlines decide server reachability.
+                 */
                 continue;
             }
             if (error == WSAEWOULDBLOCK) {
