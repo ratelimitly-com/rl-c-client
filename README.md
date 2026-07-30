@@ -51,17 +51,43 @@ flowchart LR
 
 ## Three small examples
 
-The examples use readable resource and service names to show intent. The C API
-maps those names to Ratelimitly IDs.
+Each example first states the operation in English and then expresses it with
+the public C API. The snippets assume that `r_client.h` is included, `client`
+is initialized, and a non-null completion callback is supplied for resource
+requests. Request lifetime and event-loop handling are covered later.
 
 ### Request one token
 
-An application wants to begin one operation charged to the `checkout` resource:
+In English: “Get me one token for `checkout`, whose limit is 100 tokens per
+second.”
 
-```text
-resource request
-  consume: checkout[1]
-  latency guards: none
+```c
+int request_one_checkout_token(
+    r_client_t *client,
+    r_rate_limit_cb callback,
+    void *user,
+    r_client_req_t **out_request
+) {
+    r_resource_request_t resource = {
+        .window_size_ms = 1000u,
+        .rate_limit = 100u,
+        .tokens_requested = 1u,
+    };
+    r_client_hash_id("checkout", resource.bucket_id);
+
+    return r_client_check_rate_limit_async(
+        client,
+        &resource,
+        1u,
+        NULL,
+        0u,
+        NULL,
+        0u,
+        callback,
+        user,
+        out_request
+    );
+}
 ```
 
 A grant consumes one token from `checkout` and authorizes the operation. A
@@ -76,26 +102,69 @@ request. This third outcome applies to guarded resource requests as well.
 
 ### Report one service latency
 
-An application observed that one call to the `inventory` service took 18 ms:
+In English: “Record that one call to `inventory` took 18 ms.”
 
-```text
-latency report
-  service: inventory
-  observed latency: 18 ms
+```c
+int report_inventory_latency(r_client_t *client) {
+    r_service_latency_report_t report = {
+        .observed_latency = 18u,
+        .ttl_ms = 10000u,
+        .max_samples = 100u,
+        .buffer_size = 32u,
+        .min_sample_threshold = 5u,
+    };
+    r_client_hash_id("inventory", report.service_id);
+
+    return r_client_report_latency(client, &report, 1u);
+}
 ```
 
 The report contributes that measurement to the `inventory` latency tracker. It
-does not consume a resource or make an admission decision.
+does not consume a resource or make an admission decision. The other values
+configure that tracker and are explained in
+[Latency Guards and Independent Reports](docs/api.md#latency-guards-and-independent-reports).
 
 ### Request one token with one latency guard
 
-An application wants one `checkout` token, but only while the tracked
-`inventory` latency is below 100 ms:
+In English: “Get me one token for `checkout`, but only if the tracked
+`inventory` latency is below 100 ms.”
 
-```text
-resource request
-  consume: checkout[1]
-  latency guard: inventory latency < 100 ms
+```c
+int request_checkout_with_inventory_guard(
+    r_client_t *client,
+    r_rate_limit_cb callback,
+    void *user,
+    r_client_req_t **out_request
+) {
+    r_resource_request_t resource = {
+        .window_size_ms = 1000u,
+        .rate_limit = 100u,
+        .tokens_requested = 1u,
+    };
+    r_client_hash_id("checkout", resource.bucket_id);
+
+    r_latency_guard_t guard = {
+        .threshold_ms = 100u,
+        .ttl_ms = 10000u,
+        .max_samples = 100u,
+        .buffer_size = 32u,
+        .min_sample_threshold = 5u,
+    };
+    r_client_hash_id("inventory", guard.service_id);
+
+    return r_client_check_rate_limit_async(
+        client,
+        &resource,
+        1u,
+        &guard,
+        1u,
+        NULL,
+        0u,
+        callback,
+        user,
+        out_request
+    );
+}
 ```
 
 Ratelimitly evaluates the consumption and guard together. A grant consumes one

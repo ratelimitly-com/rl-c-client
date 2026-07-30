@@ -758,6 +758,30 @@ grep -Fq -- 'A request failure is neither a grant nor a rejection.' \
 grep -Fq -- 'it does not prove that Ratelimitly did not process the' \
   "$ROOT_README" \
   || fail "root README overstates what a resource-request failure proves"
+if grep -Eq -- '^[[:space:]]*(consume:|latency guards?:)' "$ROOT_README"; then
+  fail "root README uses an invented request notation instead of English or C"
+fi
+readme_c_example_count=$(awk '
+  $0 == "## Three small examples" { section = 1; next }
+  section && /^## / { exit }
+  section && $0 == "```c" { count++ }
+  END { print count + 0 }
+' "$ROOT_README")
+[[ "$readme_c_example_count" -eq 3 ]] \
+  || fail "root README must contain three C operation examples"
+readme_c_examples=$(awk '
+  $0 == "## Three small examples" { section = 1; next }
+  section && /^## / { exit }
+  section && $0 == "```c" { code = 1; next }
+  code && $0 == "```" { code = 0; next }
+  code { print }
+' "$ROOT_README")
+if ! {
+  printf '#include "r_client.h"\n%s\n' "$readme_c_examples" |
+    cc -I"$ROOT/include" -std=c11 -fsyntax-only -x c -
+}; then
+  fail "root README operation examples are not valid public C"
+fi
 examples_line=$(awk '$0 == "## Three small examples" { print NR; exit }' \
   "$ROOT_README")
 layers_line=$(awk '$0 == "## Choose the integration layer" { print NR; exit }' \
