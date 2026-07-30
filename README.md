@@ -49,15 +49,62 @@ flowchart LR
     classDef success fill:#E6F4EA,stroke:#1E7E45,color:#1A1A1A;
 ```
 
-These definitions describe what the operations mean. Server discovery,
-request delivery, response selection, retries, and report-delivery behavior
-belong to the API and policy layers documented in
+## Three small examples
+
+The examples use readable resource and service names to show intent. The C API
+maps those names to Ratelimitly IDs.
+
+### Request one token
+
+An application wants to begin one operation charged to the `checkout` resource:
+
+```text
+resource request
+  consume: checkout[1]
+  latency guards: none
+```
+
+A grant consumes one token from `checkout` and authorizes the operation. A
+rejection consumes nothing.
+
+### Report one service latency
+
+An application observed that one call to the `inventory` service took 18 ms:
+
+```text
+latency report
+  service: inventory
+  observed latency: 18 ms
+```
+
+The report contributes that measurement to the `inventory` latency tracker. It
+does not consume a resource or make an admission decision.
+
+### Request one token with one latency guard
+
+An application wants one `checkout` token, but only while the tracked
+`inventory` latency is below 100 ms:
+
+```text
+resource request
+  consume: checkout[1]
+  latency guard: inventory latency < 100 ms
+```
+
+Ratelimitly evaluates the consumption and guard together. A grant consumes one
+token and authorizes the operation; if either condition fails, the complete
+request is rejected and nothing is consumed.
+
+These are logical operations, independent of how the client delivers them.
+Server discovery, request delivery, response selection, retries, and
+report-delivery behavior belong to the API and policy layers documented in
 [docs/api.md](docs/api.md).
 
 ## Choose the integration layer
 
-The repository exposes three layers. Pick the lowest layer whose ownership
-contract matches the host application; using the public runtime is optional.
+The C client exposes the operations above through three integration layers.
+Pick the lowest layer whose ownership contract matches the host application;
+using the public runtime is optional.
 
 | Layer | What it owns | What the host still owns |
 | --- | --- | --- |

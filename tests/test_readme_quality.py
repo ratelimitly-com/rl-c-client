@@ -194,6 +194,22 @@ def check_readme(path: Path) -> list[str]:
                 errors.append("overview does not state the latency-guard role")
         if not section(text, "## Core operations"):
             errors.append("missing the core-operation semantic layer")
+        if not section(text, "## Three small examples"):
+            errors.append("missing examples between semantics and integration")
+        expected_order = [
+            "## What Ratelimitly does",
+            "## Core operations",
+            "## Three small examples",
+            "## Choose the integration layer",
+        ]
+        positions = [text.find(heading) for heading in expected_order]
+        if any(position < 0 for position in positions) or positions != sorted(
+            positions
+        ):
+            errors.append(
+                "repository overview does not progress from role through "
+                "operations and examples to integration"
+            )
     else:
         if not re.search(r"(?m)^> \*\*Prerequisites\.\*\* ", first_lines):
             errors.append("missing an explicit prerequisites contract near the top")

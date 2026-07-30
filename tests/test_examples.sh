@@ -745,6 +745,19 @@ root_concepts=$(sed -n '1,/^## Choose the integration layer$/p' "$ROOT_README")
 if grep -Fiq -- 'r-server' <<<"$root_concepts"; then
   fail "root README introduces r-server membership before the API layer"
 fi
+for example_heading in \
+  '### Request one token' \
+  '### Report one service latency' \
+  '### Request one token with one latency guard'; do
+  grep -Fq -- "$example_heading" "$ROOT_README" \
+    || fail "root README omits logical example: $example_heading"
+done
+examples_line=$(awk '$0 == "## Three small examples" { print NR; exit }' \
+  "$ROOT_README")
+layers_line=$(awk '$0 == "## Choose the integration layer" { print NR; exit }' \
+  "$ROOT_README")
+[[ -n "$examples_line" && -n "$layers_line" && "$examples_line" -lt "$layers_line" ]] \
+  || fail "root README does not teach logical examples before integration layers"
 grep -Fq -- '`result->success` combines resource and latency-guard decisions' \
   "$API_GUIDE" \
   || fail "API guide does not explain combined admission results"
