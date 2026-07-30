@@ -6,7 +6,7 @@
 
 #include "r_client_runtime.h"
 
-#include <mswsock.h>
+#include "../src/r_win32_udp.h"
 
 /*
  * Winsock reports an ICMP Port Unreachable response as WSAECONNRESET on a
@@ -22,6 +22,29 @@ enum {
     RESET_ATTEMPTS = 200,
     RESET_WAIT_MS = 10,
 };
+
+static int send_retry_policy_is_bounded(void) {
+    bool reset_retried = false;
+    if (!r_win32_udp_send_should_retry(WSAEINTR, &reset_retried)
+        || reset_retried) {
+        fputs("WSAEINTR did not request an ordinary retry\n", stderr);
+        return -1;
+    }
+    if (!r_win32_udp_send_should_retry(WSAECONNRESET, &reset_retried)
+        || !reset_retried) {
+        fputs("first WSAECONNRESET did not request one retry\n", stderr);
+        return -1;
+    }
+    if (r_win32_udp_send_should_retry(WSAECONNRESET, &reset_retried)) {
+        fputs("second WSAECONNRESET requested an unbounded retry\n", stderr);
+        return -1;
+    }
+    if (r_win32_udp_send_should_retry(WSAEWOULDBLOCK, &reset_retried)) {
+        fputs("unrelated send error was treated as retryable\n", stderr);
+        return -1;
+    }
+    return 0;
+}
 
 static int make_nonblocking(SOCKET socket_value) {
     u_long enabled = 1u;
@@ -391,6 +414,10 @@ static int runtime_send_survives_connreset(
 }
 
 int main(void) {
+    if (send_retry_policy_is_bounded() != 0) {
+        return 1;
+    }
+
     r_runtime_options_t options = {
         .auth_key = TEST_AES_KEY,
         .server_host = "127.0.0.1",
