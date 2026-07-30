@@ -67,6 +67,13 @@ resource request
 A grant consumes one token from `checkout` and authorizes the operation. A
 rejection consumes nothing.
 
+A request failure is neither a grant nor a rejection. It means the client did
+not obtain a usable decision—for example, because of a timeout, delivery
+problem, or invalid response. The application must handle this outcome
+separately according to its failure policy. Because a failure may occur after
+the request was sent, it does not prove that Ratelimitly did not process the
+request. This third outcome applies to guarded resource requests as well.
+
 ### Report one service latency
 
 An application observed that one call to the `inventory` service took 18 ms:
@@ -93,7 +100,9 @@ resource request
 
 Ratelimitly evaluates the consumption and guard together. A grant consumes one
 token and authorizes the operation; if either condition fails, the complete
-request is rejected and nothing is consumed.
+request is rejected and nothing is consumed. A request failure instead means
+that no usable combined decision was obtained, not that either condition
+rejected the request.
 
 These are logical operations, independent of how the client delivers them.
 Server discovery, request delivery, response selection, retries, and

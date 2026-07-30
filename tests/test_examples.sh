@@ -752,6 +752,12 @@ for example_heading in \
   grep -Fq -- "$example_heading" "$ROOT_README" \
     || fail "root README omits logical example: $example_heading"
 done
+grep -Fq -- 'A request failure is neither a grant nor a rejection.' \
+  "$ROOT_README" \
+  || fail "root README conflates resource-request failure with rejection"
+grep -Fq -- 'it does not prove that Ratelimitly did not process the' \
+  "$ROOT_README" \
+  || fail "root README overstates what a resource-request failure proves"
 examples_line=$(awk '$0 == "## Three small examples" { print NR; exit }' \
   "$ROOT_README")
 layers_line=$(awk '$0 == "## Choose the integration layer" { print NR; exit }' \
