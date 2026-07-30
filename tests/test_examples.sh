@@ -741,7 +741,7 @@ fi
 if grep -Fiq -- 'fire-and-forget' "$ROOT_README"; then
   fail "root README mixes delivery mechanics into its conceptual overview"
 fi
-root_concepts=$(sed -n '1,/^## Choose the integration layer$/p' "$ROOT_README")
+root_concepts=$(sed -n '1,/^## Integrate the library$/p' "$ROOT_README")
 if grep -Fiq -- 'r-server' <<<"$root_concepts"; then
   fail "root README introduces r-server membership before the API layer"
 fi
@@ -799,16 +799,34 @@ if ! {
 fi
 examples_line=$(awk '$0 == "## Three small examples" { print NR; exit }' \
   "$ROOT_README")
-layers_line=$(awk '$0 == "## Choose the integration layer" { print NR; exit }' \
+layers_line=$(awk '$0 == "## Integrate the library" { print NR; exit }' \
   "$ROOT_README")
 [[ -n "$examples_line" && -n "$layers_line" && "$examples_line" -lt "$layers_line" ]] \
   || fail "root README does not teach logical examples before integration layers"
-grep -Fq -- 'Applications embed Ratelimitly in very different environments.' \
+grep -Fq -- '[Choosing an integration layer](docs/api.md#choosing-an-integration-layer)' \
   "$ROOT_README" \
-  || fail "root README does not motivate its integration-layer choices"
+  || fail "root README does not link its integration overview to the API guide"
+if grep -Fq -- '| Layer | What it owns | What the host still owns |' \
+  "$ROOT_README"; then
+  fail "root README retains detailed integration-layer ownership"
+fi
 if grep -Fq -- '## Features' "$ROOT_README"; then
   fail "root README retains a redundant feature inventory"
 fi
+grep -Fq -- '## Choosing an integration layer' "$API_GUIDE" \
+  || fail "API guide does not explain how to choose an integration layer"
+grep -Fq -- 'Applications embed Ratelimitly in very different environments.' \
+  "$API_GUIDE" \
+  || fail "API guide does not motivate its integration-layer choices"
+grep -Fq -- '| Layer | What it owns | What the host still owns |' \
+  "$API_GUIDE" \
+  || fail "API guide does not compare integration-layer ownership"
+grep -Fq -- 'The normal asynchronous request API copies request inputs.' \
+  "$API_GUIDE" \
+  || fail "API guide does not document copied and borrowed request lifetimes"
+grep -Fq -- 'Proxy modules and other high-throughput embedders commonly choose the core and' \
+  "$API_GUIDE" \
+  || fail "API guide does not recommend integration layers by host type"
 grep -Fq -- '`result->success` combines resource and latency-guard decisions' \
   "$API_GUIDE" \
   || fail "API guide does not explain combined admission results"

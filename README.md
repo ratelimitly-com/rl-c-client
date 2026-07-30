@@ -194,33 +194,15 @@ Server discovery, request delivery, response selection, retries, and
 report-delivery behavior belong to the API and policy layers documented in
 [docs/api.md](docs/api.md).
 
-## Choose the integration layer
+## Integrate the library
 
-Applications embed Ratelimitly in very different environments. A proxy module
-normally already owns its sockets, DNS resolver, timers, and logging, while a
-small command-line program may prefer a ready-made socket runtime.
+Applications differ in whether they already own UDP sockets, DNS, timers, and
+logging or prefer a ready-made runtime. The C client supports core, optional
+workflow, and public-runtime integration levels without changing the two
+logical operations above.
 
-The C client therefore exposes the operations above through three integration
-layers. In every layer, the library owns packet encoding, authentication,
-request policy, response parsing, and server selection. The layer determines
-how much surrounding workflow and I/O the library also owns. Choose the
-ownership boundary that fits the host application.
-
-| Layer | What it owns | What the host still owns |
-| --- | --- | --- |
-| Core client (`r_client.h` + `r_client_io.h`) | Packets, authentication, request policy, deadlines, and response selection | UDP I/O, DNS callbacks, timers, and logging |
-| Optional admission workflow (`r_client_workflow.h`) | One convenience policy combining one resource consumption, one latency guard, and at most one subsequent report | The core client's I/O plus protected-work timing and lifetime |
-| Public runtime (`r_client_runtime.h`) | Core client, nonblocking IPv4/IPv6 UDP sockets, and synchronous DNS discovery | Readiness watchers, deadline callbacks, application work, and logging policy |
-
-The normal asynchronous request API copies request inputs. The borrowed API
-avoids those copies, so its input buffers must remain valid until callback or
-cancellation. In both forms, copy any result data needed after the completion
-callback returns; the request handle and result arrays expire with that
-callback.
-
-Proxy modules and other high-throughput embedders commonly choose the core and
-borrowed APIs. The examples choose the workflow and public runtime so each
-framework README can focus on its readiness, timer, and shutdown rules.
+Choose the ownership boundary and request-buffer lifetime model in
+[Choosing an integration layer](docs/api.md#choosing-an-integration-layer).
 
 ## Install a release
 

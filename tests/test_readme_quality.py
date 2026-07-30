@@ -200,7 +200,7 @@ def check_readme(path: Path) -> list[str]:
             "## What Ratelimitly does",
             "## Core operations",
             "## Three small examples",
-            "## Choose the integration layer",
+            "## Integrate the library",
         ]
         positions = [text.find(heading) for heading in expected_order]
         if any(position < 0 for position in positions) or positions != sorted(
@@ -208,7 +208,18 @@ def check_readme(path: Path) -> list[str]:
         ):
             errors.append(
                 "repository overview does not progress from role through "
-                "operations and examples to integration"
+                "operations and examples to an API integration pointer"
+            )
+        integration = section(text, "## Integrate the library")
+        if (
+            "[Choosing an integration layer]"
+            "(docs/api.md#choosing-an-integration-layer)"
+            not in integration
+        ):
+            errors.append("integration overview does not link to the API guide")
+        if "| Layer | What it owns | What the host still owns |" in integration:
+            errors.append(
+                "repository overview retains detailed integration-layer ownership"
             )
     else:
         if not re.search(r"(?m)^> \*\*Prerequisites\.\*\* ", first_lines):
