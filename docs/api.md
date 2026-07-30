@@ -10,17 +10,22 @@ The core client exposes two independent operations:
 
 1. A **resource request** contains at least one `r_resource_request_t` resource
    consumption and may contain any number of `r_latency_guard_t` latency
-   guards. The r-server evaluates the complete request atomically. A successful
-   result consumes every requested quantity; a rejection consumes none.
+   guards. Ratelimitly evaluates the complete request atomically. A grant
+   consumes every requested quantity; a rejection consumes none.
 2. A **latency report** contains at least one
-   `r_service_latency_report_t` service observation. It is fire-and-forget,
-   updates server-side latency trackers, and receives no response.
+   `r_service_latency_report_t` service observation and contributes it to the
+   corresponding server-side latency tracker.
 
 Neither operation requires the other. A client may issue only resource
 requests, only latency reports, or both. The optional workflow API demonstrates
 one useful application policy that combines one resource consumption, one
 latency guard, admitted work, and a subsequent latency report; that policy is
 not part of the wire-protocol contract.
+
+This operation model defines application semantics. The delivery mechanics of
+latency reports and the discovery, fan-out, replay, and response-selection
+policy for resource requests are documented with their corresponding APIs
+below.
 
 ## Headers
 
@@ -144,7 +149,7 @@ request from inside the completion callback is harmless and treated as a no-op.
 Latency guards and reports are independent operations connected through a
 server-side tracker identified by `service_id`. A guard reads the tracker's
 recent latency during a resource request. A report adds a measured observation
-to a tracker without waiting for any response.
+to that tracker.
 
 One common application-level feedback loop is:
 
@@ -223,10 +228,10 @@ if (rc != RCLIENT_OK) {
 }
 ```
 
-`r_client_report_latency` sends fire-and-forget data. It does not wait for a
-response, create a request handle, or require a deadline watcher. Report
-storage is borrowed only for the duration of the call because the packet is
-serialized synchronously.
+The delivery contract for `r_client_report_latency` is fire-and-forget. Unlike
+a resource request, a report does not create a request handle, wait for a
+response, or require a deadline watcher. Report storage is borrowed only for
+the duration of the call because the packet is serialized synchronously.
 
 Reports whose `buffer_size` exceeds the credential quota are filtered. If all
 reports are filtered, the function returns `RCLIENT_OK` without sending. Other
@@ -295,6 +300,10 @@ protocol framing, but the client does not apply a separate clock-skew freshness
 check. Keep request deadlines short and deliver timeout/cancel events promptly.
 
 ## Resource-Request HA Policy
+
+An API key may resolve through DNS to one or more r-servers. This membership is
+a resource-request delivery concern; it does not change the meaning of the
+logical request or its atomic grant/rejection result.
 
 `r_request_policy_t` configures the client's sole resource-request strategy.
 It owns fan-out, oldest-first response selection, replay scheduling, completion

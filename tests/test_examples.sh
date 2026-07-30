@@ -728,18 +728,34 @@ grep -Fq -- 'never fabricate latency for work rejected by the' "$README" \
 
 grep -Fq -- '[examples/README.md](examples/README.md)' "$ROOT_README" \
   || fail "root README does not link the integration guide"
-grep -Fq -- 'Ratelimitly clients perform two independent operations:' \
+grep -Fq -- 'The library exposes two independent operations:' \
   "$ROOT_README" \
   || fail "root README does not introduce the two independent operations"
 grep -Fq -- 'A **resource request**' "$ROOT_README" \
   || fail "root README does not define a resource request"
 grep -Fq -- 'A **latency report**' "$ROOT_README" \
   || fail "root README does not define a latency report"
+if grep -Fiq -- '**Prerequisites.**' "$ROOT_README"; then
+  fail "root README retains a prerequisites preamble"
+fi
+if grep -Fiq -- 'fire-and-forget' "$ROOT_README"; then
+  fail "root README mixes delivery mechanics into its conceptual overview"
+fi
+root_concepts=$(sed -n '1,/^## Choose the integration layer$/p' "$ROOT_README")
+if grep -Fiq -- 'r-server' <<<"$root_concepts"; then
+  fail "root README introduces r-server membership before the API layer"
+fi
 grep -Fq -- '`result->success` combines resource and latency-guard decisions' \
   "$API_GUIDE" \
   || fail "API guide does not explain combined admission results"
 grep -Fq -- 'The core client exposes two independent operations:' "$API_GUIDE" \
   || fail "API guide does not define the independent operation model"
+grep -Fq -- \
+  'The delivery contract for `r_client_report_latency` is fire-and-forget.' \
+  "$API_GUIDE" \
+  || fail "API guide does not document latency-report delivery semantics"
+grep -Fq -- 'one or more r-servers' "$API_GUIDE" \
+  || fail "API guide does not place r-server membership in the HA policy"
 grep -Fq -- '`r_client_runtime.h`' "$API_GUIDE" \
   || fail "API guide does not document the public runtime header"
 grep -Fq -- '`r_client_workflow.h`' "$API_GUIDE" \

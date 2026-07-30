@@ -1,59 +1,58 @@
 # Ratelimitly C Client
 
-> **Prerequisites.** You can read C and understand basic sockets, DNS, and
-> callback-driven event loops. No previous knowledge of Ratelimitly is
-> required.
+## What Ratelimitly does
 
-## TL;DR
-
-`rl-c-client` is the public C11 client for
 [Ratelimitly](https://ratelimitly.com/), a distributed admission-control
-service combining atomic resource rate limiting with optional latency guards.
-It also sends independent fire-and-forget latency reports and supports either
-host-owned I/O or an optional socket runtime.
+service, decides whether an application may begin work that consumes configured
+resources. The decision may also depend on whether recently observed service
+latencies remain below application-defined thresholds.
 
-## The two operations
+`rl-c-client` is the public C11 library through which an application requests
+those decisions and, independently, contributes latency measurements used by
+future decisions.
 
-Ratelimitly clients perform two independent operations:
+## Core operations
 
-- A **resource request** asks one or more Ratelimitly servers (r-servers) to
-  atomically evaluate one or more resource consumptions together with zero or
-  more latency guards. The request is granted only when every requested
-  resource has sufficient capacity and every guard passes. A grant consumes
-  all requested quantities; a rejection consumes none. The client waits for a
-  selected grant or rejection response.
-- A **latency report** fire-and-forgets one or more measured service latencies
-  to the r-servers. Reports update the server-side latency trackers consulted
-  by later guards. They do not receive responses and do not have to correspond
-  to a resource request.
+The library exposes two independent operations:
+
+- A **resource request** describes work the application wants to perform as one
+  or more resource consumptions and zero or more latency guards. Ratelimitly
+  evaluates the request as one atomic decision. A grant consumes every
+  requested quantity and authorizes the application to proceed; a rejection
+  consumes none.
+- A **latency report** contributes one or more measured service latencies to
+  the trackers used by latency guards in later resource requests. It neither
+  requests nor consumes resources and does not itself make an admission
+  decision.
 
 An application may use either operation without the other. A common workflow
-is to guard access to some work, perform it only after a grant, and then
-optionally report measured latencies for services the work actually used. That
-workflow is convenient, but it is not a protocol requirement: reporters may
-send only latency reports, and resource consumers may send only resource
-requests.
-
-Latency reports influence later resource requests only through server-side
-latency trackers. There is no client-side request/report pairing in the wire
-protocol.
+is to request permission for some work, perform it only after a grant, and then
+optionally report measured latencies for services used by that work. This is
+only one application workflow: a reporter may send only latency reports, and a
+resource consumer may send only resource requests. Reports influence resource
+requests only through the latency trackers; the two operations are not paired.
 
 ```mermaid
 flowchart LR
-    Consumer["Resource-consuming client"]:::neutral --> Request["Resource request<br/>consumptions + optional guards"]:::neutral
-    Request --> Evaluate["Ratelimitly r-servers<br/>evaluate atomically"]:::neutral
+    Consumer["Resource-consuming application"]:::neutral --> Request["Resource request<br/>intended consumptions + optional guards"]:::neutral
+    Request --> Evaluate["Ratelimitly<br/>atomic admission decision"]:::neutral
     Evaluate --> Decision{"Granted?"}:::neutral
     Decision -->|No| Rejected["No resources consumed"]:::danger
-    Decision -->|Yes| Granted["Resources consumed<br/>client may perform work"]:::success
+    Decision -->|Yes| Granted["Resources consumed<br/>application may perform work"]:::success
 
-    Reporter["Same or another client"]:::neutral --> Report["Optional latency reports<br/>for measured services"]:::neutral
-    Report --> Trackers["Server-side latency trackers"]:::neutral
+    Reporter["Same or another application"]:::neutral --> Report["Optional latency report<br/>measured service latencies"]:::neutral
+    Report --> Trackers["Latency trackers"]:::neutral
     Trackers -. "input to latency guards" .-> Evaluate
 
     classDef neutral fill:#EAECEF,stroke:#7D8590,color:#1A1A1A;
     classDef danger fill:#FCE8E6,stroke:#B0413E,color:#1A1A1A;
     classDef success fill:#E6F4EA,stroke:#1E7E45,color:#1A1A1A;
 ```
+
+These definitions describe what the operations mean. Server discovery,
+request delivery, response selection, retries, and report-delivery behavior
+belong to the API and policy layers documented in
+[docs/api.md](docs/api.md).
 
 ## Choose the integration layer
 
@@ -80,29 +79,16 @@ framework README can focus on its readiness, timer, and shutdown rules.
 
 - Asynchronous, atomic resource-consumption requests over UDP.
 - Optional latency guards based on recent service measurements.
-- Independent fire-and-forget latency reports for load-shedding feedback.
+- Independent latency reports for load-shedding feedback.
 - API key credentials in Bech32 form: `rl-cookie...` or `rl-aes...`.
 - Cookie and AES-256-GCM authentication using OpenSSL libcrypto.
 - SRV discovery for `_ratelimitly._udp.<configured-dns-name>`, followed by A/AAAA
   resolution for returned SRV targets.
-- One parameterized oldest-first HA request policy.
+- One
+  [parameterized oldest-first HA request policy](docs/api.md#resource-request-ha-policy).
 - Optional metrics labels.
 - Optional steering feedback callback for source-port rebinding.
 - Static and shared library builds.
-
-The default request policy uses a 20 ms base unit, one replay, two 20 ms
-oldest-preference intervals, and one final 20 ms receive-only interval whose
-first valid response wins. It derives the deduplication TTL as exactly 60 ms
-and validates it against the API-key limit.
-
-The same strategy can be configured with any bounded replay count and fixed,
-linear, or exponential replay gaps. Response-preference timing is independent
-of replay pacing: a long exponential gap never forces the client to retain an
-available response for the whole gap. Optional completion delivery
-fire-and-forgets the same deduplicated request to servers still missing a valid
-response before returning either an allow or a deny. See the
-[resource-request HA policy](docs/api.md#resource-request-ha-policy) for its
-parameters and event behavior.
 
 This repository contains the public C API and integration contract. Applications
 do not construct or parse Ratelimitly packets directly; the library owns packet
@@ -437,7 +423,7 @@ strategy through `r_request_policy_t`.
 | r-server | Ratelimitly server discovered by the client and sent resource requests or latency reports. |
 | resource request | Request containing one or more resource consumptions and zero or more latency guards; a grant consumes all requested quantities atomically. |
 | resource consumption | Quantity requested from one configured resource bucket as part of a resource request. |
-| latency report | Independent fire-and-forget operation containing one or more measured service latencies. |
+| latency report | Independent operation that contributes one or more measured service latencies to latency trackers. |
 | service | Stable identity whose reported measurements populate a server-side latency tracker. |
 | C11 | 2011 revision of the C language standard required by this library. |
 | README | Repository overview document that introduces a project and links to its detailed guides. |
@@ -452,7 +438,7 @@ strategy through `r_request_policy_t`.
 | resource rate limit | Configured capacity for a resource bucket over a time window. |
 | bucket | Stable resource identity whose configured quota is consumed by matching requests. |
 | latency guard | A request to shed new work when the tracker's recent service latency reaches its configured threshold. |
-| latency tracker | Server-side sample window identified by a service ID and configured by threshold, lifetime, sample count, and buffer size. |
+| latency tracker | Server-side sample window identified by a service ID and configured by sample lifetime, count, and buffer settings. |
 | tenant | Isolated Ratelimitly account identified by metadata encoded in the API key. |
 | host loop | The application's existing event loop; it owns readiness callbacks and timers around the client. |
 | public runtime | Optional adapter that owns nonblocking UDP sockets and production DNS discovery while exposing readiness and deadlines to the host loop. |
