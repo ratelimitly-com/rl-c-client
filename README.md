@@ -1,31 +1,54 @@
 # Ratelimitly C Client
 
 > **Prerequisites.** You can read C and understand basic sockets, DNS, and
-> callback-driven event loops. Everything specific to Ratelimitly and this
-> client is explained here.
+> callback-driven event loops. No previous knowledge of Ratelimitly is
+> required.
 
 ## TL;DR
 
-`rl-c-client` is a C11 library that lets a host application combine resource
-rate limiting with latency-based admission, then report the protected work's
-latency without surrendering ownership of its event loop, sockets, or timers.
+`rl-c-client` is the public C11 client for
+[Ratelimitly](https://ratelimitly.com/), a distributed admission-control
+service combining atomic resource rate limiting with optional latency guards.
+It also sends independent fire-and-forget latency reports and supports either
+host-owned I/O or an optional socket runtime.
 
-## Architecture at a glance
+## The two operations
 
-The optional public runtime supplies the common UDP and DNS plumbing used by
-the examples. Advanced embedders can instead provide the same I/O callbacks
-directly to the core client.
+Ratelimitly clients perform two independent operations:
+
+- A **resource request** asks one or more Ratelimitly servers (r-servers) to
+  atomically evaluate one or more resource consumptions together with zero or
+  more latency guards. The request is granted only when every requested
+  resource has sufficient capacity and every guard passes. A grant consumes
+  all requested quantities; a rejection consumes none. The client waits for a
+  selected grant or rejection response.
+- A **latency report** fire-and-forgets one or more measured service latencies
+  to the r-servers. Reports update the server-side latency trackers consulted
+  by later guards. They do not receive responses and do not have to correspond
+  to a resource request.
+
+An application may use either operation without the other. A common workflow
+is to guard access to some work, perform it only after a grant, and then
+optionally report measured latencies for services the work actually used. That
+workflow is convenient, but it is not a protocol requirement: reporters may
+send only latency reports, and resource consumers may send only resource
+requests.
+
+Latency reports influence later resource requests only through server-side
+latency trackers. There is no client-side request/report pairing in the wire
+protocol.
 
 ```mermaid
 flowchart LR
-    Host["Host application<br/>owns loop and protected work"]:::neutral --> Admission["rl-c-client admission<br/>resource limit + latency guard"]:::neutral
-    Admission --> Runtime["Public runtime or host I/O<br/>DNS + nonblocking UDP"]:::neutral
-    Runtime --> Service["Ratelimitly service"]:::neutral
-    Service --> Decision{"Admission result"}:::neutral
-    Decision -->|Denied| Stop["Skip work<br/>do not report latency"]:::danger
-    Decision -->|Allowed| Work["Run and measure<br/>protected work"]:::success
-    Work --> Report["Report one latency sample"]:::success
-    Report --> Runtime
+    Consumer["Resource-consuming client"]:::neutral --> Request["Resource request<br/>consumptions + optional guards"]:::neutral
+    Request --> Evaluate["Ratelimitly r-servers<br/>evaluate atomically"]:::neutral
+    Evaluate --> Decision{"Granted?"}:::neutral
+    Decision -->|No| Rejected["No resources consumed"]:::danger
+    Decision -->|Yes| Granted["Resources consumed<br/>client may perform work"]:::success
+
+    Reporter["Same or another client"]:::neutral --> Report["Optional latency reports<br/>for measured services"]:::neutral
+    Report --> Trackers["Server-side latency trackers"]:::neutral
+    Trackers -. "input to latency guards" .-> Evaluate
 
     classDef neutral fill:#EAECEF,stroke:#7D8590,color:#1A1A1A;
     classDef danger fill:#FCE8E6,stroke:#B0413E,color:#1A1A1A;
@@ -40,7 +63,7 @@ contract matches the host application; using the public runtime is optional.
 | Layer | What it owns | What the host still owns |
 | --- | --- | --- |
 | Core client (`r_client.h` + `r_client_io.h`) | Packets, authentication, request policy, deadlines, and response selection | UDP I/O, DNS callbacks, timers, and logging |
-| Admission workflow (`r_client_workflow.h`) | Coordination of one resource check plus one latency guard and the matching latency report | The core client's I/O plus protected-work timing and lifetime |
+| Optional admission workflow (`r_client_workflow.h`) | One convenience policy combining one resource consumption, one latency guard, and at most one subsequent report | The core client's I/O plus protected-work timing and lifetime |
 | Public runtime (`r_client_runtime.h`) | Core client, nonblocking IPv4/IPv6 UDP sockets, and synchronous DNS discovery | Readiness watchers, deadline callbacks, application work, and logging policy |
 
 The normal asynchronous request API copies request inputs. The borrowed API
@@ -55,8 +78,9 @@ framework README can focus on its readiness, timer, and shutdown rules.
 
 ## Features
 
-- Async rate-limit checks over UDP.
-- Fire-and-forget latency reports for load-shedding feedback.
+- Asynchronous, atomic resource-consumption requests over UDP.
+- Optional latency guards based on recent service measurements.
+- Independent fire-and-forget latency reports for load-shedding feedback.
 - API key credentials in Bech32 form: `rl-cookie...` or `rl-aes...`.
 - Cookie and AES-256-GCM authentication using OpenSSL libcrypto.
 - SRV discovery for `_ratelimitly._udp.<configured-dns-name>`, followed by A/AAAA
@@ -76,7 +100,9 @@ linear, or exponential replay gaps. Response-preference timing is independent
 of replay pacing: a long exponential gap never forces the client to retain an
 available response for the whole gap. Optional completion delivery
 fire-and-forgets the same deduplicated request to servers still missing a valid
-response before returning either an allow or a deny.
+response before returning either an allow or a deny. See the
+[resource-request HA policy](docs/api.md#resource-request-ha-policy) for its
+parameters and event behavior.
 
 This repository contains the public C API and integration contract. Applications
 do not construct or parse Ratelimitly packets directly; the library owns packet
@@ -201,11 +227,12 @@ Outputs:
 - `librclient.a`
 - `librclient.so`
 
-## Run the first combined example
+## Run an optional combined-workflow example
 
-The latency-tracker example is the smallest executable path that performs both
-a resource rate-limit check and a latency guard, runs protected work only after
-admission, and reports one measured latency sample:
+The core operations may be used independently. The latency-tracker example
+instead demonstrates the optional convenience workflow: it submits one
+resource consumption and one latency guard, runs protected work only after the
+combined request is granted, and reports the work's measured service latency:
 
 ```sh
 make
@@ -406,6 +433,12 @@ strategy through `r_request_policy_t`.
 
 | Term | Meaning |
 | --- | --- |
+| Ratelimitly | Distributed admission-control service that atomically evaluates resource consumption and optional latency guards. |
+| r-server | Ratelimitly server discovered by the client and sent resource requests or latency reports. |
+| resource request | Request containing one or more resource consumptions and zero or more latency guards; a grant consumes all requested quantities atomically. |
+| resource consumption | Quantity requested from one configured resource bucket as part of a resource request. |
+| latency report | Independent fire-and-forget operation containing one or more measured service latencies. |
+| service | Stable identity whose reported measurements populate a server-side latency tracker. |
 | C11 | 2011 revision of the C language standard required by this library. |
 | README | Repository overview document that introduces a project and links to its detailed guides. |
 | GLib | Portable core library whose main loop is used by one integration example. |
@@ -415,8 +448,8 @@ strategy through `r_request_policy_t`.
 | H2O | Event-driven C HTTP server represented by one self-contained integration. |
 | LICENSE | Repository file containing the terms under which the source may be used and redistributed. |
 | MIT | Permissive open-source license applied to this repository. |
-| admission | The combined decision made before protected work starts. An admission may contain resource limits, latency guards, or both. |
-| resource rate limit | A quota check for a named bucket, such as requests allowed per interval. |
+| admission | Application-level use of a resource-request decision to decide whether work should begin. |
+| resource rate limit | Configured capacity for a resource bucket over a time window. |
 | bucket | Stable resource identity whose configured quota is consumed by matching requests. |
 | latency guard | A request to shed new work when the tracker's recent service latency reaches its configured threshold. |
 | latency tracker | Server-side sample window identified by a service ID and configured by threshold, lifetime, sample count, and buffer size. |
@@ -445,10 +478,6 @@ strategy through `r_request_policy_t`.
 - [`r_client.h`](include/r_client.h), [`r_client_workflow.h`](include/r_client_workflow.h),
   and [`r_client_runtime.h`](include/r_client_runtime.h) are the public source
   contracts behind this overview.
-- [Core request lifetimes](include/r_client.h) (`include/r_client.h:192-260`)
-  and the [public-runtime ownership contract](include/r_client_runtime.h)
-  (`include/r_client_runtime.h:26-31`) were reverified at merged baseline
-  `05053b4` for this explanation.
 - [DNS SRV records](https://www.rfc-editor.org/info/rfc2782) and
   [OpenSSL authenticated-encryption guidance](https://docs.openssl.org/3.0/man3/EVP_EncryptInit/)
   provide the external definitions used above.

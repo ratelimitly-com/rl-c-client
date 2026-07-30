@@ -48,10 +48,10 @@ which targets to use for each attempt.
 
 ## Request Lifecycle
 
-Rate-limit checks are asynchronous:
+Resource requests are asynchronous:
 
-1. The caller submits resources, optional latency guards, and an optional
-   metrics label.
+1. The caller submits one or more resource consumptions, optional latency
+   guards, and an optional metrics label.
 2. The client snapshots current targets and emits UDP sends.
 3. The host schedules the request deadline.
 4. Incoming datagrams are delivered to `r_client_on_datagram`.
@@ -84,9 +84,10 @@ policy-dispatch branches.
 
 ## Latency Reports
 
-Latency reports are fire-and-forget. They reuse the same credential auth and routing
-machinery but do not wait for responses. Reports that exceed credential quotas
-are filtered before send.
+Latency reports are independent, fire-and-forget operations. They reuse the
+same credential authentication, discovery, and routing machinery but do not
+wait for responses and need not correspond to any resource request. Reports
+that exceed credential quotas are filtered before send.
 
 ## Documentation Boundary
 

@@ -4,6 +4,24 @@ This document describes the public C API. The library is still at its first
 MVP: the public API and private implementation may change without backward-
 compatibility adapters.
 
+## Operation Model
+
+The core client exposes two independent operations:
+
+1. A **resource request** contains at least one `r_resource_request_t` resource
+   consumption and may contain any number of `r_latency_guard_t` latency
+   guards. The r-server evaluates the complete request atomically. A successful
+   result consumes every requested quantity; a rejection consumes none.
+2. A **latency report** contains at least one
+   `r_service_latency_report_t` service observation. It is fire-and-forget,
+   updates server-side latency trackers, and receives no response.
+
+Neither operation requires the other. A client may issue only resource
+requests, only latency reports, or both. The optional workflow API demonstrates
+one useful application policy that combines one resource consumption, one
+latency guard, admitted work, and a subsequent latency report; that policy is
+not part of the wire-protocol contract.
+
 ## Headers
 
 Core embedders use:
@@ -24,11 +42,11 @@ portable socket runtime can also use:
 #include "r_client_runtime.h"
 ```
 
-`r_client_workflow.h` combines one resource limit and one latency guard into a
-durable application decision. `r_client_runtime.h` adds nonblocking UDP sockets,
-synchronous SRV/A/AAAA resolution, portable clocks, and helpers for examples or
-small command-line programs. A server with its own asynchronous resolver and
-socket ownership should use the core I/O interfaces instead.
+`r_client_workflow.h` combines one resource consumption and one latency guard
+into a durable application decision. `r_client_runtime.h` adds nonblocking UDP
+sockets, synchronous SRV/A/AAAA resolution, portable clocks, and helpers for
+examples or small command-line programs. A server with its own asynchronous
+resolver and socket ownership should use the core I/O interfaces instead.
 
 ## Configuration
 
@@ -92,7 +110,7 @@ resource buckets and latency services.
 The function returns no status. If `input` or `out_id` is `NULL`, it leaves
 `out_id` unchanged.
 
-## Rate Requests
+## Resource Requests
 
 Use `r_client_check_rate_limit_async` when the client should copy request
 buffers. Use `r_client_check_rate_limit_async_borrowed` when the caller keeps
@@ -121,9 +139,14 @@ The `r_client_req_t *` passed to the callback is owned by the client and is not
 valid after the callback returns. Calling `r_client_cancel_request` on that same
 request from inside the completion callback is harmless and treated as a no-op.
 
-## Latency Guards and Reports
+## Latency Guards and Independent Reports
 
-Latency tracking forms one admission-and-feedback loop:
+Latency guards and reports are independent operations connected through a
+server-side tracker identified by `service_id`. A guard reads the tracker's
+recent latency during a resource request. A report adds a measured observation
+to a tracker without waiting for any response.
+
+One common application-level feedback loop is:
 
 1. Create a guard for a stable service ID and include it in a rate request.
 2. Copy its result during the request callback.
@@ -131,9 +154,14 @@ Latency tracking forms one admission-and-feedback loop:
 4. Measure that work with a monotonic clock.
 5. Report the observation using the same service ID and tracker settings.
 
-Never report latency for work rejected by its guard. The operation did not run,
-so a zero or synthetic observation would bias the tracker and admit too much
-future work.
+This sequence is optional. A dedicated observer may send reports without ever
+issuing a resource request, and a resource-requesting client need not send
+reports.
+
+When following the combined sequence, never fabricate a latency observation
+for work that a guard prevented from running. No such operation occurred, so a
+zero or synthetic observation would bias the tracker. This does not prohibit
+reporting measurements for other services or independently completed work.
 
 ### Guard configuration
 
@@ -173,9 +201,11 @@ Measure the protected operation rather than the RateLimitly request. Wall-clock
 adjustments must not change duration, so use `CLOCK_MONOTONIC` or the host
 event loop's monotonic duration clock.
 
-The report must repeat the guard's `service_id`, `ttl_ms`, `max_samples`,
-`buffer_size`, and `min_sample_threshold`. `threshold_ms` appears only in the
-guard because it controls admission, not sample storage.
+When a report is intended to update the tracker read by a particular guard, it
+must repeat that guard's `service_id`, `ttl_ms`, `max_samples`, `buffer_size`,
+and `min_sample_threshold`. `threshold_ms` appears only in the guard because it
+controls admission, not sample storage. A report that is not paired with a
+local guard still supplies those tracker-definition fields directly.
 
 ```c
 r_service_latency_report_t report = {
@@ -209,7 +239,7 @@ guard-pass, protected-work, report, and guard-deny control flow.
 
 ## Combined Admission Workflow
 
-`r_client_workflow.h` packages the most commonly repeated application policy:
+`r_client_workflow.h` packages one optional application policy:
 one resource request, one latency guard, an explicit denial reason, and at most
 one latency report after admitted work.
 
@@ -263,6 +293,8 @@ Once that request completes, times out, or is canceled, later datagrams with
 the same `unique_id` are ignored. The authenticated timestamp is retained as
 protocol framing, but the client does not apply a separate clock-skew freshness
 check. Keep request deadlines short and deliver timeout/cancel events promptly.
+
+## Resource-Request HA Policy
 
 `r_request_policy_t` configures the client's sole resource-request strategy.
 It owns fan-out, oldest-first response selection, replay scheduling, completion
@@ -332,6 +364,8 @@ TTL = 3 * U = 60 ms
 
 `cfg.request_policy` is borrowed only for the duration of `r_client_create`; the
 client copies the policy by value and does not retain the caller's pointer.
+
+## DNS Refresh
 
 DNS refresh pacing is client configuration rather than request-selection
 policy. Set `cfg.dns_refresh.refresh_interval_ms`,

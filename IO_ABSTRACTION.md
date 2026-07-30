@@ -115,11 +115,14 @@ creates no in-flight request, response callback, or request timer. Event-loop
 integrations therefore need no new read watcher or deadline path for reports;
 the existing UDP send hook is sufficient.
 
-Report only work that actually ran after a matching latency guard passed. Use
-the same service ID and tracker settings in guard and report. Log send failures,
+Latency reports are independent of resource requests and guards. A client may
+report measured service latency without issuing any resource request. When an
+application deliberately pairs a report with guarded work, it should report
+only a real operation that ran, use the same service ID and tracker settings,
+and never invent a zero sample for work the guard rejected. Log send failures,
 but do not change an HTTP response outcome after protected work completed.
 
-See the [latency tracking workflow](examples/README.md#latency-tracking-workflow)
+See the [example latency tracking workflow](examples/README.md#example-latency-tracking-workflow)
 for runnable pass/report and deny/no-report behavior.
 
 ## Steering Feedback

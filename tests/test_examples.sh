@@ -714,20 +714,32 @@ actual_headings="$(sed -n 's/^### //p' "$README")"
   || fail "README example headings are missing or out of order"
 grep -Fq -- 'If it returns `HPE_PAUSED`' "$README" \
   || fail "README does not explain resumable llhttp backpressure"
-grep -Fq -- '## Latency tracking workflow' "$README" \
+grep -Fq -- '## Example latency tracking workflow' "$README" \
   || fail "README does not document latency tracking"
 grep -Fq -- '## Platform matrix' "$README" \
   || fail "README does not provide a platform matrix"
 grep -Fq -- '```mermaid' "$README" \
   || fail "README does not provide a Mermaid integration overview"
-grep -Fq -- 'Never report latency for work rejected by the guard.' "$README" \
-  || fail "README does not explain denied latency-guard behavior"
+grep -Fq -- 'Resource requests and latency reports are independent core operations.' \
+  "$README" \
+  || fail "examples README presents its combined workflow as a protocol requirement"
+grep -Fq -- 'never fabricate latency for work rejected by the' "$README" \
+  || fail "README does not reject synthetic latency for work that did not run"
 
 grep -Fq -- '[examples/README.md](examples/README.md)' "$ROOT_README" \
   || fail "root README does not link the integration guide"
+grep -Fq -- 'Ratelimitly clients perform two independent operations:' \
+  "$ROOT_README" \
+  || fail "root README does not introduce the two independent operations"
+grep -Fq -- 'A **resource request**' "$ROOT_README" \
+  || fail "root README does not define a resource request"
+grep -Fq -- 'A **latency report**' "$ROOT_README" \
+  || fail "root README does not define a latency report"
 grep -Fq -- '`result->success` combines resource and latency-guard decisions' \
   "$API_GUIDE" \
   || fail "API guide does not explain combined admission results"
+grep -Fq -- 'The core client exposes two independent operations:' "$API_GUIDE" \
+  || fail "API guide does not define the independent operation model"
 grep -Fq -- '`r_client_runtime.h`' "$API_GUIDE" \
   || fail "API guide does not document the public runtime header"
 grep -Fq -- '`r_client_workflow.h`' "$API_GUIDE" \
@@ -735,9 +747,9 @@ grep -Fq -- '`r_client_workflow.h`' "$API_GUIDE" \
 if grep -Fq -- '../examples/latency_tracker.c' "$API_GUIDE"; then
   fail "API guide links the removed flat latency example"
 fi
-grep -Fq -- 'Never report latency for work rejected by its guard.' "$API_GUIDE" \
-  || fail "API guide does not explain denied latency-guard behavior"
-grep -Fq -- 'The report must repeat the guard' "$API_GUIDE" \
+grep -Fq -- 'never fabricate a latency observation' "$API_GUIDE" \
+  || fail "API guide does not reject synthetic latency for work that did not run"
+grep -Fq -- 'must repeat that guard' "$API_GUIDE" \
   || fail "API guide does not explain tracker identity"
 grep -Fq -- '## Clock domains' "$IO_GUIDE" \
   || fail "I/O guide does not distinguish client and measurement clocks"
