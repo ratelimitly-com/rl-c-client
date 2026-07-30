@@ -73,19 +73,22 @@ int request_one_checkout_token(
         .rate_limit = 100u,
         .tokens_requested = 1u,
     };
-    r_client_hash_id("checkout", resource.bucket_id);
+    r_client_hash_id(
+        "checkout",         /* application resource name */
+        resource.bucket_id  /* resulting 16-byte resource ID */
+    );
 
     return r_client_check_rate_limit_async(
-        client,
-        &resource,
-        1u,
-        NULL,
-        0u,
-        NULL,
-        0u,
-        callback,
-        user,
-        out_request
+        client,       /* initialized client */
+        &resource,    /* resource consumptions */
+        1u,           /* number of resource consumptions */
+        NULL,         /* no latency guards */
+        0u,           /* number of latency guards */
+        NULL,         /* no metrics label */
+        0u,           /* metrics-label length */
+        callback,     /* receives grant, rejection, or failure */
+        user,         /* application callback context */
+        out_request   /* request handle for timers or cancellation */
     );
 }
 ```
@@ -113,9 +116,16 @@ int report_inventory_latency(r_client_t *client) {
         .buffer_size = 32u,
         .min_sample_threshold = 5u,
     };
-    r_client_hash_id("inventory", report.service_id);
+    r_client_hash_id(
+        "inventory",       /* application service name */
+        report.service_id  /* resulting 16-byte service ID */
+    );
 
-    return r_client_report_latency(client, &report, 1u);
+    return r_client_report_latency(
+        client,   /* initialized client */
+        &report,  /* latency reports */
+        1u        /* number of latency reports */
+    );
 }
 ```
 
@@ -141,7 +151,10 @@ int request_checkout_with_inventory_guard(
         .rate_limit = 100u,
         .tokens_requested = 1u,
     };
-    r_client_hash_id("checkout", resource.bucket_id);
+    r_client_hash_id(
+        "checkout",         /* application resource name */
+        resource.bucket_id  /* resulting 16-byte resource ID */
+    );
 
     r_latency_guard_t guard = {
         .threshold_ms = 100u,
@@ -150,19 +163,22 @@ int request_checkout_with_inventory_guard(
         .buffer_size = 32u,
         .min_sample_threshold = 5u,
     };
-    r_client_hash_id("inventory", guard.service_id);
+    r_client_hash_id(
+        "inventory",      /* application service name */
+        guard.service_id  /* resulting 16-byte service ID */
+    );
 
     return r_client_check_rate_limit_async(
-        client,
-        &resource,
-        1u,
-        &guard,
-        1u,
-        NULL,
-        0u,
-        callback,
-        user,
-        out_request
+        client,       /* initialized client */
+        &resource,    /* resource consumptions */
+        1u,           /* number of resource consumptions */
+        &guard,       /* latency guards */
+        1u,           /* number of latency guards */
+        NULL,         /* no metrics label */
+        0u,           /* metrics-label length */
+        callback,     /* receives grant, rejection, or failure */
+        user,         /* application callback context */
+        out_request   /* request handle for timers or cancellation */
     );
 }
 ```
@@ -180,9 +196,15 @@ report-delivery behavior belong to the API and policy layers documented in
 
 ## Choose the integration layer
 
-The C client exposes the operations above through three integration layers.
-Pick the lowest layer whose ownership contract matches the host application;
-using the public runtime is optional.
+Applications embed Ratelimitly in very different environments. A proxy module
+normally already owns its sockets, DNS resolver, timers, and logging, while a
+small command-line program may prefer a ready-made socket runtime.
+
+The C client therefore exposes the operations above through three integration
+layers. In every layer, the library owns packet encoding, authentication,
+request policy, response parsing, and server selection. The layer determines
+how much surrounding workflow and I/O the library also owns. Choose the
+ownership boundary that fits the host application.
 
 | Layer | What it owns | What the host still owns |
 | --- | --- | --- |
@@ -199,27 +221,6 @@ callback.
 Proxy modules and other high-throughput embedders commonly choose the core and
 borrowed APIs. The examples choose the workflow and public runtime so each
 framework README can focus on its readiness, timer, and shutdown rules.
-
-## Features
-
-- Asynchronous, atomic resource-consumption requests over UDP.
-- Optional latency guards based on recent service measurements.
-- Independent latency reports for load-shedding feedback.
-- API key credentials in Bech32 form: `rl-cookie...` or `rl-aes...`.
-- Cookie and AES-256-GCM authentication using OpenSSL libcrypto.
-- SRV discovery for `_ratelimitly._udp.<configured-dns-name>`, followed by A/AAAA
-  resolution for returned SRV targets.
-- One
-  [parameterized oldest-first HA request policy](docs/api.md#resource-request-ha-policy).
-- Optional metrics labels.
-- Optional steering feedback callback for source-port rebinding.
-- Static and shared library builds.
-
-This repository contains the public C API and integration contract. Applications
-do not construct or parse Ratelimitly packets directly; the library owns packet
-encoding, authentication, response parsing, replay policy, and server selection.
-Integrators provide credentials, resource IDs, latency data, UDP I/O, DNS, and
-timers through the APIs documented here.
 
 ## Install a release
 

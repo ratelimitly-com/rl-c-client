@@ -776,6 +776,21 @@ readme_c_examples=$(awk '
   code && $0 == "```" { code = 0; next }
   code { print }
 ' "$ROOT_README")
+uncommented_call_arguments=$(awk '
+  /^[[:space:]]*(return )?r_client_(hash_id|check_rate_limit_async|report_latency)\($/ {
+    call = 1
+    next
+  }
+  call && /^[[:space:]]*\);$/ {
+    call = 0
+    next
+  }
+  call && $0 !~ /\/\*/ {
+    print
+  }
+' <<<"$readme_c_examples")
+[[ -z "$uncommented_call_arguments" ]] \
+  || fail "root README C examples leave public API arguments unexplained"
 if ! {
   printf '#include "r_client.h"\n%s\n' "$readme_c_examples" |
     cc -I"$ROOT/include" -std=c11 -fsyntax-only -x c -
@@ -788,6 +803,12 @@ layers_line=$(awk '$0 == "## Choose the integration layer" { print NR; exit }' \
   "$ROOT_README")
 [[ -n "$examples_line" && -n "$layers_line" && "$examples_line" -lt "$layers_line" ]] \
   || fail "root README does not teach logical examples before integration layers"
+grep -Fq -- 'Applications embed Ratelimitly in very different environments.' \
+  "$ROOT_README" \
+  || fail "root README does not motivate its integration-layer choices"
+if grep -Fq -- '## Features' "$ROOT_README"; then
+  fail "root README retains a redundant feature inventory"
+fi
 grep -Fq -- '`result->success` combines resource and latency-guard decisions' \
   "$API_GUIDE" \
   || fail "API guide does not explain combined admission results"
