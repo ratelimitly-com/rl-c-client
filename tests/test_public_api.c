@@ -57,16 +57,59 @@ static void test_reject_invalid_key(void) {
     assert(r_client_parse_auth_key(SAMPLE_AES_KEY_TENANT_3, NULL) == RCLIENT_ERR_CONFIG);
 }
 
-static void test_hash_id_known_vector(void) {
+static void test_canonical_id_known_vectors(void) {
     uint8_t id[16];
     memset(id, 0, sizeof(id));
-    r_client_hash_id("api_calls", id);
+    assert(r_client_derive_bucket_id(
+        "checkout",
+        strlen("checkout"),
+        1000u,
+        100u,
+        id
+    ) == RCLIENT_OK);
 
-    const uint8_t expected[16] = {
-        0x09, 0x50, 0x5f, 0x75, 0x2a, 0xf0, 0x41, 0x5e,
-        0xae, 0x22, 0xe0, 0x7b, 0xdf, 0xea, 0x83, 0xab,
+    const uint8_t expected_bucket[16] = {
+        0xf5, 0xcf, 0x3a, 0xd8, 0xb8, 0x40, 0x68, 0x54,
+        0xb5, 0x96, 0xba, 0x36, 0x14, 0xf1, 0x6e, 0xff,
     };
-    assert(memcmp(id, expected, sizeof(expected)) == 0);
+    assert(memcmp(id, expected_bucket, sizeof(expected_bucket)) == 0);
+
+    assert(r_client_derive_latency_tracker_id(
+        "inventory-backend",
+        strlen("inventory-backend"),
+        10000u,
+        100u,
+        32u,
+        5u,
+        id
+    ) == RCLIENT_OK);
+    const uint8_t expected_tracker[16] = {
+        0x03, 0x20, 0xbf, 0x15, 0xb8, 0x84, 0xbd, 0xa3,
+        0x67, 0xa1, 0x7e, 0x5f, 0xfb, 0x65, 0x04, 0x41,
+    };
+    assert(memcmp(id, expected_tracker, sizeof(expected_tracker)) == 0);
+
+    const uint8_t binary_name[] = {
+        'b', 'i', 'n', 'a', 'r', 'y', '\0', 't', 'r', 'a', 'c', 'k', 'e', 'r',
+    };
+    assert(r_client_derive_latency_tracker_id(
+        binary_name,
+        sizeof(binary_name),
+        UINT32_MAX,
+        UINT32_MAX,
+        UINT32_MAX,
+        UINT32_MAX,
+        id
+    ) == RCLIENT_OK);
+    const uint8_t expected_binary_tracker[16] = {
+        0x06, 0x96, 0xca, 0x52, 0xa5, 0xbf, 0xc5, 0xe9,
+        0xc4, 0x6b, 0xa9, 0x0f, 0x31, 0x10, 0xb7, 0x28,
+    };
+    assert(memcmp(
+        id,
+        expected_binary_tracker,
+        sizeof(expected_binary_tracker)
+    ) == 0);
 }
 
 static void test_default_request_policy(void) {
@@ -124,7 +167,7 @@ int main(void) {
     test_parse_cookie_key();
     test_parse_aes_key();
     test_reject_invalid_key();
-    test_hash_id_known_vector();
+    test_canonical_id_known_vectors();
     test_default_request_policy();
     test_format_default_tenant_dns();
     return 0;

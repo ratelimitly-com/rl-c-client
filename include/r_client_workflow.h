@@ -27,7 +27,7 @@ typedef struct r_admission_config {
     uint32_t rate_limit;
     uint16_t tokens_requested;
 
-    const char *service_name;
+    const char *latency_tracker_name;
     uint32_t latency_threshold_ms;
     uint32_t latency_ttl_ms;
     uint32_t latency_max_samples;

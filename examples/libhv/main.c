@@ -149,7 +149,7 @@ int main(void) {
         r_admission_config_t config;
         r_client_admission_config_defaults(&config);
         config.bucket_name = "libhv-example";
-        config.service_name = "libhv-protected-service";
+        config.latency_tracker_name = "libhv-protected-service";
         config.metrics_label = "libhv-example";
         status = r_client_admission_start(
             app.runtime.handle,

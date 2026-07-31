@@ -254,7 +254,8 @@ small source of truth for that local-only matrix.
 [`latency_tracker/main.c`](latency_tracker/main.c) demonstrates both halves of
 latency-based load shedding:
 
-1. Hash a stable service name into `r_latency_guard_t.service_id`.
+1. Derive `r_latency_guard_t.latency_tracker_id` from a stable tracker name and
+   every setting that defines its stored state.
 2. Include that guard in the rate-limit request.
 3. Copy the guard decision during the completion callback; result arrays are
    owned by `rl-c-client` and expire when the callback returns.
@@ -262,7 +263,7 @@ latency-based load shedding:
    passes.
 5. Measure only that work with `CLOCK_MONOTONIC`.
 6. Send the observation with `r_client_admission_report_latency()`. The
-   admission object preserves the matching service ID and tracker configuration
+   admission object preserves the matching tracker ID and configuration
    and prevents a second report for the same admitted request.
 
 Never report latency for work rejected by the guard. No operation occurred, so
@@ -280,7 +281,7 @@ The guard's policy fields have distinct purposes:
 | `buffer_size` | Tracker storage request; must fit the credential quota. |
 | `min_sample_threshold` | Samples required before the tracker estimate controls admission. |
 
-The report repeats `service_id`, `ttl_ms`, `max_samples`, `buffer_size`, and
+The report repeats `latency_tracker_id`, `ttl_ms`, `max_samples`, `buffer_size`, and
 `min_sample_threshold` so it updates the same tracker. `threshold_ms` belongs
 only to the guard decision.
 

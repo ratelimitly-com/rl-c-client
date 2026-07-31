@@ -25,8 +25,8 @@ static bool r_admission_config_valid(const r_admission_config_t *config) {
     return config
         && config->bucket_name
         && config->bucket_name[0] != '\0'
-        && config->service_name
-        && config->service_name[0] != '\0'
+        && config->latency_tracker_name
+        && config->latency_tracker_name[0] != '\0'
         && config->window_size_ms > 0u
         && config->rate_limit > 0u
         && config->tokens_requested > 0u
@@ -48,12 +48,30 @@ int r_client_admission_prepare(
     }
 
     memset(request, 0, sizeof(*request));
-    r_client_hash_id(config->bucket_name, request->resource.bucket_id);
+    if (r_client_derive_bucket_id(
+            config->bucket_name,
+            strlen(config->bucket_name),
+            config->window_size_ms,
+            config->rate_limit,
+            request->resource.bucket_id
+        ) != RCLIENT_OK) {
+        return RCLIENT_ERR_CONFIG;
+    }
     request->resource.window_size_ms = config->window_size_ms;
     request->resource.rate_limit = config->rate_limit;
     request->resource.tokens_requested = config->tokens_requested;
 
-    r_client_hash_id(config->service_name, request->guard.service_id);
+    if (r_client_derive_latency_tracker_id(
+            config->latency_tracker_name,
+            strlen(config->latency_tracker_name),
+            config->latency_ttl_ms,
+            config->latency_max_samples,
+            config->latency_buffer_size,
+            config->latency_min_sample_threshold,
+            request->guard.latency_tracker_id
+        ) != RCLIENT_OK) {
+        return RCLIENT_ERR_CONFIG;
+    }
     request->guard.threshold_ms = config->latency_threshold_ms;
     request->guard.ttl_ms = config->latency_ttl_ms;
     request->guard.max_samples = config->latency_max_samples;
@@ -222,7 +240,7 @@ int r_client_admission_report_latency(
         .buffer_size = request->guard.buffer_size,
         .min_sample_threshold = request->guard.min_sample_threshold,
     };
-    memcpy(report.service_id, request->guard.service_id, sizeof(report.service_id));
+    memcpy(report.latency_tracker_id, request->guard.latency_tracker_id, sizeof(report.latency_tracker_id));
     int status = r_client_report_latency(client, &report, 1u);
     if (status == RCLIENT_OK) {
         request->latency_reported = true;

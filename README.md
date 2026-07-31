@@ -279,7 +279,8 @@ Core operations:
 - `r_client_on_timeout`
 - `r_client_cancel_request`
 - `r_client_default_request_policy`
-- `r_client_hash_id`
+- `r_client_derive_bucket_id`
+- `r_client_derive_latency_tracker_id`
 - `r_client_parse_auth_key`
 - `r_client_admission_start` / `r_client_admission_report_latency`
 - `r_runtime_client_init` / `r_runtime_client_on_readable`
@@ -365,14 +366,20 @@ For integrations with request-scoped memory pools, use
 `r_client_check_rate_limit_async_borrowed` when request buffers live until
 callback completion.
 
-## ID Hashing
+## Content-defined IDs
 
-Applications map their own strings to Ratelimitly IDs:
+Resource buckets and latency trackers are identified by their names together
+with the settings that define their stored state. Use
+`r_client_derive_bucket_id()` for a bucket and
+`r_client_derive_latency_tracker_id()` for a latency tracker. The workflow API
+does this automatically from `bucket_name`, `latency_tracker_name`, and their
+configuration.
 
-- bucket strings become `r_resource_request_t.bucket_id`
-- service strings become `r_latency_guard_t.service_id`
-
-Use `r_client_hash_id(input, out_id)` to produce the required 16-byte ID.
+The threshold is not part of a latency-tracker ID: it is a condition evaluated
+against the tracker, not part of the tracker's stored state. The observed
+latency is likewise a sample, not tracker identity. See
+[docs/api.md](docs/api.md#content-defined-ids) for the exact contracts and
+examples.
 
 ## Perf Client
 
@@ -419,7 +426,7 @@ strategy through `r_request_policy_t`.
 | resource rate limit | A quota check for a named bucket, such as requests allowed per interval. |
 | bucket | Stable resource identity whose configured quota is consumed by matching requests. |
 | latency guard | A request to shed new work when the tracker's recent service latency reaches its configured threshold. |
-| latency tracker | Server-side sample window identified by a service ID and configured by threshold, lifetime, sample count, and buffer size. |
+| latency tracker | Server-side sample window identified by a canonical tracker ID and defined by its lifetime, sample count, buffer size, and warm-up threshold. |
 | tenant | Isolated Ratelimitly account identified by metadata encoded in the API key. |
 | host loop | The application's existing event loop; it owns readiness callbacks and timers around the client. |
 | public runtime | Optional adapter that owns nonblocking UDP sockets and production DNS discovery while exposing readiness and deadlines to the host loop. |
