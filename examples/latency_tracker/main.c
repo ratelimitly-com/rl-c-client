@@ -53,7 +53,7 @@ static void on_admission(
 static void configure_admission(r_admission_config_t *config) {
     r_client_admission_config_defaults(config);
     config->bucket_name = "example-latency-tracker";
-    config->service_name = "example-inventory-backend";
+    config->latency_tracker_name = "example-inventory-backend";
     config->metrics_label = "latency-tracker-example";
 }
 

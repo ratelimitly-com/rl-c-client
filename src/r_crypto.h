@@ -18,7 +18,15 @@ typedef struct r_bech32_quotas {
     uint32_t dedup_ttl_ms_max;
 } r_bech32_quotas_t;
 
-int r_hash_id_blake2s_128(const char *input, uint8_t out_id[16]);
+int r_hash_content_id_blake2s_128(
+    const uint8_t *domain,
+    size_t domain_len,
+    const uint8_t *name,
+    size_t name_len,
+    const uint32_t *fields,
+    size_t field_count,
+    uint8_t out_id[16]
+);
 int r_decode_api_key_bech32(
     const char *encoded,
     r_auth_type_t *out_type,

@@ -155,7 +155,7 @@ int run_rate_limit_task(struct kore_task *task) {
         r_admission_config_t config;
         r_client_admission_config_defaults(&config);
         config.bucket_name = "kore-example";
-        config.service_name = "kore-protected-service";
+        config.latency_tracker_name = "kore-protected-service";
         config.metrics_label = "kore-example";
         output.status = r_client_admission_start(
             runtime.handle,

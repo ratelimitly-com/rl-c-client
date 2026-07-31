@@ -166,8 +166,18 @@ enum {
     R_CREDENTIAL_PAYLOAD_LEN = 60u,
 };
 
-int r_hash_id_blake2s_128(const char *input, uint8_t out_id[16]) {
-    if (!input || !out_id) {
+int r_hash_content_id_blake2s_128(
+    const uint8_t *domain,
+    size_t domain_len,
+    const uint8_t *name,
+    size_t name_len,
+    const uint32_t *fields,
+    size_t field_count,
+    uint8_t out_id[16]
+) {
+    if (!domain || domain_len == 0u || (!name && name_len > 0u)
+        || name_len > UINT32_MAX || (!fields && field_count > 0u)
+        || !out_id) {
         return -1;
     }
     const EVP_MD *md = EVP_blake2s256();
@@ -185,8 +195,33 @@ int r_hash_id_blake2s_128(const char *input, uint8_t out_id[16]) {
     if (EVP_DigestInit_ex(ctx, md, NULL) != 1) {
         goto cleanup;
     }
-    if (EVP_DigestUpdate(ctx, input, strlen(input)) != 1) {
+    if (EVP_DigestUpdate(ctx, domain, domain_len) != 1) {
         goto cleanup;
+    }
+    const uint32_t wire_name_len = (uint32_t)name_len;
+    const uint8_t name_len_le[4] = {
+        (uint8_t)(wire_name_len & 0xffu),
+        (uint8_t)((wire_name_len >> 8) & 0xffu),
+        (uint8_t)((wire_name_len >> 16) & 0xffu),
+        (uint8_t)((wire_name_len >> 24) & 0xffu),
+    };
+    if (EVP_DigestUpdate(ctx, name_len_le, sizeof(name_len_le)) != 1) {
+        goto cleanup;
+    }
+    if (name_len > 0u && EVP_DigestUpdate(ctx, name, name_len) != 1) {
+        goto cleanup;
+    }
+    for (size_t i = 0u; i < field_count; i++) {
+        const uint32_t field = fields[i];
+        const uint8_t field_le[4] = {
+            (uint8_t)(field & 0xffu),
+            (uint8_t)((field >> 8) & 0xffu),
+            (uint8_t)((field >> 16) & 0xffu),
+            (uint8_t)((field >> 24) & 0xffu),
+        };
+        if (EVP_DigestUpdate(ctx, field_le, sizeof(field_le)) != 1) {
+            goto cleanup;
+        }
     }
     if (EVP_DigestFinal_ex(ctx, digest, &digest_len) != 1) {
         goto cleanup;

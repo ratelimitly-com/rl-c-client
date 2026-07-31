@@ -177,7 +177,7 @@ static enum MHD_Result begin_admission(pending_request_t *pending) {
     r_admission_config_t config;
     r_client_admission_config_defaults(&config);
     config.bucket_name = "libmicrohttpd-example";
-    config.service_name = "libmicrohttpd-protected-service";
+    config.latency_tracker_name = "libmicrohttpd-protected-service";
     config.metrics_label = "libmicrohttpd-example";
     int status = r_client_admission_start(
         app->runtime.handle,

@@ -116,7 +116,7 @@ integrations therefore need no new read watcher or deadline path for reports;
 the existing UDP send hook is sufficient.
 
 Report only work that actually ran after a matching latency guard passed. Use
-the same service ID and tracker settings in guard and report. Log send failures,
+the same latency-tracker ID and tracker settings in guard and report. Log send failures,
 but do not change an HTTP response outcome after protected work completed.
 
 See the [latency tracking workflow](examples/README.md#latency-tracking-workflow)

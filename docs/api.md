@@ -84,13 +84,51 @@ Do not pass `r_auth_key_info_t.secret` back into `cfg.tenant.auth.secret`.
 Configuration expects the encoded Bech32 string. The decoded `secret` field is
 provided only for callers that need to inspect or validate the credential.
 
-## Hashing IDs
+## Content-defined IDs
 
-`r_client_hash_id(input, out_id)` maps application strings to 16-byte IDs for
-resource buckets and latency services.
+The 16-byte ID on the wire identifies stored server state, so it must include
+both the application name and every setting that defines that state.
+`r_client_derive_bucket_id()` derives a bucket ID from:
 
-The function returns no status. If `input` or `out_id` is `NULL`, it leaves
-`out_id` unchanged.
+- the exact bucket-name bytes and byte length;
+- `window_size_ms`; and
+- `rate_limit`.
+
+`r_client_derive_latency_tracker_id()` derives a latency-tracker ID from:
+
+- the exact tracker-name bytes and byte length;
+- `ttl_ms`;
+- `max_samples`;
+- the final effective `buffer_size`; and
+- `min_sample_threshold`.
+
+The guard's `threshold_ms` is excluded because different guards may evaluate
+the same tracker against different thresholds. A report's `observed_latency`
+is a sample and is also excluded.
+
+Both helpers accept names as an explicit pointer and length, including names
+with embedded NUL bytes. They return `RCLIENT_OK` on success and
+`RCLIENT_ERR_CONFIG` for invalid arguments or a derivation failure. Call them
+again whenever an identity-defining setting changes; reusing an ID with
+different settings is a malformed protocol request.
+
+The workflow API derives both IDs automatically. Low-level callers derive the
+ID after filling the defining fields:
+
+```c
+r_resource_request_t resource = {
+    .window_size_ms = 1000,
+    .rate_limit = 100,
+    .tokens_requested = 1,
+};
+int rc = r_client_derive_bucket_id(
+    "checkout",                  /* exact bucket-name bytes */
+    strlen("checkout"),          /* bucket-name byte length */
+    resource.window_size_ms,     /* bucket window */
+    resource.rate_limit,         /* bucket rate */
+    resource.bucket_id           /* resulting 16-byte ID */
+);
+```
 
 ## Rate Requests
 
@@ -125,11 +163,11 @@ request from inside the completion callback is harmless and treated as a no-op.
 
 Latency tracking forms one admission-and-feedback loop:
 
-1. Create a guard for a stable service ID and include it in a rate request.
+1. Create a guard for a stable latency tracker and include it in a rate request.
 2. Copy its result during the request callback.
 3. Perform protected work only when the combined result passes.
 4. Measure that work with a monotonic clock.
-5. Report the observation using the same service ID and tracker settings.
+5. Report the observation using the same tracker ID and settings.
 
 Never report latency for work rejected by its guard. The operation did not run,
 so a zero or synthetic observation would bias the tracker and admit too much
@@ -137,7 +175,7 @@ future work.
 
 ### Guard configuration
 
-Hash an application-level service name exactly as for resource bucket names:
+Derive the ID after filling every setting that defines the tracker:
 
 ```c
 r_latency_guard_t guard = {
@@ -147,12 +185,20 @@ r_latency_guard_t guard = {
     .buffer_size = 32,
     .min_sample_threshold = 5,
 };
-r_client_hash_id("inventory-backend", guard.service_id);
+int rc = r_client_derive_latency_tracker_id(
+    "inventory-backend",                 /* exact tracker-name bytes */
+    strlen("inventory-backend"),         /* tracker-name byte length */
+    guard.ttl_ms,                         /* sample lifetime */
+    guard.max_samples,                    /* samples considered */
+    guard.buffer_size,                    /* final effective storage */
+    guard.min_sample_threshold,           /* warm-up sample count */
+    guard.latency_tracker_id              /* resulting 16-byte ID */
+);
 ```
 
 | Field | Contract |
 | --- | --- |
-| `service_id` | Stable 16-byte ID identifying one latency tracker. |
+| `latency_tracker_id` | Canonical 16-byte ID identifying this tracker definition. |
 | `threshold_ms` | Guard fails when tracked latency is greater than or equal to this value. |
 | `ttl_ms` | Maximum sample lifetime for this tracker. |
 | `max_samples` | Maximum number of samples considered by the tracker. |
@@ -173,7 +219,7 @@ Measure the protected operation rather than the RateLimitly request. Wall-clock
 adjustments must not change duration, so use `CLOCK_MONOTONIC` or the host
 event loop's monotonic duration clock.
 
-The report must repeat the guard's `service_id`, `ttl_ms`, `max_samples`,
+The report must repeat the guard's `latency_tracker_id`, `ttl_ms`, `max_samples`,
 `buffer_size`, and `min_sample_threshold`. `threshold_ms` appears only in the
 guard because it controls admission, not sample storage.
 
@@ -185,7 +231,7 @@ r_service_latency_report_t report = {
     .buffer_size = guard.buffer_size,
     .min_sample_threshold = guard.min_sample_threshold,
 };
-memcpy(report.service_id, guard.service_id, sizeof(report.service_id));
+memcpy(report.latency_tracker_id, guard.latency_tracker_id, sizeof(report.latency_tracker_id));
 
 int rc = r_client_report_latency(client, &report, 1);
 if (rc != RCLIENT_OK) {

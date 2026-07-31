@@ -213,7 +213,7 @@ static void on_http_paused(http_pause_handle_s *http) {
     r_admission_config_t config;
     r_client_admission_config_defaults(&config);
     config.bucket_name = "facil.io-example";
-    config.service_name = "facil.io-protected-service";
+    config.latency_tracker_name = "facil.io-protected-service";
     config.metrics_label = "facil.io-example";
     int status = r_client_admission_start(
         pending->app->runtime.handle,

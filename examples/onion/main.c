@@ -155,7 +155,7 @@ static void start_queued_jobs(onion_bridge_t *bridge) {
         r_admission_config_t config;
         r_client_admission_config_defaults(&config);
         config.bucket_name = "onion-example";
-        config.service_name = "onion-protected-service";
+        config.latency_tracker_name = "onion-protected-service";
         config.metrics_label = "onion-example";
         int status = r_client_admission_start(
             bridge->runtime.handle,

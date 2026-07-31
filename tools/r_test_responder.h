@@ -36,7 +36,7 @@ typedef enum r_test_event_kind {
 
 typedef struct r_test_tracker_observation {
     bool present;
-    uint8_t service_id[16];
+    uint8_t latency_tracker_id[16];
     uint32_t ttl_ms;
     uint32_t max_samples;
     uint32_t buffer_size;
@@ -71,8 +71,8 @@ typedef struct r_test_responder_state {
     bool steering_keep_port;
     uint64_t allow_count;
     uint64_t sequence;
-    uint8_t last_guard_service_id[16];
-    bool has_last_guard_service_id;
+    uint8_t last_guard_latency_tracker_id[16];
+    bool has_last_guard_latency_tracker_id;
     r_test_quota_entry_t quota[R_TEST_RESPONDER_QUOTA_CAP];
     size_t quota_count;
 } r_test_responder_state_t;

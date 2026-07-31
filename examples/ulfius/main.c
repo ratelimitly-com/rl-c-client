@@ -131,7 +131,7 @@ static int run_check(
     r_admission_config_t config;
     r_client_admission_config_defaults(&config);
     config.bucket_name = "ulfius-example";
-    config.service_name = "ulfius-protected-service";
+    config.latency_tracker_name = "ulfius-protected-service";
     config.metrics_label = "ulfius-example";
     status = r_client_admission_start(
         runtime->handle,

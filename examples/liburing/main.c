@@ -160,7 +160,7 @@ static int start_admission(application_t *app) {
     r_admission_config_t config;
     r_client_admission_config_defaults(&config);
     config.bucket_name = "liburing-example";
-    config.service_name = "liburing-protected-service";
+    config.latency_tracker_name = "liburing-protected-service";
     config.metrics_label = "liburing-example";
     return r_client_admission_start(
         app->runtime.handle,
