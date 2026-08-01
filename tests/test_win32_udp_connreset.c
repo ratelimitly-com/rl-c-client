@@ -384,7 +384,7 @@ static int runtime_send_survives_connreset(
     r_admission_config_t config;
     r_client_admission_config_defaults(&config);
     config.bucket_name = "win32-reset-test";
-    config.service_name = "win32-reset-test";
+    config.latency_tracker_name = "win32-reset-test";
     config.metrics_label = "win32-reset-test";
 
     bool completed = false;
