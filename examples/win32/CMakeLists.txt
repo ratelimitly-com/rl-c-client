@@ -44,14 +44,24 @@ target_include_directories(r-test-responder PRIVATE
     "${RL_CLIENT_ROOT}/src"
     "${RL_CLIENT_ROOT}/tools"
 )
+
+# Native-only regression for Winsock's asynchronous UDP reset behavior.
+add_executable(r-test-win32-udp-connreset
+    "${RL_CLIENT_ROOT}/tests/test_win32_udp_connreset.c"
+)
+target_compile_features(r-test-win32-udp-connreset PRIVATE c_std_11)
 if(MSVC)
     target_compile_options(rclient PRIVATE /W4 /WX)
     target_compile_options(win32-example PRIVATE /W4 /WX)
     target_compile_options(r-test-responder PRIVATE /W4 /WX)
+    target_compile_options(r-test-win32-udp-connreset PRIVATE /W4 /WX)
 else()
     target_compile_options(rclient PRIVATE -Wall -Wextra -Werror)
     target_compile_options(win32-example PRIVATE -Wall -Wextra -Werror)
     target_compile_options(r-test-responder PRIVATE -Wall -Wextra -Werror)
+    target_compile_options(r-test-win32-udp-connreset
+        PRIVATE -Wall -Wextra -Werror)
 endif()
 target_link_libraries(win32-example PRIVATE rclient)
 target_link_libraries(r-test-responder PRIVATE rclient)
+target_link_libraries(r-test-win32-udp-connreset PRIVATE rclient)
