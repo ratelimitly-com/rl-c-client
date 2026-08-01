@@ -95,8 +95,11 @@ static int handle_socket_event(application_t *app, size_t index) {
             &network_events) != 0) {
         return RCLIENT_ERR_IO;
     }
-    if ((network_events.lNetworkEvents & FD_READ) == 0
-        || network_events.iErrorCode[FD_READ_BIT] != 0) {
+    if ((network_events.lNetworkEvents & FD_READ) == 0) {
+        return RCLIENT_ERR_IO;
+    }
+    int read_error = network_events.iErrorCode[FD_READ_BIT];
+    if (read_error != 0 && read_error != WSAECONNRESET) {
         return RCLIENT_ERR_IO;
     }
     return r_runtime_client_on_readable(&app->runtime, socket_value);
