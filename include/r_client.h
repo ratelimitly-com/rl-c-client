@@ -135,24 +135,26 @@ typedef struct r_service_latency_report {
     uint32_t min_sample_threshold;
 } r_service_latency_report_t;
 
-// Result structures (valid only during callback).
+// Result structures (valid only during callback). Arrays mirror the server
+// response; counts may differ from the request, so match entries by ID.
 typedef struct r_guard_result {
     uint8_t latency_tracker_id[16];
     uint32_t threshold_ms;
-    uint32_t current_latency_ms;
-    bool passed;
+    uint32_t current_latency_ms; // Tracker latency estimate on the responder.
+    bool passed;                 // current_latency_ms < threshold_ms.
 } r_guard_result_t;
 
 typedef struct r_resource_result {
     uint8_t bucket_id[16];
-    uint16_t tokens_deficit;
-    uint32_t actual_rate;
+    uint16_t tokens_deficit; // 0 = granted; nonzero = requested tokens not supplied.
+    uint32_t actual_rate;    // Bucket's current consumed tokens in its window.
 } r_resource_result_t;
 
 typedef struct r_rate_limit_result {
-    bool success;
-    uint64_t server_id;
-    bool steering_feedback;
+    bool success;            // All guards passed and all deficits are zero.
+    uint64_t server_id;      // Responding server's 64-bit ID.
+    bool steering_feedback;  // Wire keep-port flag: true = keep the current
+                             // source port; false = server requested a rebind.
     const r_guard_result_t *guards;
     size_t guard_count;
     const r_resource_result_t *resources;
@@ -175,6 +177,10 @@ RCLIENT_API int r_client_create(
     r_client_t **out_client
 );
 
+// Destroys the client. In-flight requests are freed WITHOUT invoking their
+// callbacks (borrowed buffers are implicitly released). Must not be called
+// from inside a completion callback; serialize with all other calls on the
+// same client — the client contains no locks.
 RCLIENT_API void r_client_destroy(r_client_t *client);
 
 // Async rate limit request.
@@ -192,7 +198,8 @@ RCLIENT_API int r_client_check_rate_limit_async(
 );
 
 // Async rate limit request using caller-owned buffers (no internal copies).
-// Caller must keep buffers alive until the callback is invoked.
+// Caller must keep buffers alive until the callback fires, the request is
+// canceled, or the client is destroyed (the latter two suppress the callback).
 RCLIENT_API int r_client_check_rate_limit_async_borrowed(
     r_client_t *client,
     const r_resource_request_t *resources,
@@ -213,7 +220,11 @@ RCLIENT_API int r_client_report_latency(
     size_t report_count
 );
 
-// Datagram ingress from host.
+// Datagram ingress from host. May invoke a request's completion callback and
+// free the request before returning; the return value does NOT signal
+// completion (RCLIENT_OK is returned on completing paths too). Non-OK returns
+// are informational per-datagram errors any off-path sender can trigger —
+// log and continue, never treat as fatal.
 RCLIENT_API int r_client_on_datagram(
     r_client_t *client,
     const uint8_t *buf,
@@ -221,12 +232,17 @@ RCLIENT_API int r_client_on_datagram(
     const r_addr_t *from
 );
 
-// Per-request timer support.
+// Per-request timer support. The req handle is invalid once the completion
+// callback has fired (during on_datagram/on_timeout) — track a flag from the
+// callback before touching req again.
 RCLIENT_API int r_client_request_deadline_ms(
     const r_client_req_t *req,
     uint64_t *out_deadline_ms
 );
 
+// May invoke the completion callback and free req before returning; returns
+// RCLIENT_OK on completing paths too (see r_client_on_datagram). Calling it
+// before the deadline is a safe no-op.
 RCLIENT_API int r_client_on_timeout(
     r_client_t *client,
     r_client_req_t *req,

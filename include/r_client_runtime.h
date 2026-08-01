@@ -26,9 +26,15 @@ typedef struct r_runtime_options {
 /*
  * A small, portable runtime for examples and command-line programs.
  *
- * It owns nonblocking IPv4/IPv6 UDP sockets and performs synchronous DNS.
+ * It owns nonblocking IPv4/IPv6 UDP sockets and performs synchronous
+ * (blocking) DNS during init, refresh, and any submit that finds no servers.
  * Applications with an asynchronous resolver should instead provide their
  * own r_io_ops_t and r_resolver_ops_t to r_client_create().
+ *
+ * Like the core client, the runtime contains no locks: confine each runtime
+ * to one thread or event loop and serialize all calls. The runtime installs
+ * no steering-feedback hook, so server source-port rebind requests are
+ * ignored at this layer.
  */
 typedef struct r_runtime_client {
     r_client_t *handle;
@@ -62,7 +68,11 @@ RCLIENT_API r_runtime_socket_t r_runtime_socket_at(
     size_t index
 );
 
-/* Drain one ready socket and deliver all complete datagrams to the client. */
+/* Drain one ready socket, delivering datagrams to the client until the
+ * socket is empty or a datagram produces a non-RCLIENT_OK ingress status,
+ * which is returned. Such statuses are informational (any off-path sender
+ * can trigger them): log and continue — never treat them as fatal. Remaining
+ * datagrams are delivered on the next readiness event. */
 RCLIENT_API int r_runtime_client_on_readable(
     r_runtime_client_t *runtime,
     r_runtime_socket_t socket_value

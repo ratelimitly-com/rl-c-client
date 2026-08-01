@@ -50,8 +50,11 @@ architecture still apply.
 ## Publish
 
 Set the next numeric `MAJOR.MINOR.PATCH` value in `VERSION` as part of the
-release pull request. Review its release inputs and merge it to `main`. Do not
-create the version tag manually.
+release pull request. In the same pull request, finalize `CHANGES.md`: promote
+the shipping entries from `Unreleased` into a dated `MAJOR.MINOR.PATCH`
+section that matches `VERSION`, leaving only genuinely unreleased work under
+`Unreleased`. Review the release inputs and merge to `main`. Do not create the
+version tag manually.
 
 The `main` workflow:
 

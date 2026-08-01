@@ -1,7 +1,7 @@
 # Test responder contract
 
 `r_test_responder` is a deterministic UDP fixture for testing applications that
-embed `rl-c-client`. It is test support, not a RateLimitly server and not part
+embed `rl-c-client`. It is test support, not a Ratelimitly server and not part
 of the production C library API.
 
 The responder lives in this repository so packet encoding, authentication, and
@@ -25,9 +25,9 @@ Start one deterministic scenario on an explicit address and port:
   --scenario=allow
 ```
 
-`--listen` is process control for the test fixture, not a RateLimitly server
+`--listen` is process control for the test fixture, not a Ratelimitly server
 command-line option or a protocol-level address restriction. A production
-RateLimitly server does not expose this fixture flag; endpoint selection belongs
+Ratelimitly server does not expose this fixture flag; endpoint selection belongs
 to the server deployment and runtime. The fixture is instead launched directly
 by a test harness, so the harness must supply its numeric IPv4 or bracketed IPv6
 bind address and nonzero UDP port, then direct its DNS/SRV setup and client to a
@@ -37,7 +37,7 @@ choose their own network topology.
 All explicitly supplied numeric bind addresses, including wildcard addresses,
 are valid. The example and automated suite choose `127.0.0.1` only to keep
 routine test traffic on the same host; that choice states no requirement about
-a RateLimitly server. The responder must not open a socket unless `--listen` is
+a Ratelimitly server. The responder must not open a socket unless `--listen` is
 present.
 
 On startup it writes exactly one readiness record to standard output:
@@ -67,7 +67,15 @@ select between those built-in credentials; arbitrary credentials are not
 accepted on the command line.
 
 `--print-nginx-config` prints the matching synthetic tenant/auth directives,
-SRV target, and responder address without opening a socket. This output is for
+SRV target, and responder address without opening a socket. `--listen` is
+still required — its address is rendered into the generated configuration
+rather than bound:
+
+```sh
+bin/r_test_responder --listen=127.0.0.1:39082 --print-nginx-config
+```
+
+This output is for
 generated test configurations only and must label the credential as synthetic.
 
 The server id defaults to `1` and may be replaced with `--server-id=<n>` so a
@@ -92,6 +100,19 @@ Exactly one base scenario is selected per process:
 | `count-empty` | Send a valid authenticated success response with zero guards and resources. |
 | `count-short` | Return one fewer result than requested, preferring a missing resource. |
 | `count-extra` | Return one additional result beyond the request counts. |
+
+Client-observable outcomes, in terms of the public C API: `allow`,
+`guard-pass`, and `count-empty` complete the request callback with
+`RCLIENT_OK` and `success == true`; `deny`, `guard-deny`, and an exhausted
+`quota` complete with `RCLIENT_OK` and `success == false` (inspect deficits
+and guard results); `count-short` and `count-extra` complete with `RCLIENT_OK`
+and result arrays whose counts differ from the request — match entries by ID,
+not index. `drop` produces no response, so the request completes with
+`RCLIENT_ERR_TIMEOUT`. `malformed-auth` and `malformed-truncated` make
+`r_client_on_datagram` return an informational error (`RCLIENT_ERR_AUTH` for a
+cookie mismatch, `RCLIENT_ERR_PROTOCOL` for an AES tag or parse failure) while
+the request stays in flight and later times out. `malformed-request-id` is
+ignored silently (`RCLIENT_OK` ingress return) and the request times out.
 
 `--delay-ms=<n>` delays a non-drop response without blocking signal handling.
 `--steering=rebind` sets steering feedback so the client asks its host to change

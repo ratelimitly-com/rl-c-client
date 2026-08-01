@@ -7,7 +7,9 @@ timers, DNS, and memory lifetimes.
 ## Goals
 
 - Keep the public API small and coherent while the MVP evolves.
-- Avoid blocking calls and internal threads.
+- Avoid blocking calls and internal threads in the core client. (The optional
+  public runtime layer deliberately trades this for convenience: it owns UDP
+  sockets and performs synchronous DNS.)
 - Support proxies and other event-loop embedders.
 - Keep packet encoding, credential handling, authentication, response parsing,
   replay policy, and server selection inside the library.
@@ -19,6 +21,9 @@ The supported public headers are:
 
 - `include/r_client.h`
 - `include/r_client_io.h`
+- `include/r_client_workflow.h` (optional admission workflow)
+- `include/r_client_runtime.h` (optional public runtime)
+- `include/r_client_export.h` (export macro, included by the others)
 
 Files under `src/` are private. They may be used by tests inside this repo, but
 external consumers must not include them.
@@ -42,9 +47,11 @@ between configured auth type, key id, and credential contents.
 ## DNS and Routing
 
 The client asks the host resolver for SRV records under
-`_ratelimitly._udp.<configured-dns-name>`, then asks for A/AAAA addresses for each
-SRV target. The host supplies DNS results; the client copies them and decides
-which targets to use for each attempt.
+`_ratelimitly._udp.<configured-dns-name>` (or the key-derived default name),
+then asks for A/AAAA addresses for each SRV target whose first label encodes a
+server ID as `s-<decimal>`; targets without that label are skipped (see
+IO_ABSTRACTION.md, DNS). The host supplies DNS results; the client copies them
+and decides which targets to use for each attempt.
 
 ## Request Lifecycle
 
@@ -87,7 +94,8 @@ policy-dispatch branches.
 Latency reports are independent, fire-and-forget operations. They reuse the
 same credential authentication, discovery, and routing machinery but do not
 wait for responses and need not correspond to any resource request. Reports
-that exceed credential quotas are filtered before send.
+whose `buffer_size` exceeds the key's latency-buffer-size quota are filtered
+before send; other quota dimensions are server-enforced.
 
 ## Documentation Boundary
 
@@ -97,4 +105,5 @@ client using only files in this repository.
 
 Documentation should describe packet-related behavior at the C API level. The
 packet encoder, parser, and crypto helpers remain implementation details unless
-a behavior is exposed through `include/r_client.h` or `include/r_client_io.h`.
+a behavior is exposed through one of the public headers listed under Public
+Boundary above.

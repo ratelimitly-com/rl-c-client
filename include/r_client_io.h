@@ -41,20 +41,23 @@ typedef struct r_io_ops {
     // Milliseconds since UNIX epoch.
     uint64_t (*now_ms)(void *ctx);
 
-    // Optional logging hook (may be NULL).
+    // Reserved logging hook (may be NULL). The current library never
+    // invokes it.
     void (*log)(void *ctx, r_log_level_t level, const char *msg);
 
     // Optional steering feedback hook (keep_port == false means change port).
+    // Called at most once per request, after the completion callback returns,
+    // and only with keep_port == false.
     void (*on_steering_feedback)(void *ctx, bool keep_port);
 } r_io_ops_t;
 
 typedef uint64_t r_dns_req_id_t;
 
 typedef struct r_srv_record {
-    const char *target;
+    const char *target; // First DNS label must encode the server ID: s-<decimal>.
     uint16_t port;
-    uint16_t priority;
-    uint16_t weight;
+    uint16_t priority;  // Ignored by the client; record order does not matter.
+    uint16_t weight;    // Ignored by the client.
     uint32_t ttl_ms;
 } r_srv_record_t;
 
@@ -76,6 +79,8 @@ typedef struct r_resolver_ops {
     void *ctx;
 
     // Resolve SRV records for a name. May invoke callback synchronously.
+    // `name` is borrowed only for the duration of this call — asynchronous
+    // implementations must copy it before returning.
     // Async resolvers should set a nonzero out_req_id for cancellation.
     int (*resolve_srv)(
         void *ctx,
@@ -86,6 +91,8 @@ typedef struct r_resolver_ops {
     );
 
     // Resolve A/AAAA records for a name. May invoke callback synchronously.
+    // `name` is borrowed only for the duration of this call — asynchronous
+    // implementations must copy it before returning.
     // Async resolvers should set a nonzero out_req_id for cancellation.
     int (*resolve_addrs)(
         void *ctx,
@@ -95,7 +102,8 @@ typedef struct r_resolver_ops {
         void *user
     );
 
-    // Best-effort cancel. Late callbacks may be ignored by the client.
+    // Best-effort cancel; may be NULL. Late callbacks may be ignored by the
+    // client.
     void (*cancel)(void *ctx, r_dns_req_id_t req_id);
 } r_resolver_ops_t;
 
