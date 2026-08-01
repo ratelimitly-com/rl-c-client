@@ -2239,11 +2239,57 @@ void r_client_cancel_request(r_client_t *client, r_client_req_t *req) {
     r_request_free(req);
 }
 
-void r_client_hash_id(const char *input, uint8_t out_id[16]) {
-    if (!input || !out_id) {
-        return;
+int r_client_derive_bucket_id(
+    const void *bucket_name,
+    size_t bucket_name_len,
+    uint32_t window_size_ms,
+    uint32_t rate_limit,
+    uint8_t out_id[16]
+) {
+    static const uint8_t domain[] = "ratelimitly.resource.v1";
+    const uint32_t fields[] = {window_size_ms, rate_limit};
+    if (r_hash_content_id_blake2s_128(
+            domain,
+            sizeof(domain),
+            bucket_name,
+            bucket_name_len,
+            fields,
+            sizeof(fields) / sizeof(fields[0]),
+            out_id
+        ) != 0) {
+        return RCLIENT_ERR_CONFIG;
     }
-    (void)r_hash_id_blake2s_128(input, out_id);
+    return RCLIENT_OK;
+}
+
+int r_client_derive_latency_tracker_id(
+    const void *latency_tracker_name,
+    size_t latency_tracker_name_len,
+    uint32_t ttl_ms,
+    uint32_t max_samples,
+    uint32_t buffer_size,
+    uint32_t min_sample_threshold,
+    uint8_t out_id[16]
+) {
+    static const uint8_t domain[] = "ratelimitly.latency-tracker.v1";
+    const uint32_t fields[] = {
+        ttl_ms,
+        max_samples,
+        buffer_size,
+        min_sample_threshold,
+    };
+    if (r_hash_content_id_blake2s_128(
+            domain,
+            sizeof(domain),
+            latency_tracker_name,
+            latency_tracker_name_len,
+            fields,
+            sizeof(fields) / sizeof(fields[0]),
+            out_id
+        ) != 0) {
+        return RCLIENT_ERR_CONFIG;
+    }
+    return RCLIENT_OK;
 }
 
 int r_client_parse_auth_key(const char *encoded, r_auth_key_info_t *out_info) {

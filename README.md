@@ -73,10 +73,16 @@ int request_one_checkout_token(
         .rate_limit = 100u,
         .tokens_requested = 1u,
     };
-    r_client_hash_id(
-        "checkout",         /* application resource name */
-        resource.bucket_id  /* resulting 16-byte resource ID */
+    int rc = r_client_derive_bucket_id(
+        "checkout",                  /* exact bucket-name bytes */
+        sizeof("checkout") - 1u,     /* bucket-name byte length */
+        resource.window_size_ms,     /* configured window */
+        resource.rate_limit,         /* configured rate */
+        resource.bucket_id           /* resulting 16-byte bucket ID */
     );
+    if (rc != RCLIENT_OK) {
+        return rc;
+    }
 
     return r_client_check_rate_limit_async(
         client,       /* initialized client */
@@ -116,10 +122,18 @@ int report_inventory_latency(r_client_t *client) {
         .buffer_size = 32u,
         .min_sample_threshold = 5u,
     };
-    r_client_hash_id(
-        "inventory",       /* application service name */
-        report.service_id  /* resulting 16-byte service ID */
+    int rc = r_client_derive_latency_tracker_id(
+        "inventory",                    /* exact tracker-name bytes */
+        sizeof("inventory") - 1u,       /* tracker-name byte length */
+        report.ttl_ms,                   /* sample lifetime */
+        report.max_samples,              /* samples considered */
+        report.buffer_size,              /* tracker storage */
+        report.min_sample_threshold,     /* warm-up sample count */
+        report.latency_tracker_id        /* resulting 16-byte tracker ID */
     );
+    if (rc != RCLIENT_OK) {
+        return rc;
+    }
 
     return r_client_report_latency(
         client,   /* initialized client */
@@ -151,10 +165,16 @@ int request_checkout_with_inventory_guard(
         .rate_limit = 100u,
         .tokens_requested = 1u,
     };
-    r_client_hash_id(
-        "checkout",         /* application resource name */
-        resource.bucket_id  /* resulting 16-byte resource ID */
+    int rc = r_client_derive_bucket_id(
+        "checkout",                  /* exact bucket-name bytes */
+        sizeof("checkout") - 1u,     /* bucket-name byte length */
+        resource.window_size_ms,     /* configured window */
+        resource.rate_limit,         /* configured rate */
+        resource.bucket_id           /* resulting 16-byte bucket ID */
     );
+    if (rc != RCLIENT_OK) {
+        return rc;
+    }
 
     r_latency_guard_t guard = {
         .threshold_ms = 100u,
@@ -163,10 +183,18 @@ int request_checkout_with_inventory_guard(
         .buffer_size = 32u,
         .min_sample_threshold = 5u,
     };
-    r_client_hash_id(
-        "inventory",      /* application service name */
-        guard.service_id  /* resulting 16-byte service ID */
+    rc = r_client_derive_latency_tracker_id(
+        "inventory",                    /* exact tracker-name bytes */
+        sizeof("inventory") - 1u,       /* tracker-name byte length */
+        guard.ttl_ms,                    /* sample lifetime */
+        guard.max_samples,               /* samples considered */
+        guard.buffer_size,               /* tracker storage */
+        guard.min_sample_threshold,      /* warm-up sample count */
+        guard.latency_tracker_id         /* resulting 16-byte tracker ID */
     );
+    if (rc != RCLIENT_OK) {
+        return rc;
+    }
 
     return r_client_check_rate_limit_async(
         client,       /* initialized client */
@@ -400,7 +428,8 @@ Core operations:
 - `r_client_on_timeout`
 - `r_client_cancel_request`
 - `r_client_default_request_policy`
-- `r_client_hash_id`
+- `r_client_derive_bucket_id`
+- `r_client_derive_latency_tracker_id`
 - `r_client_parse_auth_key`
 - `r_client_admission_start` / `r_client_admission_report_latency`
 - `r_runtime_client_init` / `r_runtime_client_on_readable`
@@ -486,14 +515,20 @@ For integrations with request-scoped memory pools, use
 `r_client_check_rate_limit_async_borrowed` when request buffers live until
 callback completion.
 
-## ID Hashing
+## Content-defined IDs
 
-Applications map their own strings to Ratelimitly IDs:
+Resource buckets and latency trackers are identified by their names together
+with the settings that define their stored state. Use
+`r_client_derive_bucket_id()` for a bucket and
+`r_client_derive_latency_tracker_id()` for a latency tracker. The workflow API
+does this automatically from `bucket_name`, `latency_tracker_name`, and their
+configuration.
 
-- bucket strings become `r_resource_request_t.bucket_id`
-- service strings become `r_latency_guard_t.service_id`
-
-Use `r_client_hash_id(input, out_id)` to produce the required 16-byte ID.
+The threshold is not part of a latency-tracker ID: it is a condition evaluated
+against the tracker, not part of the tracker's stored state. The observed
+latency is likewise a sample, not tracker identity. See
+[docs/api.md](docs/api.md#content-defined-ids) for the exact contracts and
+examples.
 
 ## Perf Client
 
@@ -532,7 +567,7 @@ strategy through `r_request_policy_t`.
 | resource request | Request containing one or more resource consumptions and zero or more latency guards; a grant consumes all requested quantities atomically. |
 | resource consumption | Quantity requested from one configured resource bucket as part of a resource request. |
 | latency report | Independent operation that contributes one or more measured service latencies to latency trackers. |
-| service | Stable identity whose reported measurements populate a server-side latency tracker. |
+| service | Application-defined name for a measured operation or dependency; together with its tracker settings, it defines a canonical latency-tracker ID. |
 | C11 | 2011 revision of the C language standard required by this library. |
 | README | Repository overview document that introduces a project and links to its detailed guides. |
 | GLib | Portable core library whose main loop is used by one integration example. |
@@ -546,7 +581,7 @@ strategy through `r_request_policy_t`.
 | resource rate limit | Configured capacity for a resource bucket over a time window. |
 | bucket | Stable resource identity whose configured quota is consumed by matching requests. |
 | latency guard | A request to shed new work when the tracker's recent service latency reaches its configured threshold. |
-| latency tracker | Server-side sample window identified by a service ID and configured by sample lifetime, count, and buffer settings. |
+| latency tracker | Server-side sample window identified by a canonical tracker ID and defined by its lifetime, sample count, buffer size, and warm-up threshold. |
 | tenant | Isolated Ratelimitly account identified by metadata encoded in the API key. |
 | host loop | The application's existing event loop; it owns readiness callbacks and timers around the client. |
 | public runtime | Optional adapter that owns nonblocking UDP sockets and production DNS discovery while exposing readiness and deadlines to the host loop. |

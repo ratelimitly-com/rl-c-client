@@ -146,7 +146,7 @@ static void begin_rate_limit(
     r_admission_config_t config;
     r_client_admission_config_defaults(&config);
     config.bucket_name = "mongoose-example";
-    config.service_name = "mongoose-protected-service";
+    config.latency_tracker_name = "mongoose-protected-service";
     config.metrics_label = "mongoose-example";
     int status = r_client_admission_start(
         app->runtime.handle,

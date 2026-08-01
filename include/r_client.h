@@ -118,7 +118,7 @@ typedef struct r_resource_request {
 } r_resource_request_t;
 
 typedef struct r_latency_guard {
-    uint8_t service_id[16];
+    uint8_t latency_tracker_id[16];
     uint32_t threshold_ms;
     uint32_t ttl_ms;
     uint32_t max_samples;
@@ -127,7 +127,7 @@ typedef struct r_latency_guard {
 } r_latency_guard_t;
 
 typedef struct r_service_latency_report {
-    uint8_t service_id[16];
+    uint8_t latency_tracker_id[16];
     uint32_t observed_latency;
     uint32_t ttl_ms;
     uint32_t max_samples;
@@ -137,7 +137,7 @@ typedef struct r_service_latency_report {
 
 // Result structures (valid only during callback).
 typedef struct r_guard_result {
-    uint8_t service_id[16];
+    uint8_t latency_tracker_id[16];
     uint32_t threshold_ms;
     uint32_t current_latency_ms;
     bool passed;
@@ -239,11 +239,27 @@ RCLIENT_API void r_client_cancel_request(
     r_client_req_t *req
 );
 
-// Helpers.
+// Canonical content-defined identifier helpers. The byte strings may contain
+// embedded NULs; pass their exact byte lengths.
 RCLIENT_API void r_client_default_request_policy(
     r_request_policy_t *out_policy
 );
-RCLIENT_API void r_client_hash_id(const char *input, uint8_t out_id[16]);
+RCLIENT_API int r_client_derive_bucket_id(
+    const void *bucket_name,
+    size_t bucket_name_len,
+    uint32_t window_size_ms,
+    uint32_t rate_limit,
+    uint8_t out_id[16]
+);
+RCLIENT_API int r_client_derive_latency_tracker_id(
+    const void *latency_tracker_name,
+    size_t latency_tracker_name_len,
+    uint32_t ttl_ms,
+    uint32_t max_samples,
+    uint32_t buffer_size,
+    uint32_t min_sample_threshold,
+    uint8_t out_id[16]
+);
 RCLIENT_API int r_client_parse_auth_key(
     const char *encoded,
     r_auth_key_info_t *out_info

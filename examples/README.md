@@ -23,7 +23,7 @@ Resource requests and latency reports are independent core operations. The
 combined sequence below is deliberately shared by the examples so that their
 event-loop and ownership behavior can be compared directly; applications do
 not have to adopt it. See the repository
-[README](../README.md#the-two-operations) and [API guide](../docs/api.md#operation-model)
+[README](../README.md#core-operations) and [API guide](../docs/api.md#operation-model)
 for the general model.
 
 ## Example integration lifecycle
@@ -197,8 +197,8 @@ responder in three deterministic scenarios:
 - latency-guard denial: protected work and latency reporting remain absent.
 
 The responder checks tracker TTL, sample limits, buffer size, threshold, and
-that the report uses the same private service identity as the preceding guard.
-Service IDs and credentials never appear in test logs.
+that the report uses the same latency-tracker ID as the preceding guard.
+Latency-tracker IDs and credentials never appear in test logs.
 
 The HTTP integrations have the same behavioral coverage in three parallel CI
 shards. [`tests/linux-http-examples.txt`](../tests/linux-http-examples.txt)
@@ -262,20 +262,21 @@ small source of truth for that local-only matrix.
 [`latency_tracker/main.c`](latency_tracker/main.c) demonstrates both halves of
 one application-level latency feedback loop:
 
-1. Hash a stable service name into `r_latency_guard_t.service_id`.
-2. Include that guard in the rate-limit request.
+1. Derive `r_latency_guard_t.latency_tracker_id` from a stable tracker name and
+   every setting that defines its stored state.
+2. Include that guard in the resource request.
 3. Copy the guard decision during the completion callback; result arrays are
    owned by `rl-c-client` and expire when the callback returns.
 4. Perform protected work only when the combined resource and guard result
    passes.
 5. Measure only that work with `CLOCK_MONOTONIC`.
 6. Send the observation with `r_client_admission_report_latency()`. The
-   admission object preserves the matching service ID and tracker configuration
+   admission object preserves the matching tracker ID and configuration
    and prevents a second report for the same admitted request.
 
 In this combined workflow, never fabricate latency for work rejected by the
 guard. No operation occurred, so a zero or synthetic sample would corrupt the
-service tracker. This rule does not prevent independently reporting other
+latency tracker. This rule does not prevent independently reporting other
 services or work. Likewise, do not measure the Ratelimitly request round trip
 unless that round trip is itself the service whose latency should control
 admission.
@@ -290,7 +291,7 @@ The guard's policy fields have distinct purposes:
 | `buffer_size` | Tracker storage request; must fit the credential quota. |
 | `min_sample_threshold` | Samples required before the tracker estimate controls admission. |
 
-The report repeats `service_id`, `ttl_ms`, `max_samples`, `buffer_size`, and
+The report repeats `latency_tracker_id`, `ttl_ms`, `max_samples`, `buffer_size`, and
 `min_sample_threshold` so it updates the same tracker. `threshold_ms` belongs
 only to the guard decision.
 

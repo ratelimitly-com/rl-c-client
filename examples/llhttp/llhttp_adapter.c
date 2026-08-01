@@ -116,7 +116,7 @@ static int on_message_complete(llhttp_t *parser) {
     r_admission_config_t config;
     r_client_admission_config_defaults(&config);
     config.bucket_name = adapter->bucket;
-    config.service_name = "llhttp-protected-service";
+    config.latency_tracker_name = "llhttp-protected-service";
     config.metrics_label = "llhttp-example";
     status = r_client_admission_start(
         adapter->runtime->handle,

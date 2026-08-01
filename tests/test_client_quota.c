@@ -517,7 +517,7 @@ static void test_client_derives_production_tenant_from_key(void) {
 
     r_service_latency_report_t report;
     memset(&report, 0, sizeof(report));
-    memcpy(report.service_id, "default-tenant", 14);
+    memcpy(report.latency_tracker_id, "default-tenant", 14);
     report.observed_latency = 10;
     report.ttl_ms = 1000;
     report.max_samples = 10;
@@ -795,7 +795,7 @@ static void test_check_rate_limit_rejects_oversized_guard(void) {
 
     r_latency_guard_t guard;
     memset(&guard, 0, sizeof(guard));
-    memcpy(guard.service_id, "guard", 5);
+    memcpy(guard.latency_tracker_id, "guard", 5);
     guard.threshold_ms = 50;
     guard.ttl_ms = 1000;
     guard.max_samples = 10;
@@ -827,14 +827,14 @@ static void test_report_latency_filters_oversized_reports(void) {
 
     r_service_latency_report_t reports[2];
     memset(reports, 0, sizeof(reports));
-    memcpy(reports[0].service_id, "ok", 2);
+    memcpy(reports[0].latency_tracker_id, "ok", 2);
     reports[0].observed_latency = 10;
     reports[0].ttl_ms = 1000;
     reports[0].max_samples = 10;
     reports[0].buffer_size = 64;
     reports[0].min_sample_threshold = 1;
 
-    memcpy(reports[1].service_id, "drop", 4);
+    memcpy(reports[1].latency_tracker_id, "drop", 4);
     reports[1].observed_latency = 20;
     reports[1].ttl_ms = 1000;
     reports[1].max_samples = 10;
@@ -912,7 +912,7 @@ static void test_report_latency_requires_udp_send(void) {
 
     r_service_latency_report_t report;
     memset(&report, 0, sizeof(report));
-    memcpy(report.service_id, "ok", 2);
+    memcpy(report.latency_tracker_id, "ok", 2);
     report.observed_latency = 10;
     report.ttl_ms = 1000;
     report.max_samples = 10;

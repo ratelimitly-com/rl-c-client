@@ -113,7 +113,7 @@ int main(int argc, char **argv) {
     r_admission_config_t config;
     r_client_admission_config_defaults(&config);
     config.bucket_name = "runtime-test-bucket";
-    config.service_name = "runtime-test-service";
+    config.latency_tracker_name = "runtime-test-service";
     config.metrics_label = "runtime-test";
 
     test_completion_t completion = {0};

@@ -149,7 +149,7 @@ static void start_queued_jobs(lwan_bridge_t *bridge) {
         r_admission_config_t config;
         r_client_admission_config_defaults(&config);
         config.bucket_name = "lwan-example";
-        config.service_name = "lwan-protected-service";
+        config.latency_tracker_name = "lwan-protected-service";
         config.metrics_label = "lwan-example";
         int status = r_client_admission_start(
             bridge->runtime.handle,

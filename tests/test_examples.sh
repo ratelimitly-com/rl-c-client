@@ -777,7 +777,7 @@ readme_c_examples=$(awk '
   code { print }
 ' "$ROOT_README")
 uncommented_call_arguments=$(awk '
-  /^[[:space:]]*(return )?r_client_(hash_id|check_rate_limit_async|report_latency)\($/ {
+  /^[[:space:]]*(return )?r_client_(derive_(bucket|latency_tracker)_id|check_rate_limit_async|report_latency)\($/ {
     call = 1
     next
   }

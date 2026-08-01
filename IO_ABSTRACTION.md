@@ -118,8 +118,8 @@ the existing UDP send hook is sufficient.
 Latency reports are independent of resource requests and guards. A client may
 report measured service latency without issuing any resource request. When an
 application deliberately pairs a report with guarded work, it should report
-only a real operation that ran, use the same service ID and tracker settings,
-and never invent a zero sample for work the guard rejected. Log send failures,
+only a real operation that ran, use the same latency-tracker ID and tracker
+settings, and never invent a zero sample for work the guard rejected. Log send failures,
 but do not change an HTTP response outcome after protected work completed.
 
 See the [example latency tracking workflow](examples/README.md#example-latency-tracking-workflow)
@@ -151,6 +151,6 @@ A proxy or HTTP-server module can wire the client as follows:
 - request timers: one host timer per in-flight request
 - request memory: request pool plus borrowed API
 
-Rate-limit request failures should be mapped by the module according to its
+Resource-request failures should be mapped by the module according to its
 configured fail-open/fail-close policy. Latency-report send failures should be
 logged but must not change the HTTP response outcome.

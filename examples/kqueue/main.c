@@ -138,7 +138,7 @@ static int start_admission(application_t *app) {
     r_admission_config_t config;
     r_client_admission_config_defaults(&config);
     config.bucket_name = "kqueue-example";
-    config.service_name = "kqueue-protected-service";
+    config.latency_tracker_name = "kqueue-protected-service";
     config.metrics_label = "kqueue-example";
     return r_client_admission_start(
         app->runtime.handle,

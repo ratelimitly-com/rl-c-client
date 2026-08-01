@@ -255,7 +255,7 @@ static int on_http_request(h2o_handler_t *handler, h2o_req_t *request) {
     r_admission_config_t config;
     r_client_admission_config_defaults(&config);
     config.bucket_name = "h2o-example";
-    config.service_name = "h2o-protected-service";
+    config.latency_tracker_name = "h2o-protected-service";
     config.metrics_label = "h2o-example";
     int status = r_client_admission_start(
         pending->app->runtime.handle,

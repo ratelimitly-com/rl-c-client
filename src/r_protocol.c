@@ -239,7 +239,7 @@ int r_build_rate_request_body(
 
     for (size_t i = 0; i < guard_count; i++) {
         r_guard_block_t block;
-        memcpy(block.service_id, guards[i].service_id, 16);
+        memcpy(block.latency_tracker_id, guards[i].latency_tracker_id, 16);
         block.ttl_ms = guards[i].ttl_ms;
         block.max_samples = guards[i].max_samples;
         block.buffer_size = guards[i].buffer_size;
@@ -247,7 +247,7 @@ int r_build_rate_request_body(
         block.latency_threshold = guards[i].threshold_ms;
         block.current_latency = 0;
 
-        memcpy(out + pos, block.service_id, 16);
+        memcpy(out + pos, block.latency_tracker_id, 16);
         r_write_le32(out + pos + 16, block.ttl_ms);
         r_write_le32(out + pos + 20, block.max_samples);
         r_write_le32(out + pos + 24, block.buffer_size);
@@ -309,14 +309,14 @@ int r_build_latency_report_body(
 
     for (size_t i = 0; i < report_count; i++) {
         r_service_latency_block_t block;
-        memcpy(block.service_id, reports[i].service_id, 16);
+        memcpy(block.latency_tracker_id, reports[i].latency_tracker_id, 16);
         block.ttl_ms = reports[i].ttl_ms;
         block.max_samples = reports[i].max_samples;
         block.buffer_size = reports[i].buffer_size;
         block.min_sample_threshold = reports[i].min_sample_threshold;
         block.observed_latency = reports[i].observed_latency;
 
-        memcpy(out + pos, block.service_id, 16);
+        memcpy(out + pos, block.latency_tracker_id, 16);
         r_write_le32(out + pos + 16, block.ttl_ms);
         r_write_le32(out + pos + 20, block.max_samples);
         r_write_le32(out + pos + 24, block.buffer_size);
@@ -421,7 +421,7 @@ int r_parse_rate_response_pdu(
             return RCLIENT_ERR_PROTOCOL;
         }
         const uint8_t *p = body + pos;
-        memcpy(guards[i].service_id, p, 16);
+        memcpy(guards[i].latency_tracker_id, p, 16);
         uint32_t latency_threshold = r_le32(p + 32);
         uint32_t current_latency = r_le32(p + 36);
         guards[i].threshold_ms = latency_threshold;

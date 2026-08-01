@@ -331,7 +331,7 @@ int main(void) {
         r_admission_config_t config;
         r_client_admission_config_defaults(&config);
         config.bucket_name = "io-uring-example";
-        config.service_name = "io-uring-protected-service";
+        config.latency_tracker_name = "io-uring-protected-service";
         config.metrics_label = "io-uring-example";
         status = r_client_admission_start(
             app.runtime.handle,

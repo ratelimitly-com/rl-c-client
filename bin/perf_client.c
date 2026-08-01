@@ -815,10 +815,23 @@ static void *perf_worker(void *arg) {
 
     r_resource_request_t resource;
     memset(&resource, 0, sizeof(resource));
-    r_client_hash_id(bucket_name, resource.bucket_id);
     resource.window_size_ms = 60000;
     resource.rate_limit = 10000;
     resource.tokens_requested = 1;
+    rc = r_client_derive_bucket_id(
+        bucket_name,
+        strlen(bucket_name),
+        resource.window_size_ms,
+        resource.rate_limit,
+        resource.bucket_id
+    );
+    if (rc != RCLIENT_OK) {
+        fprintf(stderr, "[ERROR] client_%zu: failed to derive bucket ID\n", worker->client_id);
+        r_client_destroy(client);
+        close(io.sockfd);
+        worker->worker_error = 1;
+        return (void *)(intptr_t)1;
+    }
 
     uint64_t start_ns = perf_now_ns_monotonic();
     uint64_t request_count = 0;
