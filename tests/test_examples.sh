@@ -714,20 +714,130 @@ actual_headings="$(sed -n 's/^### //p' "$README")"
   || fail "README example headings are missing or out of order"
 grep -Fq -- 'If it returns `HPE_PAUSED`' "$README" \
   || fail "README does not explain resumable llhttp backpressure"
-grep -Fq -- '## Latency tracking workflow' "$README" \
+grep -Fq -- '## Example latency tracking workflow' "$README" \
   || fail "README does not document latency tracking"
 grep -Fq -- '## Platform matrix' "$README" \
   || fail "README does not provide a platform matrix"
 grep -Fq -- '```mermaid' "$README" \
   || fail "README does not provide a Mermaid integration overview"
-grep -Fq -- 'Never report latency for work rejected by the guard.' "$README" \
-  || fail "README does not explain denied latency-guard behavior"
+grep -Fq -- 'Resource requests and latency reports are independent core operations.' \
+  "$README" \
+  || fail "examples README presents its combined workflow as a protocol requirement"
+grep -Fq -- 'never fabricate latency for work rejected by the' "$README" \
+  || fail "README does not reject synthetic latency for work that did not run"
 
 grep -Fq -- '[examples/README.md](examples/README.md)' "$ROOT_README" \
   || fail "root README does not link the integration guide"
+grep -Fq -- 'The library exposes two independent operations:' \
+  "$ROOT_README" \
+  || fail "root README does not introduce the two independent operations"
+grep -Fq -- 'A **resource request**' "$ROOT_README" \
+  || fail "root README does not define a resource request"
+grep -Fq -- 'A **latency report**' "$ROOT_README" \
+  || fail "root README does not define a latency report"
+if grep -Fiq -- '**Prerequisites.**' "$ROOT_README"; then
+  fail "root README retains a prerequisites preamble"
+fi
+if grep -Fiq -- 'fire-and-forget' "$ROOT_README"; then
+  fail "root README mixes delivery mechanics into its conceptual overview"
+fi
+root_concepts=$(sed -n '1,/^## Integrate the library$/p' "$ROOT_README")
+if grep -Fiq -- 'r-server' <<<"$root_concepts"; then
+  fail "root README introduces r-server membership before the API layer"
+fi
+for example_heading in \
+  '### Request one token' \
+  '### Report one service latency' \
+  '### Request one token with one latency guard'; do
+  grep -Fq -- "$example_heading" "$ROOT_README" \
+    || fail "root README omits logical example: $example_heading"
+done
+grep -Fq -- 'A request failure is neither a grant nor a rejection.' \
+  "$ROOT_README" \
+  || fail "root README conflates resource-request failure with rejection"
+grep -Fq -- 'it does not prove that Ratelimitly did not process the' \
+  "$ROOT_README" \
+  || fail "root README overstates what a resource-request failure proves"
+if grep -Eq -- '^[[:space:]]*(consume:|latency guards?:)' "$ROOT_README"; then
+  fail "root README uses an invented request notation instead of English or C"
+fi
+readme_c_example_count=$(awk '
+  $0 == "## Three small examples" { section = 1; next }
+  section && /^## / { exit }
+  section && $0 == "```c" { count++ }
+  END { print count + 0 }
+' "$ROOT_README")
+[[ "$readme_c_example_count" -eq 3 ]] \
+  || fail "root README must contain three C operation examples"
+readme_c_examples=$(awk '
+  $0 == "## Three small examples" { section = 1; next }
+  section && /^## / { exit }
+  section && $0 == "```c" { code = 1; next }
+  code && $0 == "```" { code = 0; next }
+  code { print }
+' "$ROOT_README")
+uncommented_call_arguments=$(awk '
+  /^[[:space:]]*(return )?r_client_(derive_(bucket|latency_tracker)_id|check_rate_limit_async|report_latency)\($/ {
+    call = 1
+    next
+  }
+  call && /^[[:space:]]*\);$/ {
+    call = 0
+    next
+  }
+  call && $0 !~ /\/\*/ {
+    print
+  }
+' <<<"$readme_c_examples")
+[[ -z "$uncommented_call_arguments" ]] \
+  || fail "root README C examples leave public API arguments unexplained"
+if ! {
+  printf '#include "r_client.h"\n%s\n' "$readme_c_examples" |
+    cc -I"$ROOT/include" -std=c11 -fsyntax-only -x c -
+}; then
+  fail "root README operation examples are not valid public C"
+fi
+examples_line=$(awk '$0 == "## Three small examples" { print NR; exit }' \
+  "$ROOT_README")
+layers_line=$(awk '$0 == "## Integrate the library" { print NR; exit }' \
+  "$ROOT_README")
+[[ -n "$examples_line" && -n "$layers_line" && "$examples_line" -lt "$layers_line" ]] \
+  || fail "root README does not teach logical examples before integration layers"
+grep -Fq -- '[Choosing an integration layer](docs/api.md#choosing-an-integration-layer)' \
+  "$ROOT_README" \
+  || fail "root README does not link its integration overview to the API guide"
+if grep -Fq -- '| Layer | What it owns | What the host still owns |' \
+  "$ROOT_README"; then
+  fail "root README retains detailed integration-layer ownership"
+fi
+if grep -Fq -- '## Features' "$ROOT_README"; then
+  fail "root README retains a redundant feature inventory"
+fi
+grep -Fq -- '## Choosing an integration layer' "$API_GUIDE" \
+  || fail "API guide does not explain how to choose an integration layer"
+grep -Fq -- 'Applications embed Ratelimitly in very different environments.' \
+  "$API_GUIDE" \
+  || fail "API guide does not motivate its integration-layer choices"
+grep -Fq -- '| Layer | What it owns | What the host still owns |' \
+  "$API_GUIDE" \
+  || fail "API guide does not compare integration-layer ownership"
+grep -Fq -- 'The normal asynchronous request API copies request inputs.' \
+  "$API_GUIDE" \
+  || fail "API guide does not document copied and borrowed request lifetimes"
+grep -Fq -- 'Proxy modules and other high-throughput embedders commonly choose the core and' \
+  "$API_GUIDE" \
+  || fail "API guide does not recommend integration layers by host type"
 grep -Fq -- '`result->success` combines resource and latency-guard decisions' \
   "$API_GUIDE" \
   || fail "API guide does not explain combined admission results"
+grep -Fq -- 'The core client exposes two independent operations:' "$API_GUIDE" \
+  || fail "API guide does not define the independent operation model"
+grep -Fq -- \
+  'The delivery contract for `r_client_report_latency` is fire-and-forget.' \
+  "$API_GUIDE" \
+  || fail "API guide does not document latency-report delivery semantics"
+grep -Fq -- 'one or more r-servers' "$API_GUIDE" \
+  || fail "API guide does not place r-server membership in the HA policy"
 grep -Fq -- '`r_client_runtime.h`' "$API_GUIDE" \
   || fail "API guide does not document the public runtime header"
 grep -Fq -- '`r_client_workflow.h`' "$API_GUIDE" \
@@ -735,9 +845,9 @@ grep -Fq -- '`r_client_workflow.h`' "$API_GUIDE" \
 if grep -Fq -- '../examples/latency_tracker.c' "$API_GUIDE"; then
   fail "API guide links the removed flat latency example"
 fi
-grep -Fq -- 'Never report latency for work rejected by its guard.' "$API_GUIDE" \
-  || fail "API guide does not explain denied latency-guard behavior"
-grep -Fq -- 'The report must repeat the guard' "$API_GUIDE" \
+grep -Fq -- 'never fabricate a latency observation' "$API_GUIDE" \
+  || fail "API guide does not reject synthetic latency for work that did not run"
+grep -Fq -- 'must repeat that guard' "$API_GUIDE" \
   || fail "API guide does not explain tracker identity"
 grep -Fq -- '## Clock domains' "$IO_GUIDE" \
   || fail "I/O guide does not distinguish client and measurement clocks"

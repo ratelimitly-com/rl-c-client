@@ -1,15 +1,16 @@
 # Integration examples
 
 > **Prerequisites.** You can read C and know the basic purpose of an event
-> loop or HTTP server. This guide defines the Ratelimitly workflow, ownership
+> loop or HTTP server. This guide defines the example workflow, ownership
 > models, platform boundaries, and framework-specific terms it uses.
 
 ## TL;DR
 
-The [24 self-contained integrations](manifest.txt) each combine a resource
-rate-limit check with a latency guard, run only admitted work, and report that
-work's measured latency; choose by ownership model and platform, then check the
-[test-evidence table](#ci-validation-layers).
+The [24 self-contained integrations](manifest.txt) intentionally demonstrate
+the same optional application workflow: combine one rate-limited resource
+consumption with one latency guard, run only granted work, and report that
+work's measured service latency. Choose by ownership model and platform, then
+check the [test-evidence table](#ci-validation-layers).
 
 ## What this guide covers
 
@@ -18,16 +19,23 @@ servers, and parsers. They use only the public client headers under `include/`.
 Each source file starts with a numbered flow and an ownership summary; read
 those comments before transplanting the integration into an application.
 
-## Integration lifecycle
+Resource requests and latency reports are independent core operations. The
+combined sequence below is deliberately shared by the examples so that their
+event-loop and ownership behavior can be compared directly; applications do
+not have to adopt it. See the repository
+[README](../README.md#core-operations) and [API guide](../docs/api.md#operation-model)
+for the general model.
+
+## Example integration lifecycle
 
 ```mermaid
 flowchart LR
-    Host["Host event loop or HTTP framework"]:::neutral --> Admission["Start resource limit<br/>+ latency guard"]:::neutral
+    Host["Host event loop or HTTP framework"]:::neutral --> Admission["Start resource request<br/>one consumption + one guard"]:::neutral
     Admission --> Runtime["Public runtime<br/>nonblocking UDP + DNS"]:::neutral
     Runtime --> Service["Ratelimitly service<br/>evaluates admission"]:::neutral
     Service --> Callback["Completion callback"]:::neutral
     Callback --> Decision{"Allowed?"}:::neutral
-    Decision -->|No| Reject["Reject without work<br/>or latency sample"]:::danger
+    Decision -->|No| Reject["Reject without this work<br/>or a synthetic sample"]:::danger
     Decision -->|Yes| Work["Run protected work"]:::success
     Work --> Measure["Measure with monotonic clock"]:::success
     Measure --> Report["Send one latency sample"]:::success
@@ -189,8 +197,8 @@ responder in three deterministic scenarios:
 - latency-guard denial: protected work and latency reporting remain absent.
 
 The responder checks tracker TTL, sample limits, buffer size, threshold, and
-that the report uses the same private service identity as the preceding guard.
-Service IDs and credentials never appear in test logs.
+that the report uses the same latency-tracker ID as the preceding guard.
+Latency-tracker IDs and credentials never appear in test logs.
 
 The HTTP integrations have the same behavioral coverage in three parallel CI
 shards. [`tests/linux-http-examples.txt`](../tests/linux-http-examples.txt)
@@ -249,14 +257,14 @@ bash tests/test_macos_examples.sh
 [`tests/macos-local-examples.txt`](../tests/macos-local-examples.txt) is the
 small source of truth for that local-only matrix.
 
-## Latency tracking workflow
+## Example latency tracking workflow
 
 [`latency_tracker/main.c`](latency_tracker/main.c) demonstrates both halves of
-latency-based load shedding:
+one application-level latency feedback loop:
 
 1. Derive `r_latency_guard_t.latency_tracker_id` from a stable tracker name and
    every setting that defines its stored state.
-2. Include that guard in the rate-limit request.
+2. Include that guard in the resource request.
 3. Copy the guard decision during the completion callback; result arrays are
    owned by `rl-c-client` and expire when the callback returns.
 4. Perform protected work only when the combined resource and guard result
@@ -266,10 +274,12 @@ latency-based load shedding:
    admission object preserves the matching tracker ID and configuration
    and prevents a second report for the same admitted request.
 
-Never report latency for work rejected by the guard. No operation occurred, so
-a zero or synthetic sample would corrupt the service tracker. Likewise, do not
-measure the RateLimitly request round trip unless that round trip is itself the
-service whose latency should control admission.
+In this combined workflow, never fabricate latency for work rejected by the
+guard. No operation occurred, so a zero or synthetic sample would corrupt the
+latency tracker. This rule does not prevent independently reporting other
+services or work. Likewise, do not measure the Ratelimitly request round trip
+unless that round trip is itself the service whose latency should control
+admission.
 
 The guard's policy fields have distinct purposes:
 
@@ -743,6 +753,9 @@ and error-handling details.
 
 | Term | Meaning |
 | --- | --- |
+| resource request | Core operation containing one or more resource consumptions and zero or more latency guards. |
+| resource consumption | Quantity requested from one configured resource bucket. |
+| latency report | Independent fire-and-forget operation containing one or more measured service latencies. |
 | README | Folder-level guide that explains how to build, run, adapt, and test one integration. |
 | GLib | Portable core library whose main loop drives one event-loop example. |
 | GIO | GLib input/output APIs, including the `GIOChannel` socket wrapper used by that example. |
