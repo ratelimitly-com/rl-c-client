@@ -195,7 +195,7 @@ static void start_admission(void *context) {
     r_admission_config_t config;
     r_client_admission_config_defaults(&config);
     config.bucket_name = "libdispatch-example";
-    config.service_name = "libdispatch-protected-service";
+    config.latency_tracker_name = "libdispatch-protected-service";
     config.metrics_label = "libdispatch-example";
     int status = r_client_admission_start(
         app->runtime.handle,

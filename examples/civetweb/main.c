@@ -155,7 +155,7 @@ static void start_queued_jobs(civetweb_bridge_t *bridge) {
         r_admission_config_t config;
         r_client_admission_config_defaults(&config);
         config.bucket_name = "civetweb-example";
-        config.service_name = "civetweb-protected-service";
+        config.latency_tracker_name = "civetweb-protected-service";
         config.metrics_label = "civetweb-example";
         int status = r_client_admission_start(
             bridge->runtime.handle,

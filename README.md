@@ -1,88 +1,236 @@
 # Ratelimitly C Client
 
-> **Prerequisites.** You can read C and understand basic sockets, DNS, and
-> callback-driven event loops. Everything specific to Ratelimitly and this
-> client is explained here.
+## What Ratelimitly does
 
-## TL;DR
+[Ratelimitly](https://ratelimitly.com/), a distributed admission-control
+service, decides whether an application may begin work that consumes configured
+resources. The decision may also depend on whether recently observed service
+latencies remain below application-defined thresholds.
 
-`rl-c-client` is a C11 library that lets a host application combine resource
-rate limiting with latency-based admission, then report the protected work's
-latency without surrendering ownership of its event loop, sockets, or timers.
+`rl-c-client` is the public C11 library through which an application requests
+those decisions and, independently, contributes latency measurements used by
+future decisions.
 
-## Architecture at a glance
+## Core operations
 
-The optional public runtime supplies the common UDP and DNS plumbing used by
-the examples. Advanced embedders can instead provide the same I/O callbacks
-directly to the core client.
+The library exposes two independent operations:
+
+- A **resource request** describes work the application wants to perform as one
+  or more resource consumptions and zero or more latency guards. Ratelimitly
+  evaluates the request as one atomic decision. A grant consumes every
+  requested quantity and authorizes the application to proceed; a rejection
+  consumes none.
+- A **latency report** contributes one or more measured service latencies to
+  the trackers used by latency guards in later resource requests. It neither
+  requests nor consumes resources and does not itself make an admission
+  decision.
+
+An application may use either operation without the other. A common workflow
+is to request permission for some work, perform it only after a grant, and then
+optionally report measured latencies for services used by that work. This is
+only one application workflow: a reporter may send only latency reports, and a
+resource consumer may send only resource requests. Reports influence resource
+requests only through the latency trackers; the two operations are not paired.
 
 ```mermaid
 flowchart LR
-    Host["Host application<br/>owns loop and protected work"]:::neutral --> Admission["rl-c-client admission<br/>resource limit + latency guard"]:::neutral
-    Admission --> Runtime["Public runtime or host I/O<br/>DNS + nonblocking UDP"]:::neutral
-    Runtime --> Service["Ratelimitly service"]:::neutral
-    Service --> Decision{"Admission result"}:::neutral
-    Decision -->|Denied| Stop["Skip work<br/>do not report latency"]:::danger
-    Decision -->|Allowed| Work["Run and measure<br/>protected work"]:::success
-    Work --> Report["Report one latency sample"]:::success
-    Report --> Runtime
+    Consumer["Resource-consuming application"]:::neutral --> Request["Resource request<br/>intended consumptions + optional guards"]:::neutral
+    Request --> Evaluate["Ratelimitly<br/>atomic admission decision"]:::neutral
+    Evaluate --> Decision{"Granted?"}:::neutral
+    Decision -->|No| Rejected["No resources consumed"]:::danger
+    Decision -->|Yes| Granted["Resources consumed<br/>application may perform work"]:::success
+
+    Reporter["Same or another application"]:::neutral --> Report["Optional latency report<br/>measured service latencies"]:::neutral
+    Report --> Trackers["Latency trackers"]:::neutral
+    Trackers -. "input to latency guards" .-> Evaluate
 
     classDef neutral fill:#EAECEF,stroke:#7D8590,color:#1A1A1A;
     classDef danger fill:#FCE8E6,stroke:#B0413E,color:#1A1A1A;
     classDef success fill:#E6F4EA,stroke:#1E7E45,color:#1A1A1A;
 ```
 
-## Choose the integration layer
+## Three small examples
 
-The repository exposes three layers. Pick the lowest layer whose ownership
-contract matches the host application; using the public runtime is optional.
+Each example first states the operation in English and then expresses it with
+the public C API. The snippets assume that `r_client.h` is included, `client`
+is initialized, and a non-null completion callback is supplied for resource
+requests. Request lifetime and event-loop handling are covered later.
 
-| Layer | What it owns | What the host still owns |
-| --- | --- | --- |
-| Core client (`r_client.h` + `r_client_io.h`) | Packets, authentication, request policy, deadlines, and response selection | UDP I/O, DNS callbacks, timers, and logging |
-| Admission workflow (`r_client_workflow.h`) | Coordination of one resource check plus one latency guard and the matching latency report | The core client's I/O plus protected-work timing and lifetime |
-| Public runtime (`r_client_runtime.h`) | Core client, nonblocking IPv4/IPv6 UDP sockets, and synchronous DNS discovery | Readiness watchers, deadline callbacks, application work, and logging policy |
+### Request one token
 
-The normal asynchronous request API copies request inputs. The borrowed API
-avoids those copies, so its input buffers must remain valid until callback or
-cancellation. In both forms, copy any result data needed after the completion
-callback returns; the request handle and result arrays expire with that
-callback.
+In English: “Get me one token for `checkout`, whose limit is 100 tokens per
+second.”
 
-Proxy modules and other high-throughput embedders commonly choose the core and
-borrowed APIs. The examples choose the workflow and public runtime so each
-framework README can focus on its readiness, timer, and shutdown rules.
+```c
+int request_one_checkout_token(
+    r_client_t *client,
+    r_rate_limit_cb callback,
+    void *user,
+    r_client_req_t **out_request
+) {
+    r_resource_request_t resource = {
+        .window_size_ms = 1000u,
+        .rate_limit = 100u,
+        .tokens_requested = 1u,
+    };
+    int rc = r_client_derive_bucket_id(
+        "checkout",                  /* exact bucket-name bytes */
+        sizeof("checkout") - 1u,     /* bucket-name byte length */
+        resource.window_size_ms,     /* configured window */
+        resource.rate_limit,         /* configured rate */
+        resource.bucket_id           /* resulting 16-byte bucket ID */
+    );
+    if (rc != RCLIENT_OK) {
+        return rc;
+    }
 
-## Features
+    return r_client_check_rate_limit_async(
+        client,       /* initialized client */
+        &resource,    /* resource consumptions */
+        1u,           /* number of resource consumptions */
+        NULL,         /* no latency guards */
+        0u,           /* number of latency guards */
+        NULL,         /* no metrics label */
+        0u,           /* metrics-label length */
+        callback,     /* receives grant, rejection, or failure */
+        user,         /* application callback context */
+        out_request   /* request handle for timers or cancellation */
+    );
+}
+```
 
-- Async rate-limit checks over UDP.
-- Fire-and-forget latency reports for load-shedding feedback.
-- API key credentials in Bech32 form: `rl-cookie...` or `rl-aes...`.
-- Cookie and AES-256-GCM authentication using OpenSSL libcrypto.
-- SRV discovery for `_ratelimitly._udp.<configured-dns-name>`, followed by A/AAAA
-  resolution for returned SRV targets.
-- One parameterized oldest-first HA request policy.
-- Optional metrics labels.
-- Optional steering feedback callback for source-port rebinding.
-- Static and shared library builds.
+A grant consumes one token from `checkout` and authorizes the operation. A
+rejection consumes nothing.
 
-The default request policy uses a 20 ms base unit, one replay, two 20 ms
-oldest-preference intervals, and one final 20 ms receive-only interval whose
-first valid response wins. It derives the deduplication TTL as exactly 60 ms
-and validates it against the API-key limit.
+A request failure is neither a grant nor a rejection. It means the client did
+not obtain a usable decision—for example, because of a timeout, delivery
+problem, or invalid response. The application must handle this outcome
+separately according to its failure policy. Because a failure may occur after
+the request was sent, it does not prove that Ratelimitly did not process the
+request. This third outcome applies to guarded resource requests as well.
 
-The same strategy can be configured with any bounded replay count and fixed,
-linear, or exponential replay gaps. Response-preference timing is independent
-of replay pacing: a long exponential gap never forces the client to retain an
-available response for the whole gap. Optional completion delivery
-fire-and-forgets the same deduplicated request to servers still missing a valid
-response before returning either an allow or a deny.
+### Report one service latency
 
-This repository contains the public C API and integration contract. Applications
-do not construct or parse Ratelimitly packets directly; the library owns packet
-encoding, authentication, response parsing, replay policy, and server selection.
-Integrators provide credentials, resource IDs, latency data, UDP I/O, DNS, and
-timers through the APIs documented here.
+In English: “Record that one call to `inventory` took 18 ms.”
+
+```c
+int report_inventory_latency(r_client_t *client) {
+    r_service_latency_report_t report = {
+        .observed_latency = 18u,
+        .ttl_ms = 10000u,
+        .max_samples = 100u,
+        .buffer_size = 32u,
+        .min_sample_threshold = 5u,
+    };
+    int rc = r_client_derive_latency_tracker_id(
+        "inventory",                    /* exact tracker-name bytes */
+        sizeof("inventory") - 1u,       /* tracker-name byte length */
+        report.ttl_ms,                   /* sample lifetime */
+        report.max_samples,              /* samples considered */
+        report.buffer_size,              /* tracker storage */
+        report.min_sample_threshold,     /* warm-up sample count */
+        report.latency_tracker_id        /* resulting 16-byte tracker ID */
+    );
+    if (rc != RCLIENT_OK) {
+        return rc;
+    }
+
+    return r_client_report_latency(
+        client,   /* initialized client */
+        &report,  /* latency reports */
+        1u        /* number of latency reports */
+    );
+}
+```
+
+The report contributes that measurement to the `inventory` latency tracker. It
+does not consume a resource or make an admission decision. The other values
+configure that tracker and are explained in
+[Latency Guards and Independent Reports](docs/api.md#latency-guards-and-independent-reports).
+
+### Request one token with one latency guard
+
+In English: “Get me one token for `checkout`, but only if the tracked
+`inventory` latency is below 100 ms.”
+
+```c
+int request_checkout_with_inventory_guard(
+    r_client_t *client,
+    r_rate_limit_cb callback,
+    void *user,
+    r_client_req_t **out_request
+) {
+    r_resource_request_t resource = {
+        .window_size_ms = 1000u,
+        .rate_limit = 100u,
+        .tokens_requested = 1u,
+    };
+    int rc = r_client_derive_bucket_id(
+        "checkout",                  /* exact bucket-name bytes */
+        sizeof("checkout") - 1u,     /* bucket-name byte length */
+        resource.window_size_ms,     /* configured window */
+        resource.rate_limit,         /* configured rate */
+        resource.bucket_id           /* resulting 16-byte bucket ID */
+    );
+    if (rc != RCLIENT_OK) {
+        return rc;
+    }
+
+    r_latency_guard_t guard = {
+        .threshold_ms = 100u,
+        .ttl_ms = 10000u,
+        .max_samples = 100u,
+        .buffer_size = 32u,
+        .min_sample_threshold = 5u,
+    };
+    rc = r_client_derive_latency_tracker_id(
+        "inventory",                    /* exact tracker-name bytes */
+        sizeof("inventory") - 1u,       /* tracker-name byte length */
+        guard.ttl_ms,                    /* sample lifetime */
+        guard.max_samples,               /* samples considered */
+        guard.buffer_size,               /* tracker storage */
+        guard.min_sample_threshold,      /* warm-up sample count */
+        guard.latency_tracker_id         /* resulting 16-byte tracker ID */
+    );
+    if (rc != RCLIENT_OK) {
+        return rc;
+    }
+
+    return r_client_check_rate_limit_async(
+        client,       /* initialized client */
+        &resource,    /* resource consumptions */
+        1u,           /* number of resource consumptions */
+        &guard,       /* latency guards */
+        1u,           /* number of latency guards */
+        NULL,         /* no metrics label */
+        0u,           /* metrics-label length */
+        callback,     /* receives grant, rejection, or failure */
+        user,         /* application callback context */
+        out_request   /* request handle for timers or cancellation */
+    );
+}
+```
+
+Ratelimitly evaluates the consumption and guard together. A grant consumes one
+token and authorizes the operation; if either condition fails, the complete
+request is rejected and nothing is consumed. A request failure instead means
+that no usable combined decision was obtained, not that either condition
+rejected the request.
+
+These are logical operations, independent of how the client delivers them.
+Server discovery, request delivery, response selection, retries, and
+report-delivery behavior belong to the API and policy layers documented in
+[docs/api.md](docs/api.md).
+
+## Integrate the library
+
+Applications differ in whether they already own UDP sockets, DNS, timers, and
+logging or prefer a ready-made runtime. The C client supports core, optional
+workflow, and public-runtime integration levels without changing the two
+logical operations above.
+
+Choose the ownership boundary and request-buffer lifetime model in
+[Choosing an integration layer](docs/api.md#choosing-an-integration-layer).
 
 ## Install a release
 
@@ -201,11 +349,12 @@ Outputs:
 - `librclient.a`
 - `librclient.so`
 
-## Run the first combined example
+## Run an optional combined-workflow example
 
-The latency-tracker example is the smallest executable path that performs both
-a resource rate-limit check and a latency guard, runs protected work only after
-admission, and reports one measured latency sample:
+The core operations may be used independently. The latency-tracker example
+instead demonstrates the optional convenience workflow: it submits one
+resource consumption and one latency guard, runs protected work only after the
+combined request is granted, and reports the work's measured service latency:
 
 ```sh
 make
@@ -279,7 +428,8 @@ Core operations:
 - `r_client_on_timeout`
 - `r_client_cancel_request`
 - `r_client_default_request_policy`
-- `r_client_hash_id`
+- `r_client_derive_bucket_id`
+- `r_client_derive_latency_tracker_id`
 - `r_client_parse_auth_key`
 - `r_client_admission_start` / `r_client_admission_report_latency`
 - `r_runtime_client_init` / `r_runtime_client_on_readable`
@@ -365,14 +515,20 @@ For integrations with request-scoped memory pools, use
 `r_client_check_rate_limit_async_borrowed` when request buffers live until
 callback completion.
 
-## ID Hashing
+## Content-defined IDs
 
-Applications map their own strings to Ratelimitly IDs:
+Resource buckets and latency trackers are identified by their names together
+with the settings that define their stored state. Use
+`r_client_derive_bucket_id()` for a bucket and
+`r_client_derive_latency_tracker_id()` for a latency tracker. The workflow API
+does this automatically from `bucket_name`, `latency_tracker_name`, and their
+configuration.
 
-- bucket strings become `r_resource_request_t.bucket_id`
-- service strings become `r_latency_guard_t.service_id`
-
-Use `r_client_hash_id(input, out_id)` to produce the required 16-byte ID.
+The threshold is not part of a latency-tracker ID: it is a condition evaluated
+against the tracker, not part of the tracker's stored state. The observed
+latency is likewise a sample, not tracker identity. See
+[docs/api.md](docs/api.md#content-defined-ids) for the exact contracts and
+examples.
 
 ## Perf Client
 
@@ -406,6 +562,12 @@ strategy through `r_request_policy_t`.
 
 | Term | Meaning |
 | --- | --- |
+| Ratelimitly | Distributed admission-control service that atomically evaluates resource consumption and optional latency guards. |
+| r-server | Ratelimitly server discovered by the client and sent resource requests or latency reports. |
+| resource request | Request containing one or more resource consumptions and zero or more latency guards; a grant consumes all requested quantities atomically. |
+| resource consumption | Quantity requested from one configured resource bucket as part of a resource request. |
+| latency report | Independent operation that contributes one or more measured service latencies to latency trackers. |
+| service | Application-defined name for a measured operation or dependency; together with its tracker settings, it defines a canonical latency-tracker ID. |
 | C11 | 2011 revision of the C language standard required by this library. |
 | README | Repository overview document that introduces a project and links to its detailed guides. |
 | GLib | Portable core library whose main loop is used by one integration example. |
@@ -415,11 +577,11 @@ strategy through `r_request_policy_t`.
 | H2O | Event-driven C HTTP server represented by one self-contained integration. |
 | LICENSE | Repository file containing the terms under which the source may be used and redistributed. |
 | MIT | Permissive open-source license applied to this repository. |
-| admission | The combined decision made before protected work starts. An admission may contain resource limits, latency guards, or both. |
-| resource rate limit | A quota check for a named bucket, such as requests allowed per interval. |
+| admission | Application-level use of a resource-request decision to decide whether work should begin. |
+| resource rate limit | Configured capacity for a resource bucket over a time window. |
 | bucket | Stable resource identity whose configured quota is consumed by matching requests. |
 | latency guard | A request to shed new work when the tracker's recent service latency reaches its configured threshold. |
-| latency tracker | Server-side sample window identified by a service ID and configured by threshold, lifetime, sample count, and buffer size. |
+| latency tracker | Server-side sample window identified by a canonical tracker ID and defined by its lifetime, sample count, buffer size, and warm-up threshold. |
 | tenant | Isolated Ratelimitly account identified by metadata encoded in the API key. |
 | host loop | The application's existing event loop; it owns readiness callbacks and timers around the client. |
 | public runtime | Optional adapter that owns nonblocking UDP sockets and production DNS discovery while exposing readiness and deadlines to the host loop. |
@@ -445,10 +607,6 @@ strategy through `r_request_policy_t`.
 - [`r_client.h`](include/r_client.h), [`r_client_workflow.h`](include/r_client_workflow.h),
   and [`r_client_runtime.h`](include/r_client_runtime.h) are the public source
   contracts behind this overview.
-- [Core request lifetimes](include/r_client.h) (`include/r_client.h:192-260`)
-  and the [public-runtime ownership contract](include/r_client_runtime.h)
-  (`include/r_client_runtime.h:26-31`) were reverified at merged baseline
-  `05053b4` for this explanation.
 - [DNS SRV records](https://www.rfc-editor.org/info/rfc2782) and
   [OpenSSL authenticated-encryption guidance](https://docs.openssl.org/3.0/man3/EVP_EncryptInit/)
   provide the external definitions used above.

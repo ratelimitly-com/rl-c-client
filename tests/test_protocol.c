@@ -90,7 +90,7 @@ static void test_aes_gcm_aad_rejects_tamper(void) {
 static void test_latency_report_uses_36_byte_service_blocks(void) {
     r_service_latency_report_t report;
     memset(&report, 0, sizeof(report));
-    memcpy(report.service_id, "svc", 3);
+    memcpy(report.latency_tracker_id, "svc", 3);
     report.ttl_ms = 1000;
     report.max_samples = 10;
     report.buffer_size = 64;

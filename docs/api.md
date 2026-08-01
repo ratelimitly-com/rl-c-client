@@ -4,6 +4,57 @@ This document describes the public C API. The library is still at its first
 MVP: the public API and private implementation may change without backward-
 compatibility adapters.
 
+## Operation Model
+
+The core client exposes two independent operations:
+
+1. A **resource request** contains at least one `r_resource_request_t` resource
+   consumption and may contain any number of `r_latency_guard_t` latency
+   guards. Ratelimitly evaluates the complete request atomically. A grant
+   consumes every requested quantity; a rejection consumes none.
+2. A **latency report** contains at least one
+   `r_service_latency_report_t` service observation and contributes it to the
+   corresponding server-side latency tracker.
+
+Neither operation requires the other. A client may issue only resource
+requests, only latency reports, or both. The optional workflow API demonstrates
+one useful application policy that combines one resource consumption, one
+latency guard, admitted work, and a subsequent latency report; that policy is
+not part of the wire-protocol contract.
+
+This operation model defines application semantics. The delivery mechanics of
+latency reports and the discovery, fan-out, replay, and response-selection
+policy for resource requests are documented with their corresponding APIs
+below.
+
+## Choosing an integration layer
+
+Applications embed Ratelimitly in very different environments. A proxy module
+normally already owns its sockets, DNS resolver, timers, and logging, while a
+small command-line program may prefer a ready-made socket runtime.
+
+The C client exposes its operations through three integration layers. In every
+layer, the library owns packet encoding, authentication, request policy,
+response parsing, and server selection. The layer determines how much
+surrounding workflow and I/O the library also owns. Choose the ownership
+boundary that fits the host application.
+
+| Layer | What it owns | What the host still owns |
+| --- | --- | --- |
+| Core client (`r_client.h` + `r_client_io.h`) | Packets, authentication, request policy, deadlines, and response selection | UDP I/O, DNS callbacks, timers, and logging |
+| Optional admission workflow (`r_client_workflow.h`) | One convenience policy combining one resource consumption, one latency guard, and at most one subsequent report | The core client's I/O plus protected-work timing and lifetime |
+| Public runtime (`r_client_runtime.h`) | Core client, nonblocking IPv4/IPv6 UDP sockets, and synchronous DNS discovery | Readiness watchers, deadline callbacks, application work, and logging policy |
+
+The normal asynchronous request API copies request inputs. The borrowed API
+avoids those copies, so its input buffers must remain valid until callback or
+cancellation. In both forms, copy any result data needed after the completion
+callback returns; the request handle and result arrays expire with that
+callback.
+
+Proxy modules and other high-throughput embedders commonly choose the core and
+borrowed APIs. The examples choose the workflow and public runtime so each
+framework README can focus on its readiness, timer, and shutdown rules.
+
 ## Headers
 
 Core embedders use:
@@ -24,11 +75,11 @@ portable socket runtime can also use:
 #include "r_client_runtime.h"
 ```
 
-`r_client_workflow.h` combines one resource limit and one latency guard into a
-durable application decision. `r_client_runtime.h` adds nonblocking UDP sockets,
-synchronous SRV/A/AAAA resolution, portable clocks, and helpers for examples or
-small command-line programs. A server with its own asynchronous resolver and
-socket ownership should use the core I/O interfaces instead.
+`r_client_workflow.h` combines one resource consumption and one latency guard
+into a durable application decision. `r_client_runtime.h` adds nonblocking UDP
+sockets, synchronous SRV/A/AAAA resolution, portable clocks, and helpers for
+examples or small command-line programs. A server with its own asynchronous
+resolver and socket ownership should use the core I/O interfaces instead.
 
 ## Configuration
 
@@ -84,15 +135,53 @@ Do not pass `r_auth_key_info_t.secret` back into `cfg.tenant.auth.secret`.
 Configuration expects the encoded Bech32 string. The decoded `secret` field is
 provided only for callers that need to inspect or validate the credential.
 
-## Hashing IDs
+## Content-defined IDs
 
-`r_client_hash_id(input, out_id)` maps application strings to 16-byte IDs for
-resource buckets and latency services.
+The 16-byte ID on the wire identifies stored server state, so it must include
+both the application name and every setting that defines that state.
+`r_client_derive_bucket_id()` derives a bucket ID from:
 
-The function returns no status. If `input` or `out_id` is `NULL`, it leaves
-`out_id` unchanged.
+- the exact bucket-name bytes and byte length;
+- `window_size_ms`; and
+- `rate_limit`.
 
-## Rate Requests
+`r_client_derive_latency_tracker_id()` derives a latency-tracker ID from:
+
+- the exact tracker-name bytes and byte length;
+- `ttl_ms`;
+- `max_samples`;
+- the final effective `buffer_size`; and
+- `min_sample_threshold`.
+
+The guard's `threshold_ms` is excluded because different guards may evaluate
+the same tracker against different thresholds. A report's `observed_latency`
+is a sample and is also excluded.
+
+Both helpers accept names as an explicit pointer and length, including names
+with embedded NUL bytes. They return `RCLIENT_OK` on success and
+`RCLIENT_ERR_CONFIG` for invalid arguments or a derivation failure. Call them
+again whenever an identity-defining setting changes; reusing an ID with
+different settings is a malformed protocol request.
+
+The workflow API derives both IDs automatically. Low-level callers derive the
+ID after filling the defining fields:
+
+```c
+r_resource_request_t resource = {
+    .window_size_ms = 1000,
+    .rate_limit = 100,
+    .tokens_requested = 1,
+};
+int rc = r_client_derive_bucket_id(
+    "checkout",                  /* exact bucket-name bytes */
+    strlen("checkout"),          /* bucket-name byte length */
+    resource.window_size_ms,     /* bucket window */
+    resource.rate_limit,         /* bucket rate */
+    resource.bucket_id           /* resulting 16-byte ID */
+);
+```
+
+## Resource Requests
 
 Use `r_client_check_rate_limit_async` when the client should copy request
 buffers. Use `r_client_check_rate_limit_async_borrowed` when the caller keeps
@@ -121,23 +210,33 @@ The `r_client_req_t *` passed to the callback is owned by the client and is not
 valid after the callback returns. Calling `r_client_cancel_request` on that same
 request from inside the completion callback is harmless and treated as a no-op.
 
-## Latency Guards and Reports
+## Latency Guards and Independent Reports
 
-Latency tracking forms one admission-and-feedback loop:
+Latency guards and reports are independent operations connected through a
+server-side tracker identified by `latency_tracker_id`. A guard reads the
+tracker's recent latency during a resource request. A report adds a measured
+observation to that tracker.
 
-1. Create a guard for a stable service ID and include it in a rate request.
+One common application-level feedback loop is:
+
+1. Create a guard for a stable latency tracker and include it in a resource request.
 2. Copy its result during the request callback.
 3. Perform protected work only when the combined result passes.
 4. Measure that work with a monotonic clock.
-5. Report the observation using the same service ID and tracker settings.
+5. Report the observation using the same tracker ID and settings.
 
-Never report latency for work rejected by its guard. The operation did not run,
-so a zero or synthetic observation would bias the tracker and admit too much
-future work.
+This sequence is optional. A dedicated observer may send reports without ever
+issuing a resource request, and a resource-requesting client need not send
+reports.
+
+When following the combined sequence, never fabricate a latency observation
+for work that a guard prevented from running. No such operation occurred, so a
+zero or synthetic observation would bias the tracker. This does not prohibit
+reporting measurements for other services or independently completed work.
 
 ### Guard configuration
 
-Hash an application-level service name exactly as for resource bucket names:
+Derive the ID after filling every setting that defines the tracker:
 
 ```c
 r_latency_guard_t guard = {
@@ -147,12 +246,20 @@ r_latency_guard_t guard = {
     .buffer_size = 32,
     .min_sample_threshold = 5,
 };
-r_client_hash_id("inventory-backend", guard.service_id);
+int rc = r_client_derive_latency_tracker_id(
+    "inventory-backend",                 /* exact tracker-name bytes */
+    strlen("inventory-backend"),         /* tracker-name byte length */
+    guard.ttl_ms,                         /* sample lifetime */
+    guard.max_samples,                    /* samples considered */
+    guard.buffer_size,                    /* final effective storage */
+    guard.min_sample_threshold,           /* warm-up sample count */
+    guard.latency_tracker_id              /* resulting 16-byte ID */
+);
 ```
 
 | Field | Contract |
 | --- | --- |
-| `service_id` | Stable 16-byte ID identifying one latency tracker. |
+| `latency_tracker_id` | Canonical 16-byte ID identifying this tracker definition. |
 | `threshold_ms` | Guard fails when tracked latency is greater than or equal to this value. |
 | `ttl_ms` | Maximum sample lifetime for this tracker. |
 | `max_samples` | Maximum number of samples considered by the tracker. |
@@ -173,9 +280,12 @@ Measure the protected operation rather than the RateLimitly request. Wall-clock
 adjustments must not change duration, so use `CLOCK_MONOTONIC` or the host
 event loop's monotonic duration clock.
 
-The report must repeat the guard's `service_id`, `ttl_ms`, `max_samples`,
+When a report is intended to update the tracker read by a particular guard, it
+must repeat that guard's `latency_tracker_id`, `ttl_ms`, `max_samples`,
 `buffer_size`, and `min_sample_threshold`. `threshold_ms` appears only in the
-guard because it controls admission, not sample storage.
+guard because it controls admission, not sample storage. A report that is not
+paired with a local guard still derives its canonical tracker ID from its own
+tracker name and those same tracker-definition fields.
 
 ```c
 r_service_latency_report_t report = {
@@ -185,7 +295,7 @@ r_service_latency_report_t report = {
     .buffer_size = guard.buffer_size,
     .min_sample_threshold = guard.min_sample_threshold,
 };
-memcpy(report.service_id, guard.service_id, sizeof(report.service_id));
+memcpy(report.latency_tracker_id, guard.latency_tracker_id, sizeof(report.latency_tracker_id));
 
 int rc = r_client_report_latency(client, &report, 1);
 if (rc != RCLIENT_OK) {
@@ -193,10 +303,10 @@ if (rc != RCLIENT_OK) {
 }
 ```
 
-`r_client_report_latency` sends fire-and-forget data. It does not wait for a
-response, create a request handle, or require a deadline watcher. Report
-storage is borrowed only for the duration of the call because the packet is
-serialized synchronously.
+The delivery contract for `r_client_report_latency` is fire-and-forget. Unlike
+a resource request, a report does not create a request handle, wait for a
+response, or require a deadline watcher. Report storage is borrowed only for
+the duration of the call because the packet is serialized synchronously.
 
 Reports whose `buffer_size` exceeds the credential quota are filtered. If all
 reports are filtered, the function returns `RCLIENT_OK` without sending. Other
@@ -209,12 +319,12 @@ guard-pass, protected-work, report, and guard-deny control flow.
 
 ## Combined Admission Workflow
 
-`r_client_workflow.h` packages the most commonly repeated application policy:
+`r_client_workflow.h` packages one optional application policy:
 one resource request, one latency guard, an explicit denial reason, and at most
 one latency report after admitted work.
 
 1. Start from `r_client_admission_config_defaults()` and replace the bucket,
-   service, and metrics names with stable application identifiers.
+   latency-tracker, and metrics names with stable application identifiers.
 2. Keep one caller-owned `r_admission_request_t` alive from
    `r_client_admission_start()` through callback or cancellation.
 3. Drive its deadline with `r_client_admission_deadline_ms()` and
@@ -263,6 +373,12 @@ Once that request completes, times out, or is canceled, later datagrams with
 the same `unique_id` are ignored. The authenticated timestamp is retained as
 protocol framing, but the client does not apply a separate clock-skew freshness
 check. Keep request deadlines short and deliver timeout/cancel events promptly.
+
+## Resource-Request HA Policy
+
+An API key may resolve through DNS to one or more r-servers. This membership is
+a resource-request delivery concern; it does not change the meaning of the
+logical request or its atomic grant/rejection result.
 
 `r_request_policy_t` configures the client's sole resource-request strategy.
 It owns fan-out, oldest-first response selection, replay scheduling, completion
@@ -332,6 +448,8 @@ TTL = 3 * U = 60 ms
 
 `cfg.request_policy` is borrowed only for the duration of `r_client_create`; the
 client copies the policy by value and does not retain the caller's pointer.
+
+## DNS Refresh
 
 DNS refresh pacing is client configuration rather than request-selection
 policy. Set `cfg.dns_refresh.refresh_interval_ms`,

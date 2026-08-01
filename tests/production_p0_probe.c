@@ -207,13 +207,13 @@ static void delay_before_retry(void) {
 static void configure_latency_probe(
     r_admission_config_t *config,
     const char *bucket_name,
-    const char *service_name
+    const char *latency_tracker_name
 ) {
     r_client_admission_config_defaults(config);
     config->bucket_name = bucket_name;
     config->window_size_ms = 60000u;
     config->rate_limit = 1000u;
-    config->service_name = service_name;
+    config->latency_tracker_name = latency_tracker_name;
     config->latency_threshold_ms = LATENCY_THRESHOLD_MS;
     config->latency_ttl_ms = 10000u;
     /* One slot makes the real sample replace the speculative admission value. */
@@ -226,10 +226,10 @@ static void configure_latency_probe(
 static int prove_latency_tracker(
     r_runtime_client_t *runtime,
     const char *bucket_name,
-    const char *service_name
+    const char *latency_tracker_name
 ) {
     r_admission_config_t config;
-    configure_latency_probe(&config, bucket_name, service_name);
+    configure_latency_probe(&config, bucket_name, latency_tracker_name);
 
     r_admission_request_t initial_request;
     r_admission_outcome_t initial_outcome = {0};
@@ -296,13 +296,13 @@ static int prove_latency_tracker(
 static void configure_rate_probe(
     r_admission_config_t *config,
     const char *bucket_name,
-    const char *service_name
+    const char *latency_tracker_name
 ) {
     r_client_admission_config_defaults(config);
     config->bucket_name = bucket_name;
     config->window_size_ms = 60000u;
     config->rate_limit = 1u;
-    config->service_name = service_name;
+    config->latency_tracker_name = latency_tracker_name;
     config->latency_threshold_ms = LATENCY_THRESHOLD_MS;
     config->latency_ttl_ms = 10000u;
     /* Keep two speculative samples below activation so only rate can deny. */
@@ -315,10 +315,10 @@ static void configure_rate_probe(
 static int prove_rate_limiter(
     r_runtime_client_t *runtime,
     const char *bucket_name,
-    const char *service_name
+    const char *latency_tracker_name
 ) {
     r_admission_config_t config;
-    configure_rate_probe(&config, bucket_name, service_name);
+    configure_rate_probe(&config, bucket_name, latency_tracker_name);
 
     r_admission_request_t first_request;
     r_admission_outcome_t first_outcome = {0};

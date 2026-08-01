@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Check the teaching contract shared by every tracked README.
+"""Check the layered teaching contracts for tracked README files.
 
 This is intentionally a small, dependency-free source gate.  It catches the
 structural mistakes that are easy to reintroduce during maintenance; reviewers
-still verify technical claims and read each document from top to bottom.
+still verify technical claims and read each document from top to bottom.  The
+repository overview introduces Ratelimitly by role; example guides retain their
+prerequisite and TL;DR teaching structure.
 """
 
 from __future__ import annotations
@@ -170,24 +172,74 @@ def check_readme(path: Path) -> list[str]:
     errors: list[str] = []
 
     first_lines = "\n".join(text.splitlines()[:FIRST_HEADING_LIMIT])
-    if not re.search(r"(?m)^> \*\*Prerequisites\.\*\* ", first_lines):
-        errors.append("missing an explicit prerequisites contract near the top")
-
     h2s = re.findall(r"(?m)^## .+$", text)
-    if not h2s or h2s[0] != "## TL;DR":
-        errors.append("TL;DR is not the first level-two section")
-    tldr = section(text, "## TL;DR")
-    if not tldr:
-        errors.append("missing TL;DR content")
+
+    if relative == "README.md":
+        if re.search(r"(?m)^> \*\*Prerequisites\.\*\* ", first_lines):
+            errors.append("repository overview must not start with prerequisites")
+        if not h2s or h2s[0] != "## What Ratelimitly does":
+            errors.append(
+                "'What Ratelimitly does' is not the first level-two section"
+            )
+        overview = section(text, "## What Ratelimitly does")
+        if not overview:
+            errors.append("missing the Ratelimitly role overview")
+        else:
+            prose = re.sub(r"`[^`]+`|\[[^]]+\]\([^)]+\)", "term", overview)
+            if not re.search(r"(?i)admission", prose):
+                errors.append("overview does not state the admission-control role")
+            if not re.search(r"(?i)resource", prose):
+                errors.append("overview does not state the resource-consumption role")
+            if not re.search(r"(?i)latenc", prose):
+                errors.append("overview does not state the latency-guard role")
+        if not section(text, "## Core operations"):
+            errors.append("missing the core-operation semantic layer")
+        if not section(text, "## Three small examples"):
+            errors.append("missing examples between semantics and integration")
+        expected_order = [
+            "## What Ratelimitly does",
+            "## Core operations",
+            "## Three small examples",
+            "## Integrate the library",
+        ]
+        positions = [text.find(heading) for heading in expected_order]
+        if any(position < 0 for position in positions) or positions != sorted(
+            positions
+        ):
+            errors.append(
+                "repository overview does not progress from role through "
+                "operations and examples to an API integration pointer"
+            )
+        integration = section(text, "## Integrate the library")
+        if (
+            "[Choosing an integration layer]"
+            "(docs/api.md#choosing-an-integration-layer)"
+            not in integration
+        ):
+            errors.append("integration overview does not link to the API guide")
+        if "| Layer | What it owns | What the host still owns |" in integration:
+            errors.append(
+                "repository overview retains detailed integration-layer ownership"
+            )
     else:
-        prose = re.sub(r"`[^`]+`|\[[^]]+\]\([^)]+\)", "term", tldr)
-        sentence_ends = re.findall(r"[.!?](?=\s|$)", prose)
-        if len(sentence_ends) > 2:
-            errors.append(f"TL;DR exceeds two sentences ({len(sentence_ends)} found)")
-        if not re.search(r"(?i)rate[- ]?limit", prose):
-            errors.append("TL;DR does not state the rate-limiting role")
-        if not re.search(r"(?i)latency", prose):
-            errors.append("TL;DR does not state the latency-tracking role")
+        if not re.search(r"(?m)^> \*\*Prerequisites\.\*\* ", first_lines):
+            errors.append("missing an explicit prerequisites contract near the top")
+        if not h2s or h2s[0] != "## TL;DR":
+            errors.append("TL;DR is not the first level-two section")
+        tldr = section(text, "## TL;DR")
+        if not tldr:
+            errors.append("missing TL;DR content")
+        else:
+            prose = re.sub(r"`[^`]+`|\[[^]]+\]\([^)]+\)", "term", tldr)
+            sentence_ends = re.findall(r"[.!?](?=\s|$)", prose)
+            if len(sentence_ends) > 2:
+                errors.append(
+                    f"TL;DR exceeds two sentences ({len(sentence_ends)} found)"
+                )
+            if not re.search(r"(?i)rate[- ]?limit", prose):
+                errors.append("TL;DR does not state the rate-limiting role")
+            if not re.search(r"(?i)latency", prose):
+                errors.append("TL;DR does not state the latency-tracking role")
 
     blocks = mermaid_blocks(text)
     if not blocks:

@@ -187,7 +187,7 @@ static int start_admission(application_t *app) {
     r_admission_config_t config;
     r_client_admission_config_defaults(&config);
     config.bucket_name = "glib-example";
-    config.service_name = "glib-protected-service";
+    config.latency_tracker_name = "glib-protected-service";
     config.metrics_label = "glib-example";
     int status = r_client_admission_start(
         app->runtime.handle,

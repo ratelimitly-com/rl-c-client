@@ -172,7 +172,7 @@ static r_client_req_t *submit_request(r_client_t *client, test_context_t *contex
 
     r_latency_guard_t guard;
     memset(&guard, 0, sizeof(guard));
-    memcpy(guard.service_id, "service", 7u);
+    memcpy(guard.latency_tracker_id, "service", 7u);
     guard.threshold_ms = 50u;
     guard.ttl_ms = 1000u;
     guard.max_samples = 10u;
@@ -259,7 +259,7 @@ static void run_valid_response_case(
     assert(event.resource_count == 1u);
     assert(strcmp(event.label, "api") == 0);
     assert(event.tracker.present);
-    assert(memcmp(event.tracker.service_id, "service", 7u) == 0);
+    assert(memcmp(event.tracker.latency_tracker_id, "service", 7u) == 0);
     assert(event.tracker.ttl_ms == 1000u);
     assert(event.tracker.max_samples == 10u);
     assert(event.tracker.buffer_size == 16u);
@@ -489,7 +489,7 @@ static void test_latency_report_observation(void) {
 
     r_service_latency_report_t report;
     memset(&report, 0, sizeof(report));
-    memcpy(report.service_id, "service", 7u);
+    memcpy(report.latency_tracker_id, "service", 7u);
     report.observed_latency = 25u;
     report.ttl_ms = 1000u;
     report.max_samples = 10u;
@@ -508,7 +508,7 @@ static void test_latency_report_observation(void) {
     assert(event.kind == R_TEST_EVENT_LATENCY_REPORT);
     assert(event.report_count == 1u);
     assert(event.tracker.present);
-    assert(memcmp(event.tracker.service_id, "service", 7u) == 0);
+    assert(memcmp(event.tracker.latency_tracker_id, "service", 7u) == 0);
     assert(event.tracker.ttl_ms == 1000u);
     assert(event.tracker.max_samples == 10u);
     assert(event.tracker.buffer_size == 16u);

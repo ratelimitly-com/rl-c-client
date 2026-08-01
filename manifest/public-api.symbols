@@ -11,9 +11,10 @@ r_client_check_rate_limit_async
 r_client_check_rate_limit_async_borrowed
 r_client_create
 r_client_default_request_policy
+r_client_derive_bucket_id
+r_client_derive_latency_tracker_id
 r_client_destroy
 r_client_format_default_tenant_dns
-r_client_hash_id
 r_client_on_datagram
 r_client_on_timeout
 r_client_parse_auth_key

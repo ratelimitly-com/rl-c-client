@@ -39,7 +39,7 @@ typedef struct r_tenant_header {
 } r_tenant_header_t;
 
 typedef struct r_guard_block {
-    uint8_t service_id[16];
+    uint8_t latency_tracker_id[16];
     uint32_t ttl_ms;
     uint32_t max_samples;
     uint32_t buffer_size;
@@ -57,7 +57,7 @@ typedef struct r_resource_block {
 } r_resource_block_t;
 
 typedef struct r_service_latency_block {
-    uint8_t service_id[16];
+    uint8_t latency_tracker_id[16];
     uint32_t ttl_ms;
     uint32_t max_samples;
     uint32_t buffer_size;

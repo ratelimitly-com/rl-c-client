@@ -180,7 +180,7 @@ static int start_admission(application_t *app) {
     r_admission_config_t config;
     r_client_admission_config_defaults(&config);
     config.bucket_name = "libuv-example";
-    config.service_name = "libuv-protected-service";
+    config.latency_tracker_name = "libuv-protected-service";
     config.metrics_label = "libuv-example";
     int status = r_client_admission_start(
         app->runtime.handle,

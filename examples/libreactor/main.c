@@ -199,7 +199,7 @@ static void on_http_request(reactor_event *event) {
     r_admission_config_t config;
     r_client_admission_config_defaults(&config);
     config.bucket_name = "libreactor-example";
-    config.service_name = "libreactor-protected-service";
+    config.latency_tracker_name = "libreactor-protected-service";
     config.metrics_label = "libreactor-example";
     int status = r_client_admission_start(
         app->runtime.handle,
