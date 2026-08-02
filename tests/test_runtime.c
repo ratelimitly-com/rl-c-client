@@ -91,7 +91,7 @@ static void inject_invalid_datagram(r_runtime_client_t *runtime) {
             continue;
         }
         struct sockaddr_in *ipv4 = (struct sockaddr_in *)&target;
-        ipv4->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        assert(inet_pton(AF_INET, "127.0.0.1", &ipv4->sin_addr) == 1);
         int sender = socket(AF_INET, SOCK_DGRAM, 0);
         assert(sender >= 0);
         const uint8_t invalid[] = {0xffu};
