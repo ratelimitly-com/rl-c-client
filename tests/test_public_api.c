@@ -2,10 +2,6 @@
 #include <stdint.h>
 #include <string.h>
 
-#ifndef R_CLIENT_DEFAULT_REPLAY_COUNT
-#define R_CLIENT_DEFAULT_REPLAY_COUNT 1u
-#endif
-
 #include "../include/r_client.h"
 
 static const char *SAMPLE_COOKIE_KEY_TENANT_2 =
@@ -122,7 +118,7 @@ static void test_default_request_policy(void) {
     r_client_default_request_policy(&policy);
 
     assert(policy.unit_ms == 20u);
-    assert(policy.replay_count == R_CLIENT_DEFAULT_REPLAY_COUNT);
+    assert(policy.replay_count == 1u);
     assert(policy.replay_gap.kind == R_HA_SCHEDULE_FIXED);
     assert(policy.replay_gap.initial_units == 1u);
     assert(policy.replay_gap.max_units == 1u);

@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 PROBE="$ROOT/bin/production_p0_probe"
+source "$ROOT/tests/production_p0_profile.sh"
+production_p0_apply_request_profile
 
 fail() {
   echo "test_production_p0: $*" >&2
