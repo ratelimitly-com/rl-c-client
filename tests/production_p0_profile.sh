@@ -16,19 +16,19 @@ production_p0_report_profiles() {
   local only_profiles=${4:-false}
   local line normalized
   local -a profiles=()
-  local -a all_lines=()
+  local all_line_count=0
 
   [[ -r $file ]] || return 1
-  mapfile -t all_lines <"$file"
-  for line in "${all_lines[@]}"; do
+  while IFS= read -r line || [[ -n $line ]]; do
+    ((all_line_count += 1))
     normalized=${line%$'\r'}
     if [[ $normalized == 'rl-c-client[profile]:'* ]]; then
       profiles+=("$normalized")
     fi
-  done
+  done <"$file"
 
   [[ ${#profiles[@]} -eq $expected_count ]] || return 1
-  if [[ $only_profiles == true && ${#all_lines[@]} -ne $expected_count ]]; then
+  if [[ $only_profiles == true && $all_line_count -ne $expected_count ]]; then
     return 1
   fi
   for line in "${profiles[@]}"; do

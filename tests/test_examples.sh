@@ -369,6 +369,10 @@ for profile_setting in \
   grep -Fq -- "$profile_setting" "$PRODUCTION_P0_PROFILE" \
     || fail "shared production profile omits: $profile_setting"
 done
+if rg -n '(^|[[:space:]])(mapfile|readarray)([[:space:]]|$)' \
+    "$PRODUCTION_P0_PROFILE" >/dev/null; then
+  fail "shared production profile requires Bash newer than macOS Bash 3.2"
+fi
 grep -Fq -- 'production_p0_report_profiles' \
   "$PRODUCTION_P0_ONE_SHOT_RUNNER" \
   || fail "one-shot P0 runner does not report request wait profiles"
