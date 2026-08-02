@@ -35,7 +35,9 @@ typedef enum r_log_level {
 typedef struct r_io_ops {
     void *ctx;
 
-    // Send a UDP datagram. Return 0 on success, negative on error.
+    // Send a UDP datagram. Return 0 on success, negative on error. The hook
+    // must not call any r_client_* API before returning; queue synchronous
+    // loopback input and deliver it after the send call has unwound.
     int (*udp_send)(void *ctx, const r_addr_t *to, const uint8_t *buf, size_t len);
 
     // Milliseconds since UNIX epoch.

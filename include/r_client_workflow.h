@@ -72,6 +72,8 @@ typedef struct r_admission_request {
     r_admission_outcome_t outcome;
     bool active;
     bool admitted;
+    /* True once protected work has been invoked, regardless of its result. */
+    bool work_executed;
     bool latency_reported;
 } r_admission_request_t;
 

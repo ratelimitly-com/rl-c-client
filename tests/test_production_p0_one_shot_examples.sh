@@ -93,7 +93,7 @@ sanitize_file() {
     redacted=${line//"$RATELIMITLY_AUTH_KEY"/[REDACTED]}
     # Also redact credential-shaped text in case a dependency prints a parsed
     # or reconstructed key rather than the exact inherited byte string.
-    while [[ $redacted =~ rl-(aes|hmac)[[:alnum:]]{8,} ]]; do
+    while [[ $redacted =~ rl-(aes|cookie)[[:alnum:]]{8,} ]]; do
       token=${BASH_REMATCH[0]}
       redacted=${redacted//"$token"/[REDACTED]}
     done

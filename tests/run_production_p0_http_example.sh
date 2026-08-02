@@ -202,7 +202,7 @@ sanitize_stream() {
     lines=$((lines + 1))
     ((lines <= 120)) || break
     line=${line//"$AUTH_KEY"/[REDACTED_AUTH_KEY]}
-    while [[ "$line" =~ rl-(aes|hmac)[[:alnum:]_-]+ ]]; do
+    while [[ "$line" =~ rl-(aes|cookie)[[:alnum:]_-]+ ]]; do
       key_token=${BASH_REMATCH[0]}
       line=${line//"$key_token"/[REDACTED_AUTH_KEY]}
     done

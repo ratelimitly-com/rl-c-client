@@ -1,12 +1,15 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include <assert.h>
+#include <arpa/inet.h>
 #include <limits.h>
 #include <poll.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 #include "r_client_runtime.h"
 #include "r_client_workflow.h"
@@ -67,11 +70,43 @@ static void drive_request(
 }
 
 static int perform_protected_work(void *user) {
-    bool *called = user;
-    *called = true;
+    int *calls = user;
+    *calls += 1;
     struct timespec duration = {.tv_nsec = 1000000L};
     assert(nanosleep(&duration, NULL) == 0);
     return RCLIENT_OK;
+}
+
+static void inject_invalid_datagram(r_runtime_client_t *runtime) {
+    for (size_t i = 0; i < r_runtime_socket_count(runtime); i++) {
+        int target_socket = (int)r_runtime_socket_at(runtime, i);
+        struct sockaddr_storage target = {0};
+        socklen_t target_length = sizeof(target);
+        assert(getsockname(
+            target_socket,
+            (struct sockaddr *)&target,
+            &target_length
+        ) == 0);
+        if (target.ss_family != AF_INET) {
+            continue;
+        }
+        struct sockaddr_in *ipv4 = (struct sockaddr_in *)&target;
+        assert(inet_pton(AF_INET, "127.0.0.1", &ipv4->sin_addr) == 1);
+        int sender = socket(AF_INET, SOCK_DGRAM, 0);
+        assert(sender >= 0);
+        const uint8_t invalid[] = {0xffu};
+        assert(sendto(
+            sender,
+            invalid,
+            sizeof(invalid),
+            0,
+            (const struct sockaddr *)&target,
+            target_length
+        ) == (ssize_t)sizeof(invalid));
+        assert(close(sender) == 0);
+        return;
+    }
+    assert(false && "runtime did not expose an IPv4 socket");
 }
 
 int main(int argc, char **argv) {
@@ -152,6 +187,7 @@ int main(int argc, char **argv) {
     environment_options.server_port = (uint16_t)port;
     r_runtime_client_t runtime;
     assert(r_runtime_client_init(&runtime, &environment_options) == RCLIENT_OK);
+    inject_invalid_datagram(&runtime);
 
     r_admission_config_t config;
     r_client_admission_config_defaults(&config);
@@ -172,16 +208,58 @@ int main(int argc, char **argv) {
 
     assert(completion.status == RCLIENT_OK);
     assert(completion.outcome.decision == R_ADMISSION_ALLOWED);
-    bool work_called = false;
+    int work_calls = 0;
     uint32_t observed_ms = 0u;
     assert(r_runtime_admission_run_and_report(
         &runtime,
         &request,
         perform_protected_work,
-        &work_called,
+        &work_calls,
         &observed_ms
     ) == RCLIENT_OK);
-    assert(work_called);
+    assert(work_calls == 1);
+    assert(r_runtime_admission_run_and_report(
+        &runtime,
+        &request,
+        perform_protected_work,
+        &work_calls,
+        &observed_ms
+    ) == RCLIENT_ERR_CONFIG);
+    assert(work_calls == 1);
+
+    test_completion_t failed_report_completion = {0};
+    r_admission_request_t failed_report_request;
+    assert(r_client_admission_start(
+        runtime.handle,
+        &failed_report_request,
+        &config,
+        on_admission,
+        &failed_report_completion
+    ) == RCLIENT_OK);
+    drive_request(&runtime, &failed_report_request, &failed_report_completion);
+    assert(failed_report_completion.status == RCLIENT_OK);
+    assert(failed_report_completion.outcome.allowed);
+
+    size_t socket_count = runtime.socket_count;
+    runtime.socket_count = 0u;
+    int failed_report_work_calls = 0;
+    assert(r_runtime_admission_run_and_report(
+        &runtime,
+        &failed_report_request,
+        perform_protected_work,
+        &failed_report_work_calls,
+        &observed_ms
+    ) == RCLIENT_ERR_IO);
+    runtime.socket_count = socket_count;
+    assert(failed_report_work_calls == 1);
+    assert(r_runtime_admission_run_and_report(
+        &runtime,
+        &failed_report_request,
+        perform_protected_work,
+        &failed_report_work_calls,
+        &observed_ms
+    ) == RCLIENT_ERR_CONFIG);
+    assert(failed_report_work_calls == 1);
 
     r_runtime_client_destroy(&runtime);
     assert(unsetenv("RATELIMITLY_REQUEST_UNIT_MS") == 0);

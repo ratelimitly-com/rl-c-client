@@ -16,6 +16,7 @@ LWAN_CMAKE="$ROOT/examples/lwan/CMakeLists.txt"
 GLIB_SOURCE="$ROOT/examples/glib/main.c"
 KORE_SOURCE="$ROOT/examples/kore/main.c"
 PERF_SOURCE="$ROOT/bin/perf_client.c"
+CLIENT_IO_HEADER="$ROOT/include/r_client_io.h"
 LINUX_ONE_SHOT_MATRIX="$ROOT/tests/linux-one-shot-examples.txt"
 LINUX_HTTP_MATRIX="$ROOT/tests/linux-http-examples.txt"
 MACOS_LOCAL_MATRIX="$ROOT/tests/macos-local-examples.txt"
@@ -198,10 +199,23 @@ for stale_text in \
   fi
 done
 if grep -Eq -- \
-    'c-[0-9]{8,}|s-[0-9]{6,}|rl-(aes|hmac)[A-Za-z0-9_-]{32,}' \
+    'c-[0-9]{8,}|s-[0-9]{6,}|rl-(aes|cookie)[A-Za-z0-9_-]{32,}' \
     "$CLOUD_CI_GUIDE"; then
   fail "production P0 CI guide contains a concrete credential or endpoint"
 fi
+for redaction_runner in \
+  "$PRODUCTION_P0_ONE_SHOT_RUNNER" \
+  "$PRODUCTION_P0_HTTP_RUNNER" \
+  "$PRODUCTION_P0_WIN32_WINE_RUNNER" \
+  "$PRODUCTION_P0_WIN32_NATIVE_RUNNER"; do
+  grep -Fq -- 'rl-(aes|cookie)' "$redaction_runner" \
+    || fail "$(basename "$redaction_runner") does not redact rl-cookie credentials"
+  if grep -Fq -- 'rl-(aes|hmac)' "$redaction_runner"; then
+    fail "$(basename "$redaction_runner") still matches obsolete rl-hmac credentials"
+  fi
+done
+grep -Fq -- 'must not call any r_client_' "$CLIENT_IO_HEADER" \
+  || fail "udp_send reentrancy prohibition is absent from the public IO contract"
 grep -Fxq -- '/bin/production_p0_probe' "$ROOT/.gitignore" \
   || fail "production P0 build artifact is not ignored"
 grep -Fq -- 'bash tests/test_linux_one_shot_examples.sh' "$CI_WORKFLOW" \
@@ -609,6 +623,9 @@ grep -Fq -- 'r_client_format_default_tenant_dns(' "$PERF_SOURCE" \
   || fail "perf client does not use key-derived production DNS"
 if grep -Fq -- 'glar.com' "$PERF_SOURCE"; then
   fail "perf client still uses its legacy DNS default"
+fi
+if grep -Fq -- 'dns_query_addrs(&resolver, tenant_name' "$PERF_SOURCE"; then
+  fail "perf client still pre-resolves the removed direct-address fallback"
 fi
 [[ ! -e "$ROOT/examples/common" ]] \
   || fail "legacy examples/common adapter still exists"

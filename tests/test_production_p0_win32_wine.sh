@@ -234,7 +234,7 @@ sanitize_stream() {
       break
     fi
     protected=${line//"$AUTH_KEY"/[REDACTED_AUTH_KEY]}
-    while [[ $protected =~ (rl-(aes|hmac)[[:alnum:]_-]+) ]]; do
+    while [[ $protected =~ (rl-(aes|cookie)[[:alnum:]_-]+) ]]; do
       token=${BASH_REMATCH[1]}
       protected=${protected//"$token"/[REDACTED_AUTH_KEY]}
     done
