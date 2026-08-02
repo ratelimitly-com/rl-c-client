@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.0 - 2026-08-02
+
 - **Breaking:** replaced the previous wait/quorum/selection/retry policy
   surface with one flat `r_request_policy_t`. The first MVP carries no aliases,
   policy discriminator, or legacy execution path.
