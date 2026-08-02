@@ -10,17 +10,18 @@ def main():
         encoding="utf-8"
     )
 
-    assert "$ExpectedRateRequestCountMax = 2" in script
+    assert "$ExpectedRateRequestCountMax = 4" in script
     assert "$RateRecords.Count -lt 1 -or" in script
     assert "$RateRecords.Count -gt $ExpectedRateRequestCountMax" in script
     assert "foreach ($Rate in $RateRecords)" in script
     assert "$Rate = $RateRecords[0]" not in script
-    for name in (
-        "RATELIMITLY_REQUEST_UNIT_MS",
-        "RATELIMITLY_REQUEST_REPLAY_COUNT",
-        "RATELIMITLY_REQUEST_PROFILE",
+    for name, value in (
+        ("RATELIMITLY_REQUEST_UNIT_MS", "25"),
+        ("RATELIMITLY_REQUEST_REPLAY_COUNT", "3"),
+        ("RATELIMITLY_REQUEST_PROFILE", "1"),
     ):
-        assert f'$env:{name} = $null' in script
+        assert f'$env:{name} = "{value}"' in script
+        assert f'$env:{name} = $null' not in script
         assert f'"{name}"' in script
 
     print("test_windows_native_example_contract: PASS")

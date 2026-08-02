@@ -10,6 +10,11 @@ on:
 permissions:
   contents: read
 
+env:
+  RATELIMITLY_REQUEST_UNIT_MS: "25"
+  RATELIMITLY_REQUEST_REPLAY_COUNT: "3"
+  RATELIMITLY_REQUEST_PROFILE: "1"
+
 jobs:
   c-client:
     name: C client (${{ matrix.os }})
