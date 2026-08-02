@@ -19,6 +19,7 @@ if ($BasePort -lt 1024 -or $BasePort -gt 65532) {
 }
 
 $SyntheticKey = "rl-aes1qvqqqqqqqqqqqqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqqqqzqqqqsqqqqqsqqqyqqqqqqkqzqqqhmzd8l"
+$ExpectedRateRequestCountMax = 2
 $ExpectedTracker = [ordered]@{
     ttl_ms               = 10000
     max_samples          = 100
@@ -149,6 +150,9 @@ function Invoke-Scenario {
         $env:RATELIMITLY_AUTH_KEY = $SyntheticKey
         $env:RATELIMITLY_EXAMPLE_SERVER_HOST = "127.0.0.1"
         $env:RATELIMITLY_EXAMPLE_SERVER_PORT = "$Port"
+        $env:RATELIMITLY_REQUEST_UNIT_MS = $null
+        $env:RATELIMITLY_REQUEST_REPLAY_COUNT = $null
+        $env:RATELIMITLY_REQUEST_PROFILE = $null
 
         $Client = Start-Process `
             -FilePath $ExamplePath `
@@ -184,27 +188,33 @@ function Invoke-Scenario {
         $RateRecords = @($Records | Where-Object { $_.event -eq "rate_request" })
         $LatencyRecords = @($Records | Where-Object { $_.event -eq "latency_report" })
         $RejectedRecords = @($Records | Where-Object { $_.event -eq "input_rejected" })
-        if ($RateRecords.Count -ne 1) {
-            throw "observed $($RateRecords.Count) rate requests; expected 1"
+        # The default policy permits one replay. Whether the response is
+        # processed before that replay deadline is intentionally timing
+        # dependent, so one logical admission can produce one or two copies
+        # of the same request datagram.
+        if ($RateRecords.Count -lt 1 -or
+            $RateRecords.Count -gt $ExpectedRateRequestCountMax) {
+            throw "observed $($RateRecords.Count) rate requests; expected 1..$ExpectedRateRequestCountMax"
         }
         if ($RejectedRecords.Count -ne 0) {
             throw "responder rejected $($RejectedRecords.Count) packets"
         }
 
-        $Rate = $RateRecords[0]
-        if ($Rate.guards -ne 1 -or $Rate.resources -ne 1) {
-            throw "request did not contain one guard and one resource"
+        foreach ($Rate in $RateRecords) {
+            if ($Rate.guards -ne 1 -or $Rate.resources -ne 1) {
+                throw "request did not contain one guard and one resource"
+            }
+            if ($Rate.label -ne "win32-example") {
+                throw "metrics label was $($Rate.label); expected win32-example"
+            }
+            if ($Rate.guard_threshold_ms -ne 100) {
+                throw "guard threshold was $($Rate.guard_threshold_ms); expected 100"
+            }
+            if ($Rate.disposition -ne $Scenario.Name) {
+                throw "responder disposition was $($Rate.disposition)"
+            }
+            Assert-Tracker $Rate.tracker "$($Scenario.Name) guard"
         }
-        if ($Rate.label -ne "win32-example") {
-            throw "metrics label was $($Rate.label); expected win32-example"
-        }
-        if ($Rate.guard_threshold_ms -ne 100) {
-            throw "guard threshold was $($Rate.guard_threshold_ms); expected 100"
-        }
-        if ($Rate.disposition -ne $Scenario.Name) {
-            throw "responder disposition was $($Rate.disposition)"
-        }
-        Assert-Tracker $Rate.tracker "$($Scenario.Name) guard"
 
         $ExpectedLatencyCount = if ($Scenario.Name -eq "guard-pass") { 1 } else { 0 }
         if ($LatencyRecords.Count -ne $ExpectedLatencyCount) {
@@ -239,7 +249,10 @@ $EnvironmentNames = @(
     "RATELIMITLY_TENANT",
     "RATELIMITLY_AUTH_KEY",
     "RATELIMITLY_EXAMPLE_SERVER_HOST",
-    "RATELIMITLY_EXAMPLE_SERVER_PORT"
+    "RATELIMITLY_EXAMPLE_SERVER_PORT",
+    "RATELIMITLY_REQUEST_UNIT_MS",
+    "RATELIMITLY_REQUEST_REPLAY_COUNT",
+    "RATELIMITLY_REQUEST_PROFILE"
 )
 $SavedEnvironment = @{}
 foreach ($Name in $EnvironmentNames) {
