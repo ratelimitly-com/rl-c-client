@@ -137,8 +137,13 @@ setup separate from its framework-specific control flow. The runtime:
 - exposes the current request deadline to the host loop.
 
 DNS resolution is synchronous to keep the examples focused. Production event
-loops should normally substitute their asynchronous resolver during startup or
-configuration refresh.
+loops should normally use the core client layer (`r_client.h` +
+`r_client_io.h`) with their own asynchronous resolver instead of the runtime;
+see "Choosing an integration layer" in [docs/api.md](../docs/api.md).
+
+`r_runtime_client_on_readable()` treats malformed and unauthenticated datagrams
+as packet-local noise: it discards them and keeps draining. A non-OK return
+therefore represents a real socket or client failure, not hostile junk traffic.
 
 Set the authentication key before running an example:
 
@@ -154,6 +159,11 @@ zone:
 ```sh
 export RATELIMITLY_TENANT=tenant.example.com
 ```
+
+An override zone must publish SRV target hostnames whose first label encodes
+each server's ID as `s-<decimal>` (see the DNS section of
+[IO_ABSTRACTION.md](../IO_ABSTRACTION.md)); targets without that label are
+silently ignored, and requests return `RCLIENT_ERR_DNS` if none remain.
 
 For local development, bypass DNS and point the runtime at the repository's
 synthetic responder:
@@ -210,7 +220,7 @@ requires all of the following:
   one latency report for the guard's tracker;
 - a resource denial returns `429` (`403` for Lwan) without work or a report;
 - a latency denial returns `503` without work or a report; and
-- an unprotected readiness request causes no RateLimitly traffic.
+- an unprotected readiness request causes no Ratelimitly traffic.
 
 Each server runs in its own process group. The harness drains UDP after the
 response and again during shutdown, so worker processes cannot hide duplicate

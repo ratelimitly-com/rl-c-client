@@ -4,7 +4,11 @@ Download `rl-c-client-v<VERSION>-source.tar.gz` or
 `rl-c-client-v<VERSION>-source.zip` from the matching GitHub release. The
 source release contains only production sources, public/private headers, build
 metadata, and essential documentation. It intentionally excludes tests,
-examples, responders, CI configuration, and generated binaries.
+examples, responders, the perf client, CI configuration, and generated
+binaries. Bundled documentation therefore describes the full repository:
+inside the archive, commands such as `make test` and `make perf_client` and
+links into `tests/` or `examples/` refer to content that only a full checkout
+of the tagged release contains.
 
 OpenSSL libcrypto remains an external dependency. POSIX builds also link the
 resolver and thread libraries; Windows builds link Winsock and DNS APIs.

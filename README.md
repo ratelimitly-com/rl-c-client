@@ -218,7 +218,7 @@ that no usable combined decision was obtained, not that either condition
 rejected the request.
 
 These are logical operations, independent of how the client delivers them.
-Server discovery, request delivery, response selection, retries, and
+Server discovery, request delivery, response selection, replays, and
 report-delivery behavior belong to the API and policy layers documented in
 [docs/api.md](docs/api.md).
 
@@ -364,11 +364,15 @@ RATELIMITLY_AUTH_KEY=rl-aes1... \
 ```
 
 For a credential-free deterministic run against the repository's synthetic
-responder, execute:
+responder, build its prerequisites first, then execute the script:
 
 ```sh
+make test-responder
+make tests/test_latency_tracker
 bash tests/test_latency_tracker.sh
 ```
+
+(Running `make test` also builds both.)
 
 Build the perf client:
 
@@ -417,7 +421,7 @@ The public headers are:
 
 Do not include files from `src/`; they are private implementation details.
 
-Core operations:
+Core client (`r_client.h`):
 
 - `r_client_create` / `r_client_destroy`
 - `r_client_check_rate_limit_async`
@@ -431,7 +435,13 @@ Core operations:
 - `r_client_derive_bucket_id`
 - `r_client_derive_latency_tracker_id`
 - `r_client_parse_auth_key`
+
+Optional admission workflow (`r_client_workflow.h`):
+
 - `r_client_admission_start` / `r_client_admission_report_latency`
+
+Optional public runtime (`r_client_runtime.h`):
+
 - `r_runtime_client_init` / `r_runtime_client_on_readable`
 
 See [docs/api.md](docs/api.md) for the API contract and
@@ -462,11 +472,23 @@ Ratelimitly API key credentials are Bech32 strings:
 - `rl-cookie...`: 32-byte cookie secret
 - `rl-aes...`: 32-byte AES-256-GCM key
 
-Use `rl-aes...` credentials for deployments that require packet
-confidentiality and integrity over an untrusted network. Cookie mode is a
+These are the only credential forms this client accepts; the protocol's
+unauthenticated mode is deliberately not implemented, and any other credential
+is rejected with `RCLIENT_ERR_CONFIG`.
+
+Use `rl-aes...` credentials for deployments that cross an untrusted network:
+AES mode encrypts the request payload and authenticates the entire datagram.
+Packet headers (tenant key ID, request ID, timestamp) stay plaintext by design,
+so an on-path observer can see who is talking, but cannot read or alter
+request contents. Cookie mode is a
 private-network mode: the cookie is sent on the wire and does not authenticate
 the packet contents, so it must be used only where on-path modification and
 capture are outside the deployment threat model.
+
+Command lines and process listings leak credentials: prefer passing keys
+through the environment (as the runtime's `RATELIMITLY_AUTH_KEY` does) over
+`--auth=`-style arguments outside development. See
+[SECURITY.md](SECURITY.md) for full credential-handling guidance.
 
 The encoded key is the source of truth for the tenant key ID, authentication
 type, and quota values. The default production tenant DNS name is
@@ -478,7 +500,11 @@ cfg.tenant.auth.secret = auth_key;
 ```
 
 Set `cfg.tenant.dns_name` only to override production discovery for a custom,
-development, or staging DNS zone. Nonzero `cfg.tenant.key_id` and
+development, or staging DNS zone. An override zone must publish SRV target
+hostnames whose first label encodes each server's ID as `s-<decimal>` (see
+[IO_ABSTRACTION.md](IO_ABSTRACTION.md), DNS) — targets without that label are
+silently ignored, and submissions return `RCLIENT_ERR_DNS` if none remain.
+Nonzero `cfg.tenant.key_id` and
 `cfg.tenant.auth.type` values are optional assertions; when supplied, they
 must match the encoded key. `r_client_parse_auth_key` remains available for
 callers that want to inspect key metadata before creating a client.
@@ -489,7 +515,8 @@ null-terminated credential string, or set it to the encoded string length if
 the credential is not null-terminated. The client decodes the raw 32-byte
 cookie/AES material internally after validating the Bech32 credential.
 
-Do not log `info.secret`; it contains raw credential material for cookie and
+Do not log the `secret` field of the `r_auth_key_info_t` returned by
+`r_client_parse_auth_key`; it contains raw credential material for cookie and
 AES keys.
 
 ## Core event-loop model
@@ -499,8 +526,8 @@ and resolver callbacks may complete synchronously, and the optional public
 runtime performs synchronous DNS during initialization or refresh. A custom
 core integration must:
 
-1. Provide `r_io_ops_t` with UDP send, current time, optional logging, and
-   optional steering feedback.
+1. Provide `r_io_ops_t` with UDP send, current time, and optional steering
+   feedback (the `log` hook is reserved and currently never invoked).
 2. Provide `r_resolver_ops_t` for SRV and A/AAAA lookup.
 3. Call `r_client_check_rate_limit_async` or the borrowed variant.
 4. Schedule the deadline from `r_client_request_deadline_ms`.
@@ -546,7 +573,9 @@ bin/perf_client --unit-ms=20 --replay-count=1 --auth=rl-aes1...
 
 Without `--srv`, the perf client derives
 `c-<key-id>.p0.ratelimitly.com` from `--auth`, matching the library default.
-Use `--srv` only for a custom, development, or staging DNS zone.
+Use `--srv` only for a custom, development, or staging DNS zone. That zone
+must publish conforming `s-<decimal>` SRV targets; otherwise startup has no
+usable membership and requests fail with `RCLIENT_ERR_DNS`.
 
 HA-policy flags:
 
@@ -580,6 +609,13 @@ strategy through `r_request_policy_t`.
 | admission | Application-level use of a resource-request decision to decide whether work should begin. |
 | resource rate limit | Configured capacity for a resource bucket over a time window. |
 | bucket | Stable resource identity whose configured quota is consumed by matching requests. |
+| token | Unit of consumption against a bucket; a request asks for a token count and a grant consumes exactly that count. |
+| token deficit | Per-resource result value: `0` means granted; nonzero is how many requested tokens the bucket could not supply (the whole request is then rejected and nothing is consumed). |
+| actual rate | Per-resource result value: the bucket's currently consumed token count in its window, as reported by the responding server. |
+| server ID | 64-bit server identity carried in responses and encoded in SRV target labels as `s-<decimal>`; its upper bits encode the server start time used for oldest-server preference. |
+| deduplication TTL | Server-side at-most-once window requested by each resource request; duplicates of the same request within it replay the cached response instead of being re-processed. |
+| metrics label | Optional request tag for per-label server-side metrics, bounded by the key's label-cardinality quota; overflowing labels are rewritten to `overflow`. |
+| SBOM | Software bill of materials — the dependency inventory (SPDX format) shipped with release artifacts. |
 | latency guard | A request to shed new work when the tracker's recent service latency reaches its configured threshold. |
 | latency tracker | Server-side sample window identified by a canonical tracker ID and defined by its lifetime, sample count, buffer size, and warm-up threshold. |
 | tenant | Isolated Ratelimitly account identified by metadata encoded in the API key. |
@@ -607,6 +643,11 @@ strategy through `r_request_policy_t`.
 - [`r_client.h`](include/r_client.h), [`r_client_workflow.h`](include/r_client_workflow.h),
   and [`r_client_runtime.h`](include/r_client_runtime.h) are the public source
   contracts behind this overview.
+- [Security policy](SECURITY.md) covers credential handling, the response
+  replay model, and release-integrity verification.
+- [Changelog](CHANGES.md) records release history; [RELEASING.md](RELEASING.md)
+  documents how releases are produced; [CONTRIBUTING.md](CONTRIBUTING.md) and
+  [DESIGN.md](DESIGN.md) cover development.
 - [DNS SRV records](https://www.rfc-editor.org/info/rfc2782) and
   [OpenSSL authenticated-encryption guidance](https://docs.openssl.org/3.0/man3/EVP_EncryptInit/)
   provide the external definitions used above.

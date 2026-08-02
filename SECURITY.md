@@ -23,14 +23,45 @@ API key credentials can contain raw cookie or AES key material. Do not log:
 
 - `r_auth_config_t.secret`
 - `r_auth_key_info_t.secret`
+- the `RATELIMITLY_AUTH_KEY` environment value used by the public runtime
 - packet bytes containing authenticated payloads
+
+Prefer environment-based credential delivery (`RATELIMITLY_AUTH_KEY`) over
+command-line arguments: argv is visible in process listings and shell history.
+Environment values are still readable by same-user processes and are inherited
+by children, so keep credentialed processes isolated and out of CI logs.
+
+The library cleanses its own retained copies of secret material on destroy,
+but it never cleanses caller-owned buffers: zero your `r_auth_key_info_t`
+(for example with `OPENSSL_cleanse`) after inspecting a credential.
 
 ## Authentication Modes
 
 Use AES credentials for deployments that cross an untrusted network. Cookie
 credentials are intended only for private-network deployments where passive
 capture and on-path modification are outside the threat model. Cookie mode does
-not provide packet integrity.
+not provide packet integrity, and it exposes the reusable 32-byte cookie value
+to any passive observer.
+
+AES-256-GCM mode encrypts the request payload (the PDU) and authenticates the
+whole datagram: the plaintext packet header is bound to the GCM tag as
+associated data. Packet headers — the tenant key ID, request ID, timestamp,
+and steering flag — remain readable by any on-path observer in both modes;
+only the payload is confidential, and only in AES mode.
+
+The library generates a fresh random 96-bit GCM nonce for every encryption
+from the OpenSSL CSPRNG. The client performs no cross-instance nonce
+coordination: uniqueness under one AES key is probabilistic, and the
+standard budget for random-nonce GCM is 2^32 encryptions per key, aggregated
+across every client instance sharing the tenant key. Each admission performs
+roughly two to three encryptions with default policy (initial send, replay
+rounds, completion delivery) plus one per latency-report call. High-volume or
+long-lived deployments should rotate tenant AES keys well before the aggregate
+budget is approached.
+
+The same CSPRNG supplies every resource-request and latency-report identity.
+If it reports failure, the operation returns `RCLIENT_ERR_AUTH` and the client
+does not send a packet with a predictable or repeated identity.
 
 ## Response Replay Model
 
@@ -43,6 +74,18 @@ while a matching request is still in flight; after completion, timeout, or
 cancel, later datagrams with that `unique_id` are ignored. Duplicate responses
 from the same server id do not represent responses from additional servers.
 The authenticated timestamp is not used as a wall-clock freshness check.
+
+The binding guarantees above apply to AES credentials. Cookie-mode responses
+are matched only by the plaintext `unique_id` and the echoed cookie value —
+nothing cryptographically binds the server id, timestamp, or payload — so
+on-path response forgery is not prevented in cookie mode, consistent with its
+private-network threat model.
+
+A server-side authentication failure produces no response at all (the server
+blackholes unauthenticated traffic), and the client discards responses that
+fail verification while leaving the request in flight. Both therefore surface
+to the application as `RCLIENT_ERR_TIMEOUT`, never as an authentication error;
+see the Error Codes section of docs/api.md when debugging.
 
 Host integrations must keep request deadlines short and must call
 `r_client_on_timeout` or `r_client_cancel_request` when the application request

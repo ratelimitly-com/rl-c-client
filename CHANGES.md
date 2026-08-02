@@ -1,13 +1,5 @@
 # Changes
 
-## 0.4.0 - 2026-07-26
-
-- Made oldest-trusted-server response selection the default resource-request
-  strategy.
-- Added 20 ms attempt timing and retries through the 300 ms deduplication
-  window when no valid response arrives.
-- Documented the logical-request retry and response-selection behavior.
-
 ## Unreleased
 
 - **Breaking:** replaced the previous wait/quorum/selection/retry policy
@@ -21,6 +13,40 @@
   of request response-selection policy.
 - Renamed the performance client policy options to `--unit-ms` and
   `--replay-count` and removed the former retry-oriented options.
+- Added canonical, cross-client bucket and latency-tracker ID derivation from
+  application names and every setting that defines the corresponding stored
+  server state.
+- Rejected latency-report batches that cannot fit the 1200-byte packet before
+  writing them, closing a stack-buffer overflow in the public report API.
+- Hardened the portable runtime against stale Windows UDP reset notifications
+  and against malformed or unauthenticated datagrams, which are now discarded
+  as packet-local noise while receive draining continues.
+- Made production discovery strictly SRV-based; failed, empty, or
+  non-conforming membership now returns `RCLIENT_ERR_DNS` instead of silently
+  falling back to the tenant address on UDP port 8080.
+- Failed resource-request and latency-report creation without sending when
+  secure request-ID generation fails.
+- Guaranteed that `r_runtime_admission_run_and_report()` invokes protected work
+  at most once per admission, including when latency-report delivery fails.
+- Defined custom `udp_send` hooks as non-reentrant: synchronous loopback input
+  must be queued until the send call returns.
+- Stopped performance-client diagnostics from echoing invalid credentials and
+  corrected production-test redaction for supported `rl-cookie` keys.
+- Expanded the self-contained public documentation with integration-layer,
+  DNS, request-lifecycle, error, quota, security, result, and release contracts.
+- Added conservative production-test policy profiling with a 25 ms unit and
+  three replays while leaving the library defaults unchanged.
+
+## 0.4.0 - 2026-07-26
+
+- Made oldest-trusted-server response selection the default resource-request
+  strategy.
+- Added 20 ms attempt timing and retries through the 300 ms deduplication
+  window when no valid response arrives.
+- Documented the logical-request retry and response-selection behavior.
+
+## 0.3.0 - 2026-07-26
+
 - Added native Ubuntu, Debian, Fedora, macOS, and Windows release artifacts for
   AMD64 and AArch64, including a universal macOS SDK.
 - Added deterministic embeddable source archives, exact-set checksums and
@@ -32,13 +58,13 @@
 
 - Specified a versioned test responder contract for downstream integration
   suites without expanding the production C API. Its required `--listen`
-  endpoint is test-harness process control, not a RateLimitly server option or
+  endpoint is test-harness process control, not a Ratelimitly server option or
   address restriction.
 - Added the responder executable with synthetic AES/cookie authentication,
   deterministic allow/deny/guard/quota/malformed scenarios, JSONL observations,
   latency-report capture, steering feedback, and clean signal shutdown.
 
-## 0.1.0 - 2026-07-15
+## 0.1.0 - 2026-07-13
 
 - Added `r_client_parse_auth_key` as the public API key credential parser.
 - Kept low-level packet and crypto helpers private.
@@ -46,5 +72,6 @@
 - Reworked documentation so public integration guidance is self-contained in
   this repository.
 - Added open-source readiness files and CI.
-- Hardened credential handling by using constant-time cookie comparison,
-  cleansing secret material, and removing unused SHA-256 cookie helper code.
+- Hardened credential handling with constant-time cookie comparison, cleansing
+  of library-retained secret material, and removal of unused SHA-256 cookie
+  helper code.

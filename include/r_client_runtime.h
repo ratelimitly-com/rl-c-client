@@ -31,9 +31,15 @@ typedef struct r_runtime_options {
 /*
  * A small, portable runtime for examples and command-line programs.
  *
- * It owns nonblocking IPv4/IPv6 UDP sockets and performs synchronous DNS.
+ * It owns nonblocking IPv4/IPv6 UDP sockets and performs synchronous
+ * (blocking) DNS during init, refresh, and any submit that finds no servers.
  * Applications with an asynchronous resolver should instead provide their
  * own r_io_ops_t and r_resolver_ops_t to r_client_create().
+ *
+ * Like the core client, the runtime contains no locks: confine each runtime
+ * to one thread or event loop and serialize all calls. The runtime installs
+ * no steering-feedback hook, so server source-port rebind requests are
+ * ignored at this layer.
  */
 typedef struct r_runtime_client {
     r_client_t *handle;

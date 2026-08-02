@@ -101,7 +101,11 @@ int rc = r_client_create(&cfg, &io_ops, &resolver_ops, &client);
 ```
 
 Set `cfg.tenant.dns_name` to override production discovery for custom,
-development, or staging DNS. A nonzero `cfg.tenant.key_id` or
+development, or staging DNS. An override zone must follow the SRV
+target-naming contract — each SRV target hostname's first label encodes the
+server ID as `s-<decimal>` (see IO_ABSTRACTION.md, DNS) — or discovery
+produces no usable servers and submissions return `RCLIENT_ERR_DNS`. A nonzero
+`cfg.tenant.key_id` or
 `cfg.tenant.auth.type` acts as an assertion and must match the encoded key.
 Hosts that need the default name before `r_client_create`, such as a shared DNS
 cache, can call `r_client_format_default_tenant_dns()` with the parsed key ID.
@@ -126,10 +130,22 @@ valid for the duration of the call.
 - `key_id`: identifier embedded in the key
 - `secret`: raw cookie/AES material for authenticated keys
 - `secret_len`: `32`
-- quota fields used by the client for local input clamping/validation
+- five quota fields describing tenant limits encoded in the key
+
+Quota fields and their enforcement points differ per field:
+
+| Quota field | Meaning | Enforcement |
+| --- | --- | --- |
+| `latency_buffer_size_max` | Largest `buffer_size` a guard or report may request. | Client-enforced: a resource request containing an over-quota guard fails at submit with `RCLIENT_ERR_PROTOCOL`; over-quota latency reports are silently filtered before send. |
+| `dedup_ttl_ms_max` | Largest deduplication TTL the key may request. | Client-enforced: request creation fails with `RCLIENT_ERR_CONFIG` when the policy's derived TTL exceeds it (see Resource-Request HA Policy). |
+| `rate_buckets_max` | Maximum distinct buckets the tenant may use. | Server-enforced; the client does not check it. Overruns surface as normal request rejections. |
+| `latency_services_max` | Maximum distinct latency trackers. | Server-enforced; not checked client-side. |
+| `metrics_labels_max` | Maximum distinct metrics labels. | Server-enforced. On overflow the server does not fail the request; it rewrites the label to the fixed label `overflow`. |
 
 The raw secret is sensitive. Use it only for validation or diagnostics that do
-not expose secret bytes.
+not expose secret bytes. The library never cleanses the caller-owned
+`r_auth_key_info_t`; zero it (for example with `OPENSSL_cleanse`) when the
+inspection is done.
 
 Do not pass `r_auth_key_info_t.secret` back into `cfg.tenant.auth.secret`.
 Configuration expects the encoded Bech32 string. The decoded `secret` field is
@@ -150,7 +166,8 @@ both the application name and every setting that defines that state.
 - the exact tracker-name bytes and byte length;
 - `ttl_ms`;
 - `max_samples`;
-- the final effective `buffer_size`; and
+- `buffer_size` exactly as it will be sent on the wire (the client never
+  rewrites the value; over-quota values are rejected or filtered); and
 - `min_sample_threshold`.
 
 The guard's `threshold_ms` is excluded because different guards may evaluate
@@ -161,7 +178,19 @@ Both helpers accept names as an explicit pointer and length, including names
 with embedded NUL bytes. They return `RCLIENT_OK` on success and
 `RCLIENT_ERR_CONFIG` for invalid arguments or a derivation failure. Call them
 again whenever an identity-defining setting changes; reusing an ID with
-different settings is a malformed protocol request.
+different settings corrupts the identity contract for the stored server state
+that the ID names, and the server is not guaranteed to detect or reject the
+mismatch.
+
+The derivation is deterministic and stable across processes, client instances,
+and client implementations: it is BLAKE2s-256 truncated to the first 16 bytes,
+computed over a fixed domain string (`ratelimitly.resource.v1` or
+`ratelimitly.latency-tracker.v1`, including its terminating NUL), the
+little-endian 32-bit name length, the exact name bytes, and each defining
+setting as a little-endian 32-bit value, in the argument order shown above.
+Any other producer following this recipe — another client implementation,
+server-side tooling, a metrics pipeline — derives the same 16-byte ID.
+Known-answer vectors live in `tests/test_public_api.c`.
 
 The workflow API derives both IDs automatically. Low-level callers derive the
 ID after filling the defining fields:
@@ -194,21 +223,91 @@ Required input:
 - optional metrics label string
 - callback
 
+Each `r_resource_request_t` declares its own rate model: the request asks for
+`tokens_requested` tokens from the bucket, and the bucket's capacity is the
+request-declared `rate_limit` tokens per `window_size_ms` window. The limit and
+window are client-declared per request, not server configuration; the server
+tracks consumption per bucket ID. The window's exact accounting model
+(continuous refill versus discrete window boundaries) is server-defined and not
+part of this client contract — treat `rate_limit` per `window_size_ms` as the
+sustained admission rate.
+
+The metrics label tags the request for per-label server-side metrics. Labels
+are counted against the credential's `metrics_labels_max` cardinality quota; on
+overflow the server rewrites the label to the fixed label `overflow` instead of
+rejecting the request. Pass an empty or NULL label to send none.
+`metrics_label_len` of `0` means the label is null-terminated.
+
+Capacity limits: the whole request must fit one 1200-byte datagram. With no
+guards and no label that allows at most 39 resources; guards reduce the budget
+(at most 27 guards with no resources). Oversized requests fail at submit with
+`RCLIENT_ERR_PROTOCOL`.
+
+Submit errors and callback errors are separate channels. When the submit
+function returns a nonzero status, the request was never created: the callback
+will not fire and `*out_req` is not set. `RCLIENT_ERR_CONFIG` (bad arguments or
+an invalid policy), `RCLIENT_ERR_DNS` (no servers known yet), `RCLIENT_ERR_NOMEM`,
+`RCLIENT_ERR_PROTOCOL` (the request does not fit one datagram, or a guard
+exceeds the credential's buffer-size quota), and first-transmission
+`RCLIENT_ERR_IO` all surface this way. `RCLIENT_ERR_AUTH` also surfaces
+synchronously if secure request-ID generation or local packet encryption
+fails; nothing is sent when request-ID generation fails. A first-transmission
+`udp_send` failure aborts the submit after some packets may already have left,
+so a failed submit is not proof that no server received the request;
+resubmitting creates a new request identity.
+
 The callback receives:
 
 - `RCLIENT_OK` and a non-null `r_rate_limit_result_t` on a parsed response
-- an error status such as `RCLIENT_ERR_TIMEOUT`, `RCLIENT_ERR_DNS`, or
-  `RCLIENT_ERR_PROTOCOL` when no usable result is available
+- `RCLIENT_ERR_TIMEOUT` when no acceptable response arrived in time — including
+  every case where servers dropped the request silently (see Error Codes)
+- `RCLIENT_ERR_IO` (or, rarely, `RCLIENT_ERR_AUTH`) when a later replay round
+  failed to transmit
+
+`RCLIENT_ERR_DNS` is never delivered through the callback; it is only a
+synchronous submit result.
 
 `result->success` combines resource and latency-guard decisions: it is true
 only when every resource has zero token deficit and every latency guard passes.
 Inspect `result->resources` and `result->guards` when an application needs to
 distinguish rate denial from latency load shedding.
 
+Result fields:
+
+| Field | Meaning |
+| --- | --- |
+| `resources[i].bucket_id` | The bucket this entry describes. Match entries by ID, not by array index: the arrays mirror the server response, whose count and order may differ from the submitted request. |
+| `resources[i].tokens_deficit` | `0` means the requested tokens were granted. Nonzero is the shortfall: how many of the requested tokens the bucket could not supply. Any nonzero deficit rejects the whole request and consumes nothing. |
+| `resources[i].actual_rate` | The bucket's current consumed-token count in its window, as reported by the responding server. |
+| `guards[i].latency_tracker_id` | The tracker this entry describes; match by ID. |
+| `guards[i].current_latency_ms` | The tracker's current latency estimate on the responding server. |
+| `guards[i].passed` | True when `current_latency_ms` is below the guard's threshold. |
+| `server_id` | The 64-bit ID of the server whose response was selected. Servers place their own ID in the response header. Its upper bits encode the server's start time (see Resource-Request HA Policy). |
+| `steering_feedback` | Wire keep-port flag: `true` means keep the current UDP source port; `false` means the server requested a source-port rebind. See IO_ABSTRACTION.md Steering Feedback. Despite the name, `true` requires no action. |
+
 Pointers inside `r_rate_limit_result_t` are valid only during the callback.
 The `r_client_req_t *` passed to the callback is owned by the client and is not
 valid after the callback returns. Calling `r_client_cancel_request` on that same
 request from inside the completion callback is harmless and treated as a no-op.
+
+## Threading and reentrancy
+
+The client contains no locks. Confine each `r_client_t` — and each
+`r_runtime_client_t` — to one thread or event loop; every call on the same
+client must be serialized. Create one client per worker for multi-threaded
+servers.
+
+From inside a completion callback it is safe to submit new requests, send
+latency reports, and cancel requests (including the completing request itself,
+which is a no-op). Do **not** call `r_client_destroy` from inside a callback:
+the client dereferences internal state after the callback returns, so
+destroying it there is undefined behavior. Defer destruction until the stack
+has unwound to the event loop.
+
+The host's `udp_send` hook is not a reentrant ingress point: it must return
+before the host calls any `r_client_*` API. A synchronous test transport must
+queue a looped-back response and deliver it with `r_client_on_datagram()` only
+after `udp_send` has unwound.
 
 ## Latency Guards and Independent Reports
 
@@ -276,7 +375,7 @@ values needed by later work.
 
 ### Reporting measured work
 
-Measure the protected operation rather than the RateLimitly request. Wall-clock
+Measure the protected operation rather than the Ratelimitly request. Wall-clock
 adjustments must not change duration, so use `CLOCK_MONOTONIC` or the host
 event loop's monotonic duration clock.
 
@@ -315,7 +414,14 @@ calls; 30 reports per call fits under either auth mode.
 Reports whose `buffer_size` exceeds the credential quota are filtered. If all
 reports are filtered, the function returns `RCLIENT_OK` without sending. Other
 failures include `RCLIENT_ERR_DNS` when no server is available and
-`RCLIENT_ERR_IO` when the UDP send hook fails.
+`RCLIENT_ERR_IO` when the UDP send hook fails. Secure request-ID generation or
+local encryption failure returns `RCLIENT_ERR_AUTH`; request-ID failure sends
+nothing.
+
+Each call broadcasts one datagram — carrying every surviving report, at most
+30 (cookie mode) or 31 (AES mode) per call — to every known server, under a
+fresh request identity per call. The send loop stops at the first failing
+`udp_send`, so `RCLIENT_ERR_IO` can mean partial delivery across servers.
 
 See the self-contained
 [`examples/latency_tracker/`](../examples/latency_tracker/) folder for complete
@@ -340,16 +446,55 @@ one latency report after admitted work.
 
 `r_runtime_admission_run_and_report()` performs the last step for synchronous
 protected work. It measures with the runtime's monotonic clock and never reports
-denied, cancelled, failed, or previously reported work. HTTP integrations whose
-protected operation is asynchronous should record a monotonic start time and
-report from their own completion callback instead.
+denied, cancelled, failed, or previously reported work. It marks the protected
+work as executed immediately before invoking it, so one admission can execute
+that work at most once. Every later call returns `RCLIENT_ERR_CONFIG`, including
+when the first call's latency-report send failed. If successful work was measured
+but its report failed, retain `out_observed_latency_ms` and retry only
+`r_client_admission_report_latency()` with that value; never rerun the protected
+operation. HTTP integrations whose protected operation is asynchronous should
+record a monotonic start time and report from their own completion callback
+instead. `r_client_admission_cancel` suppresses the completion callback,
+matching core-client cancel semantics.
 
-The portable runtime requires `RATELIMITLY_AUTH_KEY` through
-`r_runtime_options_from_env()`. It derives the production tenant DNS name from
-the key. Optional `RATELIMITLY_TENANT` overrides that default. The optional
-`RATELIMITLY_EXAMPLE_SERVER_HOST`/`RATELIMITLY_EXAMPLE_SERVER_PORT` pair selects
-an explicit development endpoint; set both or neither. Runtime-owned socket
-handles remain valid until `r_runtime_client_destroy()`.
+`r_client_admission_config_defaults()` fills: window 1000 ms, rate limit 100,
+1 token, guard threshold 100 ms, tracker `ttl_ms` 10000, `max_samples` 100,
+`buffer_size` 32, `min_sample_threshold` 5, metrics label
+`rl-c-client-example`. Replace the names and the label with stable application
+identifiers before production use.
+
+## Public runtime
+
+`r_client_runtime.h` wraps the core client with owned, nonblocking IPv4/IPv6
+UDP sockets and synchronous DNS discovery, for programs that do not bring an
+event loop of their own. Contracts that differ from the core client:
+
+- Configuration comes from the environment via `r_runtime_options_from_env()`:
+  `RATELIMITLY_AUTH_KEY` is required; optional `RATELIMITLY_TENANT` overrides
+  the key-derived production DNS name (the SRV target-naming contract in
+  IO_ABSTRACTION.md applies to the override zone); the optional
+  `RATELIMITLY_EXAMPLE_SERVER_HOST`/`RATELIMITLY_EXAMPLE_SERVER_PORT` pair
+  selects one explicit development endpoint — set both or neither. The fixed
+  endpoint is given the synthetic identity `s-1.ratelimitly-example.invalid`
+  (server ID 1), so it only works against a responder that claims server ID 1,
+  such as the bundled test responder's default.
+- DNS resolution is **synchronous and blocking** on the calling thread, during
+  initialization, periodic refresh, and any submit that finds zero servers.
+  Discovery keeps at most 32 SRV records per refresh. Servers with their own
+  asynchronous resolver should use the core I/O interfaces instead.
+- `r_runtime_client_on_readable()` drains one ready socket. Malformed and
+  unauthenticated datagrams are discarded as packet-local noise and draining
+  continues; they are not returned to the host. Non-OK returns are reserved for
+  real socket or client failures.
+- The runtime installs **no steering-feedback hook**: server source-port
+  rebind requests are ignored at this layer. Integrations that need steering
+  must use the core client.
+- Runtime-owned socket handles remain valid until
+  `r_runtime_client_destroy()`. On Windows the runtime performs
+  `WSAStartup`/`WSACleanup` as part of init/destroy; hosts managing their own
+  Winsock lifetime should account for the reference counts.
+- Threading follows the core rule: one runtime per thread or loop, calls
+  serialized.
 
 The example runtime can override the resource-request scheduler without
 changing the library default:
@@ -385,6 +530,29 @@ The host owns network receive and timers:
 - call `r_client_on_timeout` when the host timer fires
 - call `r_client_cancel_request` if the HTTP/request context is abandoned
 
+**Completion is signaled solely by the completion callback firing during a
+`r_client_on_datagram` or `r_client_on_timeout` call.** Both functions return
+`RCLIENT_OK` on paths that complete — and free — the request, so their return
+values carry no liveness information. Track a per-request flag set by the
+callback, and re-check it after every datagram and timeout delivery: if the
+callback fired, the `r_client_req_t *` is already invalid and must not be
+passed to `r_client_request_deadline_ms`, `r_client_on_timeout`, or
+`r_client_cancel_request` again. If the callback did not fire, the event was
+nonterminal — re-query the deadline and re-arm the timer. Calling
+`r_client_on_timeout` before the deadline is a safe no-op.
+
+Per-datagram return values from `r_client_on_datagram` are informational and
+expected under normal operation on an open UDP port: `RCLIENT_ERR_PROTOCOL`
+for malformed datagrams or AES responses that fail tag verification,
+`RCLIENT_ERR_AUTH` for a wrong auth TLV type or cookie mismatch, and
+`RCLIENT_OK` for valid-looking datagrams that match no in-flight request
+(late, duplicate, or filtered responses are ignored silently). Any off-path
+sender can produce the error returns, so treat them as counters to log —
+never as fatal conditions. The affected request always remains in flight.
+Other non-OK returns, such as `RCLIENT_ERR_NOMEM`, represent client failures.
+The datagram source address is not part of response acceptance; responses are
+matched by authenticated request ID and server ID.
+
 `r_io_ops_t.now_ms`, `r_client_request_deadline_ms`, and the `now_ms` passed to
 `r_client_on_timeout` use the same Unix-epoch millisecond clock domain. This is
 separate from the monotonic duration clock used to measure protected-work
@@ -395,7 +563,7 @@ much of the request policy was consumed; it is not the protected-operation
 latency sample, which remains a separate monotonic measurement.
 
 A valid non-oldest response can move the next deadline earlier, from the replay
-deadline to the response-preference deadline. Hosts must therefore re-arm from
+deadline to that round's preference deadline. Hosts must therefore re-arm from
 the value returned after processing that datagram rather than retaining the
 previous timer.
 
@@ -434,11 +602,23 @@ overriding individual fields.
 Both schedules use `r_ha_schedule_t`. A fixed schedule always uses
 `initial_units`; a linear schedule adds `growth.linear_step_units` per round;
 and an exponential schedule multiplies by
-`growth.exponential_factor` per round. Every schedule is capped by
-`max_units`. The policy requires positive replay gaps and
-`P(k) <= B(k)` for every transmission round. `replay_count` must not exceed
-`R_CLIENT_HA_MAX_REPLAY_COUNT`; the credential TTL normally imposes a much
-smaller practical bound.
+`growth.exponential_factor` per round. Growth beyond `max_units` is capped at
+`max_units` — but `initial_units` itself must not exceed `max_units`; that is a
+validity error, not a cap. The full validity rules, all enforced with
+`RCLIENT_ERR_CONFIG` at request submission (not at `r_client_create`):
+
+- `unit_ms > 0`, and `replay_gap.initial_units > 0` (a preference schedule may
+  start at zero);
+- `initial_units <= max_units` for both schedules;
+- a linear schedule needs `growth.linear_step_units >= 1`;
+- an exponential schedule needs `growth.exponential_factor >= 2`;
+- `P(k) <= B(k)` for every transmission round;
+- `final_preference_units <= final_receive_units`;
+- `replay_count <= R_CLIENT_HA_MAX_REPLAY_COUNT` (65535); the credential TTL
+  normally imposes a much smaller practical bound.
+
+Because the defaults set `max_units = 1`, raising `replay_gap.initial_units`
+alone fails validation — raise `max_units` together with it.
 
 For transmission rounds `0..N`, the complete horizon is:
 
@@ -446,11 +626,31 @@ For transmission rounds `0..N`, the complete horizon is:
 H = U * (sum(B(k), k = 0..N) + F)
 ```
 
-The strategy uses `H` as its wire deduplication TTL. Request creation fails
+The strategy uses `H` as its wire deduplication TTL: the request asks servers
+to treat any duplicate of this request (same request identity) received within
+`H` as already answered, replaying the cached response instead of processing it
+again. This server-side at-most-once window is what makes replay rounds and
+completion delivery safe — every transmission of one logical request carries
+the same identity. The guarantee is conditional: while a server's deduplication
+subsystem is degraded, duplicate suppression may lapse and a replayed request
+can be processed twice. Integrations for which double consumption is costly
+should treat replays (`replay_count > 0`) as a throughput/consistency
+trade-off.
+
+Request creation fails
 with `RCLIENT_ERR_CONFIG` if any schedule is invalid, arithmetic overflows,
 `H` cannot be represented by the wire field, or `H` exceeds the API key's
 `dedup_ttl_ms_max`. All deadlines are absolute, and the client never initiates
 a replay or completion-delivery send at or after the deduplication deadline.
+
+"Oldest server" — the preference relation used throughout this policy — is
+decided by decoded server start time: a server's 64-bit ID encodes its start
+time in its upper bits (`start_seconds_since_2025 = server_id >> 23`, epoch
+2025-01-01 00:00:00 UTC), and lower start time wins, with ties broken by the
+numerically lower full ID. Server IDs come from DNS: each SRV target
+hostname's first label must encode the ID as `s-<decimal>` (see
+IO_ABSTRACTION.md, DNS). Non-conforming targets are not members, and submission
+fails with `RCLIENT_ERR_DNS` when discovery has no conforming target.
 
 At round zero the client sends to the immutable request membership snapshot.
 A valid response from the oldest server completes immediately. Other valid
@@ -487,28 +687,52 @@ DNS refresh pacing is client configuration rather than request-selection
 policy. Set `cfg.dns_refresh.refresh_interval_ms`,
 `cfg.dns_refresh.forced_refresh_min_interval_ms`, or
 `cfg.dns_refresh.forced_refresh_jitter_ms` before `r_client_create`. Zero
-selects the documented defaults of 300 seconds for periodic refresh and one
-second for the minimum forced-refresh interval; jitter defaults to zero.
+selects the defaults of 300 seconds for periodic refresh and one
+second for the minimum forced-refresh interval; jitter defaults to zero and,
+when set, adds a random extra delay on top of the minimum forced-refresh
+interval. SRV record TTLs, when provided, cap the periodic interval lower.
+
+Refresh is driven by client activity, not by a background timer: submitting a
+request or report checks the interval, and a submit or report that finds zero
+known servers both returns `RCLIENT_ERR_DNS` synchronously and forces a
+refresh attempt. `r_client_create` starts the first discovery but never fails
+because of it — with an asynchronous resolver, early submits fail with
+`RCLIENT_ERR_DNS` until the first discovery completes, then self-heal; treat
+that warm-up as expected. Failed refreshes do not arm the pacing throttle, so
+retrying submits during an outage re-attempts resolution each time. With the
+public runtime's synchronous resolver, each such failing submit performs
+blocking DNS on the calling thread.
 
 ## Error Codes
 
 All errors are negative:
 
-- `RCLIENT_ERR_IO`
-- `RCLIENT_ERR_TIMEOUT`
-- `RCLIENT_ERR_PROTOCOL`
-- `RCLIENT_ERR_AUTH`
-- `RCLIENT_ERR_DNS`
-- `RCLIENT_ERR_CONFIG`
-- `RCLIENT_ERR_NOMEM`
+| Code | Where it surfaces | Causes |
+| --- | --- | --- |
+| `RCLIENT_ERR_TIMEOUT` | Completion callback | No acceptable response before the deadline. This is also the **only** signature of every server-side rejection that produces no reply: wrong or unregistered credentials, a wrong key ID, a stale request timestamp from a skewed clock, and tampered responses the client discarded. Servers deliberately drop unauthenticated traffic without responding. |
+| `RCLIENT_ERR_DNS` | Submit/report return only | No servers currently known (startup warm-up, failed/empty/non-conforming SRV discovery, DNS outage, or an over-long tenant DNS name). Never delivered through the callback. |
+| `RCLIENT_ERR_IO` | Submit/report return, callback (replay rounds), or public-runtime return | A UDP send/socket operation or runtime clock failed. |
+| `RCLIENT_ERR_PROTOCOL` | Submit/report return, or raw `r_client_on_datagram` return | At submit/report: the packet does not fit one 1200-byte datagram, or a guard's `buffer_size` exceeds the credential quota. From raw ingress: a malformed datagram or an AES response that failed tag verification (informational; the request stays in flight). The public runtime discards this packet-local noise. |
+| `RCLIENT_ERR_AUTH` | Submit/report return, replay callback, or raw `r_client_on_datagram` return | Secure request-ID generation or local encryption failed; or raw ingress saw the wrong auth TLV type or a cookie mismatch. Request-ID failure sends nothing. A *server-side* authentication failure never surfaces as `RCLIENT_ERR_AUTH` — it surfaces as `RCLIENT_ERR_TIMEOUT` (see above). The public runtime discards packet-local auth errors. |
+| `RCLIENT_ERR_CONFIG` | Submit / create / helper returns | Invalid arguments, invalid API key credentials, mismatched key-ID/type assertions, and invalid HA-policy schedules (including a derived TTL above `dedup_ttl_ms_max`). |
+| `RCLIENT_ERR_NOMEM` | Submit/report/create return, or raw ingress return | Allocation failure. |
 
-`RCLIENT_ERR_CONFIG` covers invalid arguments and invalid API key credentials.
+Debugging rule of thumb: 100% timeouts with working networking and DNS means
+suspect the credential, the key ID, or the host clock — not packet loss.
 
 ## API boundary
 
 The public surface consists of `include/r_client.h`, `include/r_client_io.h`,
-`include/r_client_workflow.h`, and `include/r_client_runtime.h`. Internal
+`include/r_client_workflow.h`, `include/r_client_runtime.h`, and the support
+header `include/r_client_export.h` (the `RCLIENT_API` export macro, included
+by the others; Windows consumers of the shared `rclient.dll` outside CMake
+must define `RCLIENT_SHARED` to get dllimport linkage). Internal
 protocol builders, crypto helpers, and packet parsers are implementation
 details. Until the project declares a stable post-MVP API, releases may remove
 or replace public declarations directly instead of carrying aliases or legacy
 execution paths.
+
+Related documents: [SECURITY.md](../SECURITY.md) for credential handling and
+the response replay model, [IO_ABSTRACTION.md](../IO_ABSTRACTION.md) for the
+host contract, [EMBEDDING.md](../EMBEDDING.md) for source integration, and
+[CHANGES.md](../CHANGES.md) for release history.

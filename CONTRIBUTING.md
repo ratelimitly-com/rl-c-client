@@ -8,8 +8,9 @@ public API small, documented, and usable from a clean checkout.
 Install:
 
 - C11 compiler
-- `make`
+- `make` and `bash`
 - OpenSSL development headers and libcrypto
+- `python3` (required by the documentation-quality checks in `make test`)
 
 Run:
 
@@ -22,10 +23,11 @@ make perf_client
 
 ## Public API Rule
 
-Consumers must include only:
+Consumers must include only the public headers under `include/`:
 
-- `include/r_client.h`
-- `include/r_client_io.h`
+- `include/r_client.h` and `include/r_client_io.h` (core)
+- `include/r_client_workflow.h` (optional admission workflow)
+- `include/r_client_runtime.h` (optional public runtime)
 
 Do not add examples, tests, or downstream integrations that include `src/*.h`.
 If an integration needs something from `src/`, promote a narrow wrapper to the
