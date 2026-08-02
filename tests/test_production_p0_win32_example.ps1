@@ -137,7 +137,7 @@ function Protect-DiagnosticText {
     $Protected = $Text.Replace($script:AuthKey, "[REDACTED_AUTH_KEY]")
     $Protected = [regex]::Replace(
         $Protected,
-        "rl-(?:aes|hmac)[A-Za-z0-9_-]+",
+        "rl-(aes|cookie)[A-Za-z0-9_-]+",
         "[REDACTED_AUTH_KEY]",
         [Text.RegularExpressions.RegexOptions]::IgnoreCase
     )

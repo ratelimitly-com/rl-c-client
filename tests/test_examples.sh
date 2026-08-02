@@ -206,7 +206,8 @@ fi
 for redaction_runner in \
   "$PRODUCTION_P0_ONE_SHOT_RUNNER" \
   "$PRODUCTION_P0_HTTP_RUNNER" \
-  "$PRODUCTION_P0_WIN32_WINE_RUNNER"; do
+  "$PRODUCTION_P0_WIN32_WINE_RUNNER" \
+  "$PRODUCTION_P0_WIN32_NATIVE_RUNNER"; do
   grep -Fq -- 'rl-(aes|cookie)' "$redaction_runner" \
     || fail "$(basename "$redaction_runner") does not redact rl-cookie credentials"
   if grep -Fq -- 'rl-(aes|hmac)' "$redaction_runner"; then
