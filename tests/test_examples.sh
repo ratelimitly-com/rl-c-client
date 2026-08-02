@@ -172,6 +172,8 @@ for required_text in \
   'MinGW/Wine' \
   '37 ms' \
   'positive token deficit' \
+  'three internal request replays' \
+  '100 ms' \
   'does not prove that production accepted' \
   'kqueue and libdispatch remain local-only' \
   'server binary' \
@@ -345,6 +347,15 @@ grep -Eq -- \
   '^[[:space:]]*timeout --signal=TERM --kill-after=1s 29s ' \
   "$PRODUCTION_P0_ONE_SHOT_RUNNER" \
   || fail "one-shot P0 runner lacks its hard 30-second deadline"
+grep -Fq -- 'ONE_SHOT_REPLAY_COUNT=3' \
+  "$ROOT/tests/build_linux_one_shot_examples.sh" \
+  || fail "one-shot build does not select three internal replays"
+grep -Fq -- '-DR_CLIENT_DEFAULT_REPLAY_COUNT=$ONE_SHOT_REPLAY_COUNT' \
+  "$ROOT/tests/build_linux_one_shot_examples.sh" \
+  || fail "one-shot build does not apply its replay-count override"
+grep -Fq -- 'tests/test_public_api' \
+  "$ROOT/tests/build_linux_one_shot_examples.sh" \
+  || fail "one-shot build does not verify its compiled request policy"
 linux_http_job=$(sed -n \
   '/^  linux-http-examples:/,/^  win32-example:/p' \
   "$CI_WORKFLOW")

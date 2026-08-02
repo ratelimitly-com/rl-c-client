@@ -169,6 +169,14 @@ This layer deliberately does not force every shared production bucket into a
 denial state. Deterministic tests cover that branch per example without making
 cloud tests race or leave disruptive counters behind.
 
+The Linux one-shot job uses three internal request replays in its example-only
+client library instead of the normal default of one. With the fixed 20 ms
+scheduling unit and one final receive unit, this changes the maximum request
+lifetime from `(1 + 2) * 20 ms = 60 ms` to `(3 + 2) * 20 ms = 100 ms`. The
+runner still executes each example process once and validates its output
+normally; release artifacts and other client builds retain the default
+one-replay policy.
+
 ### Dedicated production protocol layer
 
 [`tests/production_p0_probe.c`](../tests/production_p0_probe.c) uses names scoped
