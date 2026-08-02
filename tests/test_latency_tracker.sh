@@ -21,7 +21,6 @@ trap cleanup EXIT
   "--listen=127.0.0.1:$PORT" \
   --scenario=guard-pass \
   --auth=aes \
-  --max-packets=2 \
   >"$TMP_DIR/responder.out" 2>"$TMP_DIR/responder.err" &
 RESPONDER_PID=$!
 
@@ -44,8 +43,13 @@ RATELIMITLY_EXAMPLE_SERVER_PORT="$PORT" \
 RATELIMITLY_EXAMPLE_WORK_MS=1 \
   "$ROOT/tests/test_latency_tracker" >"$TMP_DIR/example.out"
 
+sleep 0.1
+kill -0 "$RESPONDER_PID" 2>/dev/null
+kill -TERM "$RESPONDER_PID"
 wait "$RESPONDER_PID"
 RESPONDER_PID=""
+rate_count="$(grep -c '"event":"rate_request"' "$TMP_DIR/responder.out" || true)"
+((rate_count >= 1 && rate_count <= 4))
 grep -q '"event":"rate_request".*"guards":1.*"resources":1' \
   "$TMP_DIR/responder.out"
 grep -q '"event":"latency_report".*"reports":1' "$TMP_DIR/responder.out"
@@ -60,7 +64,6 @@ grep -q '^latency reported: service=example-inventory-backend observed=' \
   "--listen=127.0.0.1:$DENY_PORT" \
   --scenario=guard-deny \
   --auth=aes \
-  --max-packets=1 \
   >"$TMP_DIR/deny-responder.out" 2>"$TMP_DIR/deny-responder.err" &
 RESPONDER_PID=$!
 
@@ -83,8 +86,13 @@ RATELIMITLY_EXAMPLE_SERVER_PORT="$DENY_PORT" \
 RATELIMITLY_EXAMPLE_WORK_MS=1 \
   "$ROOT/tests/test_latency_tracker" >"$TMP_DIR/deny-example.out"
 
+sleep 0.1
+kill -0 "$RESPONDER_PID" 2>/dev/null
+kill -TERM "$RESPONDER_PID"
 wait "$RESPONDER_PID"
 RESPONDER_PID=""
+rate_count="$(grep -c '"event":"rate_request"' "$TMP_DIR/deny-responder.out" || true)"
+((rate_count >= 1 && rate_count <= 4))
 grep -q '"event":"rate_request".*"guards":1.*"resources":1' \
   "$TMP_DIR/deny-responder.out"
 if grep -q '"event":"latency_report"' "$TMP_DIR/deny-responder.out"; then

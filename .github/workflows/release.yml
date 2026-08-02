@@ -21,6 +21,11 @@ on:
 permissions:
   contents: read
 
+env:
+  RATELIMITLY_REQUEST_UNIT_MS: "25"
+  RATELIMITLY_REQUEST_REPLAY_COUNT: "3"
+  RATELIMITLY_REQUEST_PROFILE: "1"
+
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -137,6 +142,7 @@ jobs:
           python3 tests/test_dependency_sbom.py
           python3 tests/test_cmake_minimum.py
           python3 tests/test_cmake_options.py
+          python3 tests/test_github_actions_request_profile.py
           python3 tests/test_project_version.py
           python3 tests/test_macos_release.py
           python3 tests/test_windows_x64_release.py
@@ -243,6 +249,9 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/release-linux"
           docker run --rm \
+            --env RATELIMITLY_REQUEST_UNIT_MS \
+            --env RATELIMITLY_REQUEST_REPLAY_COUNT \
+            --env RATELIMITLY_REQUEST_PROFILE \
             --env SOURCE_DATE_EPOCH \
             --volume "$GITHUB_WORKSPACE:/source:ro" \
             --volume "$RUNNER_TEMP/release-linux:/output" \
@@ -256,6 +265,9 @@ jobs:
           PROFILE: ${{ matrix.profile }}
         run: |
           docker run --rm \
+            --env RATELIMITLY_REQUEST_UNIT_MS \
+            --env RATELIMITLY_REQUEST_REPLAY_COUNT \
+            --env RATELIMITLY_REQUEST_PROFILE \
             --volume "$GITHUB_WORKSPACE:/source:ro" \
             --volume "$RUNNER_TEMP/release-linux:/packages:ro" \
             --workdir /source \

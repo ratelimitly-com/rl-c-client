@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
-# Shared trusted-main production profile. The release/default client policy
-# remains U=20 ms with one replay; production CI deliberately allows more
-# network variance and records how much of the scheduler window was consumed.
+# Shared GitHub Actions request profile. Both workflows set these values for
+# every test process; production runners also apply them explicitly so direct
+# local invocations reproduce Actions and record scheduler-window consumption.
 production_p0_apply_request_profile() {
   export RATELIMITLY_REQUEST_UNIT_MS=25
   export RATELIMITLY_REQUEST_REPLAY_COUNT=3

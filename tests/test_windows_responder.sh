@@ -131,7 +131,6 @@ if [[ -n "$WINDOWS_RUNNER" ]]; then
       "--listen=127.0.0.1:$PORT" \
       --scenario=guard-pass \
       --auth=aes \
-      --max-packets=2 \
       >"$TMP_DIR/responder.out" 2>"$TMP_DIR/responder.err" &
   RESPONDER_PID=$!
 
@@ -171,17 +170,26 @@ if [[ -n "$WINDOWS_RUNNER" ]]; then
     exit 1
   fi
 
+  # Keep the responder alive for a bounded post-client drain so all legal
+  # copies from the initial send plus three-replay Actions profile are visible.
+  sleep 0.2
+  kill -0 "$RESPONDER_PID" 2>/dev/null \
+    || { echo "test_windows_responder: PE responder exited early" >&2; exit 1; }
+  kill -TERM "$RESPONDER_PID"
   responder_status=0
   wait_with_deadline "$RESPONDER_PID" 5 || responder_status=$?
   RESPONDER_PID=""
-  if [[ "$responder_status" -ne 0 ]]; then
+  # A native responder handles SIGTERM and returns zero. Wine may terminate
+  # its host process first and surface the intentional SIGTERM as 128 + 15.
+  if [[ "$responder_status" -ne 0 && "$responder_status" -ne 143 ]]; then
     sed -n '1,100p' "$TMP_DIR/responder.err" >&2
     echo "test_windows_responder: PE responder exited $responder_status" >&2
     exit 1
   fi
 
-  [[ "$(grep -c '"event":"rate_request"' "$TMP_DIR/responder.out")" -eq 1 ]] \
-    || { echo "test_windows_responder: expected one rate request" >&2; exit 1; }
+  rate_count="$(grep -c '"event":"rate_request"' "$TMP_DIR/responder.out" || true)"
+  ((rate_count >= 1 && rate_count <= 4)) \
+    || { echo "test_windows_responder: expected 1..4 rate requests; observed $rate_count" >&2; exit 1; }
   [[ "$(grep -c '"event":"latency_report"' "$TMP_DIR/responder.out")" -eq 1 ]] \
     || { echo "test_windows_responder: expected one latency report" >&2; exit 1; }
   grep -Fq '"reports":1' "$TMP_DIR/responder.out" \

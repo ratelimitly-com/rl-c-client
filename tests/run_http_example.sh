@@ -217,27 +217,31 @@ assert_responder_output() {
   local scenario=$1
   local output="$TMP_DIR/$scenario/responder.out"
   local expected_reports=0
+  local rate_count
   local rate_line
   [[ "$scenario" == "guard-pass" ]] && expected_reports=1
 
-  [[ "$(count_events rate_request "$output")" -eq 1 ]] \
-    || fail_case "$scenario" "expected exactly one rate request"
+  rate_count="$(count_events rate_request "$output")"
+  ((rate_count >= 1 && rate_count <= 4)) \
+    || fail_case "$scenario" \
+      "expected one initial rate request and at most three replays; observed $rate_count"
   [[ "$(count_events latency_report "$output")" -eq "$expected_reports" ]] \
     || fail_case "$scenario" \
       "expected $expected_reports latency report(s)"
   [[ "$(count_events input_rejected "$output")" -eq 0 ]] \
     || fail_case "$scenario" "responder rejected an input packet"
-  rate_line="$(grep '"event":"rate_request"' "$output")"
-  grep -Fq '"guards":1,"resources":1' <<<"$rate_line" \
-    || fail_case "$scenario" "request omitted resource or latency admission"
-  grep -Fq "\"label\":\"$METRICS_LABEL\"" <<<"$rate_line" \
-    || fail_case "$scenario" "request used wrong metrics label"
-  grep -Fq "$TRACKER_JSON" <<<"$rate_line" \
-    || fail_case "$scenario" "tracker configuration changed"
-  grep -Fq '"guard_threshold_ms":100' <<<"$rate_line" \
-    || fail_case "$scenario" "latency threshold changed"
-  grep -Fq "\"disposition\":\"$scenario\"" <<<"$rate_line" \
-    || fail_case "$scenario" "responder observed wrong scenario"
+  while IFS= read -r rate_line; do
+    grep -Fq '"guards":1,"resources":1' <<<"$rate_line" \
+      || fail_case "$scenario" "request omitted resource or latency admission"
+    grep -Fq "\"label\":\"$METRICS_LABEL\"" <<<"$rate_line" \
+      || fail_case "$scenario" "request used wrong metrics label"
+    grep -Fq "$TRACKER_JSON" <<<"$rate_line" \
+      || fail_case "$scenario" "tracker configuration changed"
+    grep -Fq '"guard_threshold_ms":100' <<<"$rate_line" \
+      || fail_case "$scenario" "latency threshold changed"
+    grep -Fq "\"disposition\":\"$scenario\"" <<<"$rate_line" \
+      || fail_case "$scenario" "responder observed wrong scenario"
+  done < <(grep '"event":"rate_request"' "$output")
 
   if [[ "$scenario" == "guard-pass" ]]; then
     local latency_line
