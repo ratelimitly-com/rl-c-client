@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MATRIX="$ROOT/tests/linux-one-shot-examples.txt"
+ONE_SHOT_REPLAY_COUNT=3
 
 if [[ "$(uname -s)" != "Linux" ]]; then
   echo "build_linux_one_shot_examples: SKIP (Linux-only matrix)"
@@ -11,8 +12,9 @@ fi
 
 make -C "$ROOT" clean
 make -C "$ROOT" \
-  CFLAGS='-O2 -Wall -Wextra -Werror -std=c11' \
-  librclient.a test-responder
+  CFLAGS="-O2 -Wall -Wextra -Werror -std=c11 -DR_CLIENT_DEFAULT_REPLAY_COUNT=$ONE_SHOT_REPLAY_COUNT" \
+  librclient.a test-responder tests/test_public_api
+"$ROOT/tests/test_public_api"
 
 while IFS='|' read -r name binary _; do
   [[ -z "$name" || "$name" == \#* ]] && continue

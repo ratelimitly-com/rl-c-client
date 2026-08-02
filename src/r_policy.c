@@ -2,13 +2,21 @@
 
 #include <string.h>
 
+#ifndef R_CLIENT_DEFAULT_REPLAY_COUNT
+#define R_CLIENT_DEFAULT_REPLAY_COUNT 1u
+#endif
+
+#if R_CLIENT_DEFAULT_REPLAY_COUNT > R_CLIENT_HA_MAX_REPLAY_COUNT
+#error "R_CLIENT_DEFAULT_REPLAY_COUNT exceeds R_CLIENT_HA_MAX_REPLAY_COUNT"
+#endif
+
 void r_client_default_request_policy(r_request_policy_t *out_policy) {
     if (!out_policy) {
         return;
     }
     memset(out_policy, 0, sizeof(*out_policy));
     out_policy->unit_ms = 20u;
-    out_policy->replay_count = 1u;
+    out_policy->replay_count = R_CLIENT_DEFAULT_REPLAY_COUNT;
     out_policy->replay_gap.kind = R_HA_SCHEDULE_FIXED;
     out_policy->replay_gap.initial_units = 1u;
     out_policy->replay_gap.max_units = 1u;
