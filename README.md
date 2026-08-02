@@ -503,7 +503,8 @@ Set `cfg.tenant.dns_name` only to override production discovery for a custom,
 development, or staging DNS zone. An override zone must publish SRV target
 hostnames whose first label encodes each server's ID as `s-<decimal>` (see
 [IO_ABSTRACTION.md](IO_ABSTRACTION.md), DNS) — targets without that label are
-silently ignored. Nonzero `cfg.tenant.key_id` and
+silently ignored, and submissions return `RCLIENT_ERR_DNS` if none remain.
+Nonzero `cfg.tenant.key_id` and
 `cfg.tenant.auth.type` values are optional assertions; when supplied, they
 must match the encoded key. `r_client_parse_auth_key` remains available for
 callers that want to inspect key metadata before creating a client.
@@ -572,7 +573,9 @@ bin/perf_client --unit-ms=20 --replay-count=1 --auth=rl-aes1...
 
 Without `--srv`, the perf client derives
 `c-<key-id>.p0.ratelimitly.com` from `--auth`, matching the library default.
-Use `--srv` only for a custom, development, or staging DNS zone.
+Use `--srv` only for a custom, development, or staging DNS zone. That zone
+must publish conforming `s-<decimal>` SRV targets; otherwise startup has no
+usable membership and requests fail with `RCLIENT_ERR_DNS`.
 
 HA-policy flags:
 

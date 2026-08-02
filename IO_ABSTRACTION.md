@@ -93,21 +93,12 @@ target carries an ID, responses claiming a server ID outside the SRV-derived
 set are **silently dropped**. The ID also encodes the server's start time
 (`start_seconds_since_2025 = server_id >> 23`), which drives the HA policy's
 oldest-server preference (see docs/api.md). A zone published without this
-convention yields no usable servers and no diagnostic — every request times
-out. The client ignores SRV `priority` and `weight`; record order does not
-matter.
+convention yields no usable servers. The client ignores SRV `priority` and
+`weight`; record order does not matter.
 
-**Address fallback:** when SRV discovery produces zero usable targets, the
-client instead resolves the configured DNS name itself via A/AAAA and sends to
-UDP port 8080. In this mode no server IDs are known, so response filtering and
-oldest-server preference are disabled and the first valid response wins. Treat
-traffic to port 8080 of the tenant host as the signature of a missing or
-mis-labeled SRV zone. (The protocol specification does not treat direct
-A/AAAA records as a substitute for the SRV layer; this fallback is a
-client-side convenience for development setups.)
-
-Discovery is SRV-only. A failed or empty SRV lookup does not fall back to the
-configured tenant name on a hard-coded UDP port; submissions return
+Discovery is SRV-only. A failed or empty SRV lookup, or one containing no
+conforming targets, does not fall back to the configured tenant name on a
+hard-coded UDP port. Resource-request submission and latency reporting return
 `RCLIENT_ERR_DNS` until usable SRV membership is available.
 
 If TTL values are available, pass them in `r_srv_record_t.ttl_ms`. The client
@@ -162,7 +153,7 @@ clock value into `r_io_ops_t.now_ms`.
 
 `r_client_check_rate_limit_async_borrowed` avoids copying resources, guards, and
 metrics labels. The caller must keep every borrowed buffer valid until the
-request callback fires or the request is canceled.
+request callback fires, the request is canceled, or the client is destroyed.
 
 This is the preferred path for embedders that already have per-request memory
 with a lifetime that extends to callback completion.
@@ -178,8 +169,9 @@ Latency reports are independent of resource requests and guards. A client may
 report measured service latency without issuing any resource request. When an
 application deliberately pairs a report with guarded work, it should report
 only a real operation that ran, use the same latency-tracker ID and tracker
-settings, and never invent a zero sample for work the guard rejected. Log send failures,
-but do not change an HTTP response outcome after protected work completed.
+settings, and never invent a zero sample for work the guard rejected. Log send
+failures, but do not change an HTTP response outcome after protected work
+completed.
 
 See the [example latency tracking workflow](examples/README.md#example-latency-tracking-workflow)
 for runnable pass/report and deny/no-report behavior.

@@ -141,11 +141,9 @@ loops should normally use the core client layer (`r_client.h` +
 `r_client_io.h`) with their own asynchronous resolver instead of the runtime;
 see "Choosing an integration layer" in [docs/api.md](../docs/api.md).
 
-Ingress errors are normal: `r_runtime_client_on_readable()` returns
-informational per-datagram statuses that any off-path sender can trigger on an
-open UDP port. Log-and-continue is the correct handling — an integration must
-never treat them as fatal, or junk datagrams can stop the loop. The runtime
-resumes draining on the next readiness event.
+`r_runtime_client_on_readable()` treats malformed and unauthenticated datagrams
+as packet-local noise: it discards them and keeps draining. A non-OK return
+therefore represents a real socket or client failure, not hostile junk traffic.
 
 Set the authentication key before running an example:
 
@@ -165,7 +163,7 @@ export RATELIMITLY_TENANT=tenant.example.com
 An override zone must publish SRV target hostnames whose first label encodes
 each server's ID as `s-<decimal>` (see the DNS section of
 [IO_ABSTRACTION.md](../IO_ABSTRACTION.md)); targets without that label are
-silently ignored and discovery yields no usable servers.
+silently ignored, and requests return `RCLIENT_ERR_DNS` if none remain.
 
 For local development, bypass DNS and point the runtime at the repository's
 synthetic responder:

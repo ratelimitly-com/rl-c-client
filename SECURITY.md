@@ -50,14 +50,18 @@ and steering flag — remain readable by any on-path observer in both modes;
 only the payload is confidential, and only in AES mode.
 
 The library generates a fresh random 96-bit GCM nonce for every encryption
-from the OpenSSL CSPRNG. No cross-instance coordination is needed (or
-possible) — but nonce uniqueness under one AES key is probabilistic, and the
+from the OpenSSL CSPRNG. The client performs no cross-instance nonce
+coordination: uniqueness under one AES key is probabilistic, and the
 standard budget for random-nonce GCM is 2^32 encryptions per key, aggregated
 across every client instance sharing the tenant key. Each admission performs
 roughly two to three encryptions with default policy (initial send, replay
 rounds, completion delivery) plus one per latency-report call. High-volume or
 long-lived deployments should rotate tenant AES keys well before the aggregate
 budget is approached.
+
+The same CSPRNG supplies every resource-request and latency-report identity.
+If it reports failure, the operation returns `RCLIENT_ERR_AUTH` and the client
+does not send a packet with a predictable or repeated identity.
 
 ## Response Replay Model
 

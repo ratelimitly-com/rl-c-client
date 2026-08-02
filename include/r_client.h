@@ -242,7 +242,8 @@ RCLIENT_API int r_client_check_rate_limit_async_borrowed(
 // Fire-and-forget latency reporting. Reports are framed into a single
 // datagram, so a batch too large to fit is rejected with
 // RCLIENT_ERR_PROTOCOL and nothing is sent; split large batches across
-// calls (30 reports per call is always within capacity).
+// calls (30 reports per call is always within capacity). Secure request-ID
+// generation failure returns RCLIENT_ERR_AUTH and sends nothing.
 RCLIENT_API int r_client_report_latency(
     r_client_t *client,
     const r_service_latency_report_t *reports,
@@ -251,9 +252,9 @@ RCLIENT_API int r_client_report_latency(
 
 // Datagram ingress from host. May invoke a request's completion callback and
 // free the request before returning; the return value does NOT signal
-// completion (RCLIENT_OK is returned on completing paths too). Non-OK returns
-// are informational per-datagram errors any off-path sender can trigger —
-// log and continue, never treat as fatal.
+// completion (RCLIENT_OK is returned on completing paths too).
+// RCLIENT_ERR_PROTOCOL and RCLIENT_ERR_AUTH are packet-local noise; other
+// non-OK returns report a client failure.
 RCLIENT_API int r_client_on_datagram(
     r_client_t *client,
     const uint8_t *buf,

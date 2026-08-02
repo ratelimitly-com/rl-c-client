@@ -104,7 +104,8 @@ Set `cfg.tenant.dns_name` to override production discovery for custom,
 development, or staging DNS. An override zone must follow the SRV
 target-naming contract — each SRV target hostname's first label encodes the
 server ID as `s-<decimal>` (see IO_ABSTRACTION.md, DNS) — or discovery
-silently yields no usable servers. A nonzero `cfg.tenant.key_id` or
+produces no usable servers and submissions return `RCLIENT_ERR_DNS`. A nonzero
+`cfg.tenant.key_id` or
 `cfg.tenant.auth.type` acts as an assertion and must match the encoded key.
 Hosts that need the default name before `r_client_create`, such as a shared DNS
 cache, can call `r_client_format_default_tenant_dns()` with the parsed key ID.
@@ -248,10 +249,12 @@ will not fire and `*out_req` is not set. `RCLIENT_ERR_CONFIG` (bad arguments or
 an invalid policy), `RCLIENT_ERR_DNS` (no servers known yet), `RCLIENT_ERR_NOMEM`,
 `RCLIENT_ERR_PROTOCOL` (the request does not fit one datagram, or a guard
 exceeds the credential's buffer-size quota), and first-transmission
-`RCLIENT_ERR_IO` all surface this way. A first-transmission `udp_send` failure
-aborts the submit after some packets may already have left, so a failed submit
-is not proof that no server received the request; resubmitting creates a new
-request identity.
+`RCLIENT_ERR_IO` all surface this way. `RCLIENT_ERR_AUTH` also surfaces
+synchronously if secure request-ID generation or local packet encryption
+fails; nothing is sent when request-ID generation fails. A first-transmission
+`udp_send` failure aborts the submit after some packets may already have left,
+so a failed submit is not proof that no server received the request;
+resubmitting creates a new request identity.
 
 The callback receives:
 
@@ -300,6 +303,11 @@ which is a no-op). Do **not** call `r_client_destroy` from inside a callback:
 the client dereferences internal state after the callback returns, so
 destroying it there is undefined behavior. Defer destruction until the stack
 has unwound to the event loop.
+
+The host's `udp_send` hook is not a reentrant ingress point: it must return
+before the host calls any `r_client_*` API. A synchronous test transport must
+queue a looped-back response and deliver it with `r_client_on_datagram()` only
+after `udp_send` has unwound.
 
 ## Latency Guards and Independent Reports
 
@@ -406,7 +414,9 @@ calls; 30 reports per call fits under either auth mode.
 Reports whose `buffer_size` exceeds the credential quota are filtered. If all
 reports are filtered, the function returns `RCLIENT_OK` without sending. Other
 failures include `RCLIENT_ERR_DNS` when no server is available and
-`RCLIENT_ERR_IO` when the UDP send hook fails.
+`RCLIENT_ERR_IO` when the UDP send hook fails. Secure request-ID generation or
+local encryption failure returns `RCLIENT_ERR_AUTH`; request-ID failure sends
+nothing.
 
 Each call broadcasts one datagram — carrying every surviving report, at most
 30 (cookie mode) or 31 (AES mode) per call — to every known server, under a
@@ -436,12 +446,16 @@ one latency report after admitted work.
 
 `r_runtime_admission_run_and_report()` performs the last step for synchronous
 protected work. It measures with the runtime's monotonic clock and never reports
-denied, cancelled, failed, or previously reported work. HTTP integrations whose
-protected operation is asynchronous should record a monotonic start time and
-report from their own completion callback instead. Call it at most once per
-admission: a second call re-executes the protected work before the report step
-fails. `r_client_admission_cancel` suppresses the completion callback, matching
-core-client cancel semantics.
+denied, cancelled, failed, or previously reported work. It marks the protected
+work as executed immediately before invoking it, so one admission can execute
+that work at most once. Every later call returns `RCLIENT_ERR_CONFIG`, including
+when the first call's latency-report send failed. If successful work was measured
+but its report failed, retain `out_observed_latency_ms` and retry only
+`r_client_admission_report_latency()` with that value; never rerun the protected
+operation. HTTP integrations whose protected operation is asynchronous should
+record a monotonic start time and report from their own completion callback
+instead. `r_client_admission_cancel` suppresses the completion callback,
+matching core-client cancel semantics.
 
 `r_client_admission_config_defaults()` fills: window 1000 ms, rate limit 100,
 1 token, guard threshold 100 ms, tracker `ttl_ms` 10000, `max_samples` 100,
@@ -468,12 +482,10 @@ event loop of their own. Contracts that differ from the core client:
   initialization, periodic refresh, and any submit that finds zero servers.
   Discovery keeps at most 32 SRV records per refresh. Servers with their own
   asynchronous resolver should use the core I/O interfaces instead.
-- `r_runtime_client_on_readable()` drains one ready socket and stops early,
-  returning the status, when a datagram produces a non-`RCLIENT_OK` ingress
-  result. Those statuses are the same informational per-datagram errors
-  described under Datagrams and Timers: log them and keep the loop running —
-  never treat them as fatal, or hostile junk datagrams can stop the
-  integration. Remaining datagrams are delivered on the next readiness event.
+- `r_runtime_client_on_readable()` drains one ready socket. Malformed and
+  unauthenticated datagrams are discarded as packet-local noise and draining
+  continues; they are not returned to the host. Non-OK returns are reserved for
+  real socket or client failures.
 - The runtime installs **no steering-feedback hook**: server source-port
   rebind requests are ignored at this layer. Integrations that need steering
   must use the core client.
@@ -537,6 +549,7 @@ for malformed datagrams or AES responses that fail tag verification,
 (late, duplicate, or filtered responses are ignored silently). Any off-path
 sender can produce the error returns, so treat them as counters to log —
 never as fatal conditions. The affected request always remains in flight.
+Other non-OK returns, such as `RCLIENT_ERR_NOMEM`, represent client failures.
 The datagram source address is not part of response acceptance; responses are
 matched by authenticated request ID and server ID.
 
@@ -636,9 +649,8 @@ time in its upper bits (`start_seconds_since_2025 = server_id >> 23`, epoch
 2025-01-01 00:00:00 UTC), and lower start time wins, with ties broken by the
 numerically lower full ID. Server IDs come from DNS: each SRV target
 hostname's first label must encode the ID as `s-<decimal>` (see
-IO_ABSTRACTION.md, DNS). When discovery produced no server IDs — the
-address-fallback path — oldest-preference and response filtering are disabled
-and the first valid response wins.
+IO_ABSTRACTION.md, DNS). Non-conforming targets are not members, and submission
+fails with `RCLIENT_ERR_DNS` when discovery has no conforming target.
 
 At round zero the client sends to the immutable request membership snapshot.
 A valid response from the oldest server completes immediately. Other valid
@@ -698,12 +710,12 @@ All errors are negative:
 | Code | Where it surfaces | Causes |
 | --- | --- | --- |
 | `RCLIENT_ERR_TIMEOUT` | Completion callback | No acceptable response before the deadline. This is also the **only** signature of every server-side rejection that produces no reply: wrong or unregistered credentials, a wrong key ID, a stale request timestamp from a skewed clock, and tampered responses the client discarded. Servers deliberately drop unauthenticated traffic without responding. |
-| `RCLIENT_ERR_DNS` | Submit return only | No servers currently known (startup warm-up, DNS outage, or an over-long tenant DNS name). Never delivered through the callback. |
-| `RCLIENT_ERR_IO` | Submit return (first transmission) or callback (replay rounds) | The host `udp_send` hook returned failure. |
-| `RCLIENT_ERR_PROTOCOL` | Submit return, or `r_client_on_datagram` return | At submit: the request does not fit one 1200-byte datagram, or a guard's `buffer_size` exceeds the credential quota. From `on_datagram`: a malformed datagram or an AES response that failed tag verification (informational; the request stays in flight). |
-| `RCLIENT_ERR_AUTH` | `r_client_on_datagram` return, or submit/callback on local crypto failure | A response with the wrong auth TLV type or a cookie mismatch (informational), or a local encryption failure. A *server-side* authentication failure never surfaces as `RCLIENT_ERR_AUTH` — it surfaces as `RCLIENT_ERR_TIMEOUT` (see above). |
+| `RCLIENT_ERR_DNS` | Submit/report return only | No servers currently known (startup warm-up, failed/empty/non-conforming SRV discovery, DNS outage, or an over-long tenant DNS name). Never delivered through the callback. |
+| `RCLIENT_ERR_IO` | Submit/report return, callback (replay rounds), or public-runtime return | A UDP send/socket operation or runtime clock failed. |
+| `RCLIENT_ERR_PROTOCOL` | Submit/report return, or raw `r_client_on_datagram` return | At submit/report: the packet does not fit one 1200-byte datagram, or a guard's `buffer_size` exceeds the credential quota. From raw ingress: a malformed datagram or an AES response that failed tag verification (informational; the request stays in flight). The public runtime discards this packet-local noise. |
+| `RCLIENT_ERR_AUTH` | Submit/report return, replay callback, or raw `r_client_on_datagram` return | Secure request-ID generation or local encryption failed; or raw ingress saw the wrong auth TLV type or a cookie mismatch. Request-ID failure sends nothing. A *server-side* authentication failure never surfaces as `RCLIENT_ERR_AUTH` — it surfaces as `RCLIENT_ERR_TIMEOUT` (see above). The public runtime discards packet-local auth errors. |
 | `RCLIENT_ERR_CONFIG` | Submit / create / helper returns | Invalid arguments, invalid API key credentials, mismatched key-ID/type assertions, and invalid HA-policy schedules (including a derived TTL above `dedup_ttl_ms_max`). |
-| `RCLIENT_ERR_NOMEM` | Submit / create returns | Allocation failure. |
+| `RCLIENT_ERR_NOMEM` | Submit/report/create return, or raw ingress return | Allocation failure. |
 
 Debugging rule of thumb: 100% timeouts with working networking and DNS means
 suspect the credential, the key ID, or the host clock — not packet loss.
