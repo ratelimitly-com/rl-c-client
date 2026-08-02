@@ -19,7 +19,7 @@ if ($BasePort -lt 1024 -or $BasePort -gt 65532) {
 }
 
 $SyntheticKey = "rl-aes1qvqqqqqqqqqqqqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqqqqzqqqqsqqqqqsqqqyqqqqqqkqzqqqhmzd8l"
-$ExpectedRateRequestCountMax = 2
+$ExpectedRateRequestCountMax = 4
 $ExpectedTracker = [ordered]@{
     ttl_ms               = 10000
     max_samples          = 100
@@ -150,9 +150,12 @@ function Invoke-Scenario {
         $env:RATELIMITLY_AUTH_KEY = $SyntheticKey
         $env:RATELIMITLY_EXAMPLE_SERVER_HOST = "127.0.0.1"
         $env:RATELIMITLY_EXAMPLE_SERVER_PORT = "$Port"
-        $env:RATELIMITLY_REQUEST_UNIT_MS = $null
-        $env:RATELIMITLY_REQUEST_REPLAY_COUNT = $null
-        $env:RATELIMITLY_REQUEST_PROFILE = $null
+        # Keep native Windows on the same conservative request profile as all
+        # other GitHub Actions request paths. Setting it here also makes a
+        # direct local invocation reproduce the Actions behavior.
+        $env:RATELIMITLY_REQUEST_UNIT_MS = "25"
+        $env:RATELIMITLY_REQUEST_REPLAY_COUNT = "3"
+        $env:RATELIMITLY_REQUEST_PROFILE = "1"
 
         $Client = Start-Process `
             -FilePath $ExamplePath `
@@ -188,9 +191,9 @@ function Invoke-Scenario {
         $RateRecords = @($Records | Where-Object { $_.event -eq "rate_request" })
         $LatencyRecords = @($Records | Where-Object { $_.event -eq "latency_report" })
         $RejectedRecords = @($Records | Where-Object { $_.event -eq "input_rejected" })
-        # The default policy permits one replay. Whether the response is
-        # processed before that replay deadline is intentionally timing
-        # dependent, so one logical admission can produce one or two copies
+        # The Actions profile permits three replays. Whether the response is
+        # processed before each replay deadline is intentionally timing
+        # dependent, so one logical admission can produce one to four copies
         # of the same request datagram.
         if ($RateRecords.Count -lt 1 -or
             $RateRecords.Count -gt $ExpectedRateRequestCountMax) {

@@ -20,7 +20,6 @@ trap cleanup EXIT
   "--listen=127.0.0.1:$PORT" \
   --scenario=guard-pass \
   --auth=aes \
-  --max-packets=3 \
   >"$TMP_DIR/responder.out" 2>"$TMP_DIR/responder.err" &
 RESPONDER_PID=$!
 
@@ -37,9 +36,15 @@ grep -q '"event":"ready"' "$TMP_DIR/responder.out"
 "$ROOT/tests/test_runtime" "$PORT" 2>"$TMP_DIR/runtime.err"
 production_p0_report_profiles \
     "$TMP_DIR/runtime.err" test_runtime 2 true
+sleep 0.1
+kill -0 "$RESPONDER_PID" 2>/dev/null
+kill -TERM "$RESPONDER_PID"
 wait "$RESPONDER_PID"
 RESPONDER_PID=""
 
+rate_count="$(grep -c '"event":"rate_request"' "$TMP_DIR/responder.out" || true)"
+((rate_count >= 2 && rate_count <= 8))
+[[ "$(grep -c '"event":"latency_report"' "$TMP_DIR/responder.out" || true)" -eq 1 ]]
 grep -q '"event":"rate_request".*"guards":1.*"resources":1' \
   "$TMP_DIR/responder.out"
 grep -q '"event":"latency_report".*"reports":1' "$TMP_DIR/responder.out"
