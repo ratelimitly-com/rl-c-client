@@ -94,6 +94,7 @@ test: $(TEST_BINS) $(TEST_RESPONDER_BIN) $(PERF_BIN)
 	bash ./tests/test_examples.sh
 	python3 ./tests/test_readme_quality_unit.py
 	python3 ./tests/test_readme_quality.py
+	python3 ./tests/test_windows_native_example_contract.py
 	bash ./tests/test_windows_headers.sh
 	bash ./tests/test_windows_core.sh
 	bash ./tests/test_windows_runtime.sh
