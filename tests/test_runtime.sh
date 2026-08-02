@@ -20,7 +20,7 @@ trap cleanup EXIT
   "--listen=127.0.0.1:$PORT" \
   --scenario=guard-pass \
   --auth=aes \
-  --max-packets=2 \
+  --max-packets=3 \
   >"$TMP_DIR/responder.out" 2>"$TMP_DIR/responder.err" &
 RESPONDER_PID=$!
 
@@ -36,7 +36,7 @@ done
 grep -q '"event":"ready"' "$TMP_DIR/responder.out"
 "$ROOT/tests/test_runtime" "$PORT" 2>"$TMP_DIR/runtime.err"
 production_p0_report_profiles \
-    "$TMP_DIR/runtime.err" test_runtime 1 true
+    "$TMP_DIR/runtime.err" test_runtime 2 true
 wait "$RESPONDER_PID"
 RESPONDER_PID=""
 

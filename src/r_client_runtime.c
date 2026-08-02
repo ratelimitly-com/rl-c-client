@@ -756,6 +756,9 @@ int r_runtime_client_on_readable(
             (size_t)length,
             &from
         );
+        if (status == RCLIENT_ERR_PROTOCOL || status == RCLIENT_ERR_AUTH) {
+            continue;
+        }
         if (status != RCLIENT_OK) {
             return status;
         }
@@ -810,6 +813,7 @@ int r_runtime_admission_run_and_report(
     uint32_t *out_observed_latency_ms
 ) {
     if (!runtime || !runtime->handle || !request || !request->admitted
+        || request->work_executed
         || !protected_work) {
         return RCLIENT_ERR_CONFIG;
     }
@@ -819,6 +823,7 @@ int r_runtime_admission_run_and_report(
     if (status != RCLIENT_OK) {
         return status;
     }
+    request->work_executed = true;
     status = protected_work(user);
     if (status != RCLIENT_OK) {
         return status;

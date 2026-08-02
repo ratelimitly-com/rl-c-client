@@ -209,6 +209,58 @@ static int test_resolve_srv_async(
     return 0;
 }
 
+static int test_resolve_srv_failure(
+    void *ctx,
+    const char *name,
+    r_dns_req_id_t *out_req_id,
+    r_dns_srv_cb cb,
+    void *user
+) {
+    (void)ctx;
+    (void)name;
+    (void)out_req_id;
+    (void)cb;
+    (void)user;
+    return -1;
+}
+
+static int test_resolve_srv_empty(
+    void *ctx,
+    const char *name,
+    r_dns_req_id_t *out_req_id,
+    r_dns_srv_cb cb,
+    void *user
+) {
+    (void)ctx;
+    (void)name;
+    if (out_req_id) {
+        *out_req_id = 303u;
+    }
+    cb(user, 0, NULL, 0u);
+    return 0;
+}
+
+static int test_resolve_srv_nonconforming(
+    void *ctx,
+    const char *name,
+    r_dns_req_id_t *out_req_id,
+    r_dns_srv_cb cb,
+    void *user
+) {
+    (void)ctx;
+    (void)name;
+    if (out_req_id) {
+        *out_req_id = 404u;
+    }
+    const r_srv_record_t record = {
+        .target = "legacy.local",
+        .port = 8080u,
+        .ttl_ms = 60000u,
+    };
+    cb(user, 0, &record, 1u);
+    return 0;
+}
+
 static int test_resolve_addrs_async(
     void *ctx,
     const char *name,
@@ -671,6 +723,53 @@ static r_resource_request_t sample_resource(void) {
     resource.rate_limit = 100;
     resource.tokens_requested = 1;
     return resource;
+}
+
+static void assert_srv_only_discovery_failure(
+    int (*resolve_srv)(
+        void *,
+        const char *,
+        r_dns_req_id_t *,
+        r_dns_srv_cb,
+        void *
+    )
+) {
+    test_ctx_t ctx = {0};
+    r_io_ops_t io = {
+        .ctx = &ctx,
+        .udp_send = test_udp_send,
+        .now_ms = test_now_ms,
+    };
+    r_resolver_ops_t resolver = {
+        .ctx = &ctx,
+        .resolve_srv = resolve_srv,
+        .resolve_addrs = test_resolve_addrs_unexpected,
+        .cancel = test_cancel,
+    };
+    r_client_t *client = make_client_with_ops(&ctx, &io, &resolver);
+    r_resource_request_t resource = sample_resource();
+    r_client_req_t *request = NULL;
+    assert(r_client_check_rate_limit_async(
+        client,
+        &resource,
+        1u,
+        NULL,
+        0u,
+        NULL,
+        0u,
+        noop_rate_limit_cb,
+        NULL,
+        &request
+    ) == RCLIENT_ERR_DNS);
+    assert(request == NULL);
+    assert(ctx.send_count == 0u);
+    r_client_destroy(client);
+}
+
+static void test_discovery_remains_srv_only(void) {
+    assert_srv_only_discovery_failure(test_resolve_srv_failure);
+    assert_srv_only_discovery_failure(test_resolve_srv_empty);
+    assert_srv_only_discovery_failure(test_resolve_srv_nonconforming);
 }
 
 static r_client_req_t *start_sample_request(
@@ -2059,6 +2158,7 @@ int main(void) {
     test_destroy_ignores_late_dns_srv_callback();
     test_destroy_ignores_late_dns_addr_callback();
     test_destroy_handles_dns_cancel_callback();
+    test_discovery_remains_srv_only();
     test_default_policy_replays_once_then_enters_receive_only_phase();
     test_default_policy_late_timers_remain_bounded_by_dedup_ttl();
     test_default_policy_final_phase_returns_first_valid_without_replay();

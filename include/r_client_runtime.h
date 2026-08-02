@@ -73,7 +73,10 @@ RCLIENT_API r_runtime_socket_t r_runtime_socket_at(
     size_t index
 );
 
-/* Drain one ready socket and deliver all complete datagrams to the client. */
+/*
+ * Drain one ready socket and deliver all valid datagrams to the client.
+ * Malformed or unauthenticated datagrams are discarded as packet-local noise.
+ */
 RCLIENT_API int r_runtime_client_on_readable(
     r_runtime_client_t *runtime,
     r_runtime_socket_t socket_value
@@ -106,6 +109,10 @@ typedef int (*r_runtime_protected_work_cb)(void *user);
 /*
  * Run admitted work, measure it monotonically, and report one sample.
  * Denied/cancelled requests and failed work never emit a latency report.
+ * Protected work is invoked at most once; every later call returns
+ * RCLIENT_ERR_CONFIG, including when the first call's report send failed.
+ * After a report failure, callers that retained out_observed_latency_ms may
+ * retry only r_client_admission_report_latency() with that measured value.
  */
 RCLIENT_API int r_runtime_admission_run_and_report(
     r_runtime_client_t *runtime,
