@@ -42,6 +42,22 @@ typedef struct result_cb_ctx {
     bool success;
 } result_cb_ctx_t;
 
+typedef struct profile_cb_ctx {
+    int calls;
+    r_request_profile_t profile;
+} profile_cb_ctx_t;
+
+static void record_request_profile(
+    void *user,
+    const r_request_profile_t *profile
+) {
+    profile_cb_ctx_t *context = user;
+    assert(context != NULL);
+    assert(profile != NULL);
+    context->calls += 1;
+    context->profile = *profile;
+}
+
 static void fill_ipv4_addr(r_addr_t *addr, const char *ip);
 
 static int test_udp_send(void *ctx, const r_addr_t *to, const uint8_t *buf, size_t len) {
@@ -432,6 +448,37 @@ static r_client_t *make_client_with_policy(
     config.tenant.auth.type = R_AUTH_COOKIE;
     config.tenant.auth.secret = SAMPLE_COOKIE_KEY_TENANT_2;
     config.request_policy = policy;
+    r_client_t *client = NULL;
+    assert(r_client_create(&config, &io, &resolver, &client) == RCLIENT_OK);
+    return client;
+}
+
+static r_client_t *make_client_with_policy_and_profile(
+    test_ctx_t *ctx,
+    const r_request_policy_t *policy,
+    profile_cb_ctx_t *profile
+) {
+    r_io_ops_t io = {
+        .ctx = ctx,
+        .udp_send = test_udp_send,
+        .now_ms = test_now_ms,
+    };
+    r_resolver_ops_t resolver = {
+        .ctx = ctx,
+        .resolve_srv = test_resolve_srv,
+        .resolve_addrs = test_resolve_addrs,
+        .cancel = test_cancel,
+    };
+    r_client_config_t config;
+    memset(&config, 0, sizeof(config));
+    config.tenant.dns_name = "example.local";
+    config.tenant.key_id = 2;
+    config.tenant.auth.type = R_AUTH_COOKIE;
+    config.tenant.auth.secret = SAMPLE_COOKIE_KEY_TENANT_2;
+    config.request_policy = policy;
+    config.request_profile_cb = record_request_profile;
+    config.request_profile_user = profile;
+
     r_client_t *client = NULL;
     assert(r_client_create(&config, &io, &resolver, &client) == RCLIENT_OK);
     return client;
@@ -1498,6 +1545,54 @@ static void test_exponential_schedule_uses_absolute_deadlines(void) {
     r_client_destroy(client);
 }
 
+static void test_request_profile_reports_wait_round_and_final_phase(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.now_ms = 1000u;
+
+    r_request_policy_t policy;
+    r_client_default_request_policy(&policy);
+    policy.unit_ms = 25u;
+    policy.replay_count = 3u;
+    policy.completion_delivery = false;
+
+    profile_cb_ctx_t profile = {0};
+    r_client_t *client = make_client_with_policy_and_profile(
+        &ctx,
+        &policy,
+        &profile
+    );
+    result_cb_ctx_t result = {0};
+    r_client_req_t *request = start_sample_request(client, &result);
+
+    const uint64_t expected_deadlines[] = {
+        1025u,
+        1050u,
+        1075u,
+        1100u,
+        1125u,
+    };
+    for (size_t index = 0u;
+            index < sizeof(expected_deadlines) / sizeof(expected_deadlines[0]);
+            index++) {
+        uint64_t deadline = 0u;
+        assert(r_client_request_deadline_ms(request, &deadline) == RCLIENT_OK);
+        assert(deadline == expected_deadlines[index]);
+        ctx.now_ms = deadline;
+        assert(r_client_on_timeout(client, request, deadline) == RCLIENT_OK);
+    }
+
+    assert(result.calls == 1);
+    assert(result.status == RCLIENT_ERR_TIMEOUT);
+    assert(profile.calls == 1);
+    assert(profile.profile.wait_ms == 125u);
+    assert(profile.profile.round == 3u);
+    assert(profile.profile.phase == R_REQUEST_COMPLETION_FINAL_RECEIVE);
+    assert(profile.profile.status == RCLIENT_ERR_TIMEOUT);
+    assert(!profile.profile.response_selected);
+    r_client_destroy(client);
+}
+
 static void test_linear_schedule_has_distinct_gaps(void) {
     test_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
@@ -1971,6 +2066,7 @@ int main(void) {
     test_default_policy_returns_oldest_immediately();
     test_default_policy_rejects_ttl_above_credential_limit();
     test_exponential_schedule_uses_absolute_deadlines();
+    test_request_profile_reports_wait_round_and_final_phase();
     test_linear_schedule_has_distinct_gaps();
     test_preference_is_independent_of_replay_gap();
     test_response_after_preference_returns_immediately();

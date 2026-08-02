@@ -1531,6 +1531,24 @@ static void r_request_complete(r_client_t *client, r_client_req_t *req, int stat
     if (!client || !req) {
         return;
     }
+    if (client->config.request_profile_cb) {
+        uint64_t completed_ms = r_now_ms(client);
+        r_request_profile_t profile = {
+            .wait_ms = completed_ms >= req->start_ms
+                ? completed_ms - req->start_ms
+                : 0u,
+            .round = req->ha_round,
+            .phase = req->phase == R_REQUEST_PHASE_FINAL
+                ? R_REQUEST_COMPLETION_FINAL_RECEIVE
+                : R_REQUEST_COMPLETION_ROUND,
+            .status = status,
+            .response_selected = selected && selected->has,
+        };
+        client->config.request_profile_cb(
+            client->config.request_profile_user,
+            &profile
+        );
+    }
     if (status == RCLIENT_OK && selected && selected->has) {
         r_completion_delivery(client, req);
     }

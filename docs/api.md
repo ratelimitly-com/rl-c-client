@@ -351,6 +351,30 @@ the key. Optional `RATELIMITLY_TENANT` overrides that default. The optional
 an explicit development endpoint; set both or neither. Runtime-owned socket
 handles remain valid until `r_runtime_client_destroy()`.
 
+The example runtime can override the resource-request scheduler without
+changing the library default:
+
+- `RATELIMITLY_REQUEST_UNIT_MS` sets the base scheduling unit `U`;
+- `RATELIMITLY_REQUEST_REPLAY_COUNT` sets the number of replays after the
+  initial send; and
+- `RATELIMITLY_REQUEST_PROFILE=1` emits one credential-free completion profile
+  per request.
+
+Either scheduler value may be supplied independently; the omitted value keeps
+the normal default. The unit must be a nonzero decimal integer. The replay
+count is a decimal integer from zero through `R_CLIENT_HA_MAX_REPLAY_COUNT`.
+Invalid or out-of-range values make `r_runtime_options_from_env()` fail with
+`RCLIENT_ERR_CONFIG`. The trusted-main production tests set `U=25 ms`, three
+replays, and profiling, giving a 125 ms maximum admission wait while
+release/default clients remain at `U=20 ms`, one replay, and 60 ms.
+
+Applications using the core API can set `r_client_config_t.request_profile_cb`
+instead. Its `r_request_profile_t` reports `wait_ms`, the completion round,
+round or final-receive phase, status, and whether a response was selected.
+`wait_ms` is measured in the client's scheduling clock from the start of the
+initial send attempt through selection or failure. It intentionally excludes
+discovery, protected work, latency reporting, and cleanup.
+
 ## Datagrams and Timers
 
 The host owns network receive and timers:
@@ -365,6 +389,10 @@ The host owns network receive and timers:
 `r_client_on_timeout` use the same Unix-epoch millisecond clock domain. This is
 separate from the monotonic duration clock used to measure protected-work
 latency.
+
+Request-profile `wait_ms` uses this same scheduling clock. It describes how
+much of the request policy was consumed; it is not the protected-operation
+latency sample, which remains a separate monotonic measurement.
 
 A valid non-oldest response can move the next deadline earlier, from the replay
 deadline to the response-preference deadline. Hosts must therefore re-arm from

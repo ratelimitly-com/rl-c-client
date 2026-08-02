@@ -240,6 +240,12 @@ flowchart LR
 | Dedicated P0 probe | Names unique to the CI run | Production reads back exactly 37 ms and returns a one-token rate-limited outcome with a positive deficit. |
 | Local macOS | kqueue and libdispatch | The same deterministic contract on a developer Mac; no production credential. |
 
+All trusted-main production calls use a conservative CI-only request profile:
+a 25 ms unit, three internal replays, one final receive unit, and a 125 ms
+maximum admission wait. Each runner logs the actual client wait and completion
+round/phase. This does not change the release/default policy of a 20 ms unit and
+one replay.
+
 The per-example P0 lane does not claim server acknowledgement of every latency
 datagram: latency reporting is fire-and-forget. Server-observed semantics belong
 to the dedicated read-back probe. See the

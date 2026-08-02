@@ -110,6 +110,31 @@ static void runtime_log(void *context, r_log_level_t level, const char *message)
     fprintf(stderr, "rl-c-client[%s]: %s\n", name, message ? message : "");
 }
 
+static void runtime_request_profile(
+    void *context,
+    const r_request_profile_t *profile
+) {
+    const r_runtime_client_t *runtime = context;
+    if (!runtime || !profile) {
+        return;
+    }
+    const char *phase = profile->phase == R_REQUEST_COMPLETION_FINAL_RECEIVE
+        ? "final"
+        : "round";
+    fprintf(
+        stderr,
+        "rl-c-client[profile]: wait_ms=%llu unit_ms=%llu "
+        "replay_count=%lu round=%lu phase=%s status=%d response=%s\n",
+        (unsigned long long)profile->wait_ms,
+        (unsigned long long)runtime->request_unit_ms,
+        (unsigned long)runtime->request_replay_count,
+        (unsigned long)profile->round,
+        phase,
+        profile->status,
+        profile->response_selected ? "selected" : "none"
+    );
+}
+
 static void close_socket(r_runtime_socket_t socket_value) {
 #ifdef _WIN32
     closesocket(socket_value);
@@ -454,6 +479,30 @@ static const char *runtime_environment_value(const char *name) {
     return value;
 }
 
+static int runtime_parse_u64(
+    const char *text,
+    uint64_t maximum,
+    uint64_t *out_value
+) {
+    if (!text || text[0] == '\0' || !out_value) {
+        return RCLIENT_ERR_CONFIG;
+    }
+    uint64_t parsed = 0u;
+    for (const char *cursor = text; *cursor != '\0'; cursor++) {
+        if (*cursor < '0' || *cursor > '9') {
+            return RCLIENT_ERR_CONFIG;
+        }
+        uint64_t digit = (uint64_t)(*cursor - '0');
+        if (parsed > maximum / 10u
+            || (parsed == maximum / 10u && digit > maximum % 10u)) {
+            return RCLIENT_ERR_CONFIG;
+        }
+        parsed = parsed * 10u + digit;
+    }
+    *out_value = parsed;
+    return RCLIENT_OK;
+}
+
 int r_runtime_options_from_env(r_runtime_options_t *out_options) {
     if (!out_options) {
         return RCLIENT_ERR_CONFIG;
@@ -471,6 +520,47 @@ int r_runtime_options_from_env(r_runtime_options_t *out_options) {
     out_options->server_host = runtime_environment_value(
         "RATELIMITLY_EXAMPLE_SERVER_HOST"
     );
+    const char *unit_text = runtime_environment_value(
+        "RATELIMITLY_REQUEST_UNIT_MS"
+    );
+    const char *replay_text = runtime_environment_value(
+        "RATELIMITLY_REQUEST_REPLAY_COUNT"
+    );
+    if ((unit_text && unit_text[0] != '\0')
+        || (replay_text && replay_text[0] != '\0')) {
+        r_client_default_request_policy(&out_options->request_policy);
+        if (unit_text && unit_text[0] != '\0') {
+            uint64_t unit_ms = 0u;
+            if (runtime_parse_u64(unit_text, UINT64_MAX, &unit_ms)
+                    != RCLIENT_OK
+                || unit_ms == 0u) {
+                return RCLIENT_ERR_CONFIG;
+            }
+            out_options->request_policy.unit_ms = unit_ms;
+        }
+        if (replay_text && replay_text[0] != '\0') {
+            uint64_t replay_count = 0u;
+            if (runtime_parse_u64(
+                    replay_text,
+                    R_CLIENT_HA_MAX_REPLAY_COUNT,
+                    &replay_count
+                ) != RCLIENT_OK) {
+                return RCLIENT_ERR_CONFIG;
+            }
+            out_options->request_policy.replay_count =
+                (uint32_t)replay_count;
+        }
+        out_options->has_request_policy = true;
+    }
+    const char *profile_text = runtime_environment_value(
+        "RATELIMITLY_REQUEST_PROFILE"
+    );
+    if (profile_text && profile_text[0] != '\0') {
+        if (strcmp(profile_text, "1") != 0) {
+            return RCLIENT_ERR_CONFIG;
+        }
+        out_options->profile_requests = true;
+    }
     const char *port_text = runtime_environment_value(
         "RATELIMITLY_EXAMPLE_SERVER_PORT"
     );
@@ -534,11 +624,20 @@ int r_runtime_client_init(
 
     r_request_policy_t policy;
     r_client_default_request_policy(&policy);
+    if (options->has_request_policy) {
+        policy = options->request_policy;
+    }
+    runtime->request_unit_ms = policy.unit_ms;
+    runtime->request_replay_count = policy.replay_count;
 
     r_client_config_t config = {0};
     config.tenant.dns_name = options->tenant_dns_name;
     config.tenant.auth.secret = options->auth_key;
     config.request_policy = &policy;
+    if (options->profile_requests) {
+        config.request_profile_cb = runtime_request_profile;
+        config.request_profile_user = runtime;
+    }
 
     r_io_ops_t io = {
         .ctx = runtime,

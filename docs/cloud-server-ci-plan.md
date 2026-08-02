@@ -169,13 +169,23 @@ This layer deliberately does not force every shared production bucket into a
 denial state. Deterministic tests cover that branch per example without making
 cloud tests race or leave disruptive counters behind.
 
-The Linux one-shot job uses three internal request replays in its example-only
-client library instead of the normal default of one. With the fixed 20 ms
-scheduling unit and one final receive unit, this changes the maximum request
-lifetime from `(1 + 2) * 20 ms = 60 ms` to `(3 + 2) * 20 ms = 100 ms`. The
-runner still executes each example process once and validates its output
-normally; release artifacts and other client builds retain the default
-one-replay policy.
+Every trusted-main production call uses the same conservative request profile:
+a 25 ms scheduling unit, three internal request replays, and one final receive
+unit. The maximum admission wait is therefore
+`(3 + 2) * 25 ms = 125 ms`. Each runner executes its process once; replay is
+performed inside the client with the original deduplication identity. Release
+artifacts and non-production calls retain the normal default of a 20 ms unit,
+one replay, and a 60 ms maximum wait.
+
+Production runners also enable the credential-free request profile log. Every
+completed admission reports the client-side wait, configured unit and replay
+count, completion round, round/final phase, status, and whether a response was
+selected. The wait starts with the initial UDP send attempt and ends at client
+completion; it excludes DNS discovery, protected work, latency reporting, and
+process cleanup. The single-request example runners validate these lines before
+publishing them to the CI log. The multi-request semantic probe publishes one
+line for each admission. A green production run therefore records both the
+intended 25 ms / three-replay policy and each observed scheduler path.
 
 ### Dedicated production protocol layer
 
@@ -270,6 +280,7 @@ diagnostic for example regressions.
 | Native Windows production runner | [`tests/test_production_p0_win32_example.ps1`](../tests/test_production_p0_win32_example.ps1) |
 | Wine production runner | [`tests/test_production_p0_win32_wine.sh`](../tests/test_production_p0_win32_wine.sh) |
 | Dedicated semantic probe | [`tests/test_production_p0.sh`](../tests/test_production_p0.sh) |
+| Shared production request profile | [`tests/production_p0_profile.sh`](../tests/production_p0_profile.sh) |
 | CI and documentation contract | [`tests/test_examples.sh`](../tests/test_examples.sh) |
 
 ## Maintenance checklist

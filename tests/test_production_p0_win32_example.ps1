@@ -8,6 +8,11 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $TestName = "test_production_p0_win32_example"
+$RequestProfileEnvironment = @{
+    "RATELIMITLY_REQUEST_UNIT_MS" = "25"
+    "RATELIMITLY_REQUEST_REPLAY_COUNT" = "3"
+    "RATELIMITLY_REQUEST_PROFILE" = "1"
+}
 $AuthKey = [Environment]::GetEnvironmentVariable(
     "RATELIMITLY_AUTH_KEY",
     [EnvironmentVariableTarget]::Process
@@ -185,6 +190,9 @@ try {
     $StartInfo.RedirectStandardOutput = $true
     $StartInfo.RedirectStandardError = $true
     $StartInfo.Environment["RATELIMITLY_AUTH_KEY"] = $AuthKey
+    foreach ($Entry in $RequestProfileEnvironment.GetEnumerator()) {
+        $StartInfo.Environment[$Entry.Key] = $Entry.Value
+    }
     foreach ($Name in $DiscoveryVariables) {
         [void]$StartInfo.Environment.Remove($Name)
     }
@@ -229,9 +237,16 @@ try {
     if (-not [regex]::IsMatch($Stdout, $Expected)) {
         throw "stdout was not the single documented allowed/latency line"
     }
-    if ($Stderr.Length -ne 0) {
-        throw "example wrote unexpected stderr"
+    $ProfileLines = @(
+        [regex]::Split($Stderr.TrimEnd("`r", "`n"), "\r?\n") |
+            Where-Object { $_.Length -gt 0 }
+    )
+    $ProfilePattern = '^rl-c-client\[profile\]: wait_ms=[0-9]+ unit_ms=25 replay_count=3 round=[0-3] phase=(?:round|final) status=0 response=selected$'
+    if ($ProfileLines.Count -ne 1 -or
+            -not [regex]::IsMatch($ProfileLines[0], $ProfilePattern)) {
+        throw "expected one valid 25 ms / 3-replay request profile on stderr"
     }
+    Write-Host "$TestName`: $($ProfileLines[0])"
 
     Write-Host "$TestName`: PASS (production P0 admission and latency report)"
 }
