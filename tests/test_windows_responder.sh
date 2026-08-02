@@ -179,7 +179,9 @@ if [[ -n "$WINDOWS_RUNNER" ]]; then
   responder_status=0
   wait_with_deadline "$RESPONDER_PID" 5 || responder_status=$?
   RESPONDER_PID=""
-  if [[ "$responder_status" -ne 0 ]]; then
+  # A native responder handles SIGTERM and returns zero. Wine may terminate
+  # its host process first and surface the intentional SIGTERM as 128 + 15.
+  if [[ "$responder_status" -ne 0 && "$responder_status" -ne 143 ]]; then
     sed -n '1,100p' "$TMP_DIR/responder.err" >&2
     echo "test_windows_responder: PE responder exited $responder_status" >&2
     exit 1
