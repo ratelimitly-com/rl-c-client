@@ -482,6 +482,11 @@ jobs:
       - name: Run native admission scenarios
         shell: pwsh
         run: |
+          & build-msvc/Release/r-test-win32-udp-connreset.exe
+          if ($LASTEXITCODE -ne 0) {
+            throw "Win32 UDP reset regression failed with exit code $LASTEXITCODE"
+          }
+
           & tests/test_windows_native_example.ps1 `
             -ExamplePath build-msvc/Release/win32-example.exe `
             -ResponderPath build-msvc/Release/r-test-responder.exe

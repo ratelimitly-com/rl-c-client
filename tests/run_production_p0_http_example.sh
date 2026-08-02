@@ -24,6 +24,8 @@ export -n AUTH_KEY
 exec </dev/null
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+source "$ROOT/tests/production_p0_profile.sh"
+production_p0_apply_request_profile
 
 die() {
   echo "run_production_p0_http_example: $*" >&2
@@ -200,7 +202,7 @@ sanitize_stream() {
     lines=$((lines + 1))
     ((lines <= 120)) || break
     line=${line//"$AUTH_KEY"/[REDACTED_AUTH_KEY]}
-    while [[ "$line" =~ rl-(aes|hmac)[[:alnum:]_-]+ ]]; do
+    while [[ "$line" =~ rl-(aes|cookie)[[:alnum:]_-]+ ]]; do
       key_token=${BASH_REMATCH[0]}
       line=${line//"$key_token"/[REDACTED_AUTH_KEY]}
     done
@@ -343,6 +345,8 @@ assert_http_port_is_free
 start_server
 wait_for_http
 request_limited_resource
+production_p0_report_profiles "$TMP_DIR/server.err" "$NAME" 1 false \
+  || fail_case "expected one valid 25 ms / 3-replay request profile"
 stop_server || fail_case "server cleanup exceeded its bounded deadline"
 
 echo "$NAME: PASS (production P0 rate admission and latency-report path)"

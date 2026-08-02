@@ -134,7 +134,6 @@ struct r_client {
 
 typedef struct r_dns_refresh {
     r_client_t *client;
-    bool fallback;
     bool detached;
     size_t pending;
     size_t scheduling;
@@ -577,16 +576,17 @@ static void r_request_free(r_client_req_t *req) {
     free(req);
 }
 
-static void r_generate_request_id(uint8_t out_id[16]) {
+static int r_generate_request_id(uint8_t out_id[16]) {
     if (!out_id) {
-        return;
+        return RCLIENT_ERR_CONFIG;
     }
     if (RAND_bytes(out_id, 16) != 1) {
         memset(out_id, 0, 16);
-        return;
+        return RCLIENT_ERR_AUTH;
     }
     out_id[6] = (uint8_t)((out_id[6] & 0x0F) | 0x40);
     out_id[8] = (uint8_t)((out_id[8] & 0x3F) | 0x80);
+    return RCLIENT_OK;
 }
 
 static uint64_t r_parse_server_id_from_target(const char *target, bool *ok) {
@@ -694,8 +694,6 @@ static void r_dns_refresh_free(r_dns_refresh_t *refresh) {
     free(refresh);
 }
 
-static int r_dns_start_fallback(r_client_t *client, r_dns_refresh_t *refresh);
-
 static void r_dns_refresh_finish(r_dns_refresh_t *refresh) {
     if (!refresh) {
         return;
@@ -730,11 +728,6 @@ static void r_dns_refresh_maybe_complete(r_dns_refresh_t *refresh) {
     if (refresh->detached || !refresh->client) {
         r_dns_refresh_free(refresh);
         return;
-    }
-    if (refresh->endpoint_count == 0 && !refresh->fallback) {
-        if (r_dns_start_fallback(refresh->client, refresh) == RCLIENT_OK) {
-            return;
-        }
     }
     r_dns_refresh_finish(refresh);
 }
@@ -842,22 +835,6 @@ static int r_dns_schedule_addr_lookup(
     }
     r_dns_refresh_maybe_complete(refresh);
     return rc == 0 ? RCLIENT_OK : RCLIENT_ERR_DNS;
-}
-
-static int r_dns_start_fallback(r_client_t *client, r_dns_refresh_t *refresh) {
-    if (!client || !refresh || refresh->detached) {
-        return RCLIENT_ERR_DNS;
-    }
-    refresh->fallback = true;
-    refresh->scheduling++;
-    int rc = r_dns_schedule_addr_lookup(client, refresh, client->dns_name, 8080, 0, false);
-    if (refresh->scheduling > 0) {
-        refresh->scheduling--;
-    }
-    if (rc == RCLIENT_OK) {
-        r_dns_refresh_maybe_complete(refresh);
-    }
-    return rc;
 }
 
 static int r_dns_schedule_srv_lookup(r_client_t *client, r_dns_refresh_t *refresh, const char *name) {
@@ -1531,6 +1508,24 @@ static void r_request_complete(r_client_t *client, r_client_req_t *req, int stat
     if (!client || !req) {
         return;
     }
+    if (client->config.request_profile_cb) {
+        uint64_t completed_ms = r_now_ms(client);
+        r_request_profile_t profile = {
+            .wait_ms = completed_ms >= req->start_ms
+                ? completed_ms - req->start_ms
+                : 0u,
+            .round = req->ha_round,
+            .phase = req->phase == R_REQUEST_PHASE_FINAL
+                ? R_REQUEST_COMPLETION_FINAL_RECEIVE
+                : R_REQUEST_COMPLETION_ROUND,
+            .status = status,
+            .response_selected = selected && selected->has,
+        };
+        client->config.request_profile_cb(
+            client->config.request_profile_user,
+            &profile
+        );
+    }
     if (status == RCLIENT_OK && selected && selected->has) {
         r_completion_delivery(client, req);
     }
@@ -1803,7 +1798,11 @@ static int r_client_check_rate_limit_async_impl(
         }
     }
 
-    r_generate_request_id(req->request_id);
+    rc = r_generate_request_id(req->request_id);
+    if (rc != RCLIENT_OK) {
+        r_request_free(req);
+        return rc;
+    }
     req->start_ms = r_now_ms(client);
     rc = r_request_policy_ttl_ms(client, &req->dedup_ttl_ms);
     if (rc != RCLIENT_OK || req->dedup_ttl_ms == 0u) {
@@ -1961,7 +1960,13 @@ int r_client_report_latency(
     tenant.tlv_type = R_TLV_TENANT;
     tenant.tlv_size = R_TENANT_TLV_LEN;
     tenant.key_id = client->config.tenant.key_id;
-    r_generate_request_id(tenant.unique_id);
+    rc = r_generate_request_id(tenant.unique_id);
+    if (rc != RCLIENT_OK) {
+        if (owns_filtered_reports) {
+            free(filtered_reports);
+        }
+        return rc;
+    }
     tenant.time_stamp = r_now_ms(client);
     tenant.steering_feedback = 0;
     tenant.tenant_mgmt_flag = 0;
@@ -1977,6 +1982,12 @@ int r_client_report_latency(
                 free(filtered_reports);
             }
             return RCLIENT_ERR_AUTH;
+        }
+        if (pos + 4 + 32 + pdu_len > sizeof(packet)) {
+            if (owns_filtered_reports) {
+                free(filtered_reports);
+            }
+            return RCLIENT_ERR_PROTOCOL;
         }
         r_write_le16(packet + pos, R_TLV_AUTH_COOKIE);
         r_write_le16(packet + pos + 2, 36);
@@ -1996,6 +2007,12 @@ int r_client_report_latency(
         size_t cipher_len = 0;
         uint8_t nonce[12];
         uint8_t tag[16];
+        if (pos + 4 + 12 + 16 + pdu_len > sizeof(packet)) {
+            if (owns_filtered_reports) {
+                free(filtered_reports);
+            }
+            return RCLIENT_ERR_PROTOCOL;
+        }
         r_write_le16(packet + pos, R_TLV_AUTH_AES);
         r_write_le16(packet + pos + 2, 32);
         if (r_encrypt_pdu_aes_gcm(
@@ -2016,6 +2033,12 @@ int r_client_report_latency(
             return RCLIENT_ERR_AUTH;
         }
         pos += 4;
+        if (pos + 12 + 16 + cipher_len > sizeof(packet)) {
+            if (owns_filtered_reports) {
+                free(filtered_reports);
+            }
+            return RCLIENT_ERR_PROTOCOL;
+        }
         memcpy(packet + pos, nonce, 12);
         pos += 12;
         memcpy(packet + pos, tag, 16);

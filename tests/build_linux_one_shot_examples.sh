@@ -11,8 +11,9 @@ fi
 
 make -C "$ROOT" clean
 make -C "$ROOT" \
-  CFLAGS='-O2 -Wall -Wextra -Werror -std=c11' \
-  librclient.a test-responder
+  CFLAGS="-O2 -Wall -Wextra -Werror -std=c11" \
+  librclient.a test-responder tests/test_public_api
+"$ROOT/tests/test_public_api"
 
 while IFS='|' read -r name binary _; do
   [[ -z "$name" || "$name" == \#* ]] && continue

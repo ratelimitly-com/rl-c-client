@@ -95,6 +95,29 @@ typedef struct r_request_policy {
     bool completion_delivery;            // Best-effort delivery to missing servers.
 } r_request_policy_t;
 
+typedef enum r_request_completion_phase {
+    R_REQUEST_COMPLETION_ROUND = 0,
+    R_REQUEST_COMPLETION_FINAL_RECEIVE = 1,
+} r_request_completion_phase_t;
+
+/*
+ * One completed request's scheduler profile. wait_ms measures only the
+ * admission interval from the initial send through selection or failure. It
+ * excludes DNS discovery, protected work, latency reporting, and cleanup.
+ */
+typedef struct r_request_profile {
+    uint64_t wait_ms;
+    uint32_t round;
+    r_request_completion_phase_t phase;
+    int status;
+    bool response_selected;
+} r_request_profile_t;
+
+typedef void (*r_request_profile_cb)(
+    void *user,
+    const r_request_profile_t *profile
+);
+
 typedef struct r_dns_refresh_policy {
     uint64_t refresh_interval_ms;            // Periodic refresh; 0 uses 300 seconds.
     uint64_t forced_refresh_min_interval_ms; // Zero uses 1 second.
@@ -106,6 +129,9 @@ typedef struct r_client_config {
     r_tenant_config_t tenant;
     // Borrowed during r_client_create; NULL selects default behavior.
     const r_request_policy_t *request_policy;
+    /* Optional completion observer; called before the request callback. */
+    r_request_profile_cb request_profile_cb;
+    void *request_profile_user;
     r_dns_refresh_policy_t dns_refresh;
 } r_client_config_t;
 
@@ -213,7 +239,10 @@ RCLIENT_API int r_client_check_rate_limit_async_borrowed(
     r_client_req_t **out_req
 );
 
-// Fire-and-forget latency reporting.
+// Fire-and-forget latency reporting. Reports are framed into a single
+// datagram, so a batch too large to fit is rejected with
+// RCLIENT_ERR_PROTOCOL and nothing is sent; split large batches across
+// calls (30 reports per call is always within capacity).
 RCLIENT_API int r_client_report_latency(
     r_client_t *client,
     const r_service_latency_report_t *reports,

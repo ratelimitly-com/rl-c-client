@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 MATRIX="$ROOT/tests/linux-one-shot-examples.txt"
 TEST_NAME=test_production_p0_one_shot_examples
+source "$ROOT/tests/production_p0_profile.sh"
+production_p0_apply_request_profile
 
 fail() {
   echo "$TEST_NAME: $*" >&2
@@ -91,7 +93,7 @@ sanitize_file() {
     redacted=${line//"$RATELIMITLY_AUTH_KEY"/[REDACTED]}
     # Also redact credential-shaped text in case a dependency prints a parsed
     # or reconstructed key rather than the exact inherited byte string.
-    while [[ $redacted =~ rl-(aes|hmac)[[:alnum:]]{8,} ]]; do
+    while [[ $redacted =~ rl-(aes|cookie)[[:alnum:]]{8,} ]]; do
       token=${BASH_REMATCH[0]}
       redacted=${redacted//"$token"/[REDACTED]}
     done
@@ -132,8 +134,11 @@ assert_example_output() {
   local positive_number_pattern='^[1-9][0-9]*$'
   local value
 
-  [[ ! -s $stderr_file ]] \
-    || fail_example "$name" "unexpected stderr" "$stdout_file" "$stderr_file"
+  production_p0_report_profiles \
+      "$stderr_file" "$TEST_NAME/$name" 1 true \
+    || fail_example "$name" \
+      "expected one valid 25 ms / 3-replay request profile" \
+      "$stdout_file" "$stderr_file"
   mapfile -t lines <"$stdout_file"
 
   case $profile in

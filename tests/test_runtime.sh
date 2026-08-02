@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/tests/production_p0_profile.sh"
 PORT="${R_RUNTIME_TEST_PORT:-39085}"
 TMP_DIR="$(mktemp -d)"
 RESPONDER_PID=""
@@ -19,7 +20,7 @@ trap cleanup EXIT
   "--listen=127.0.0.1:$PORT" \
   --scenario=guard-pass \
   --auth=aes \
-  --max-packets=2 \
+  --max-packets=3 \
   >"$TMP_DIR/responder.out" 2>"$TMP_DIR/responder.err" &
 RESPONDER_PID=$!
 
@@ -33,7 +34,9 @@ for _ in {1..100}; do
 done
 
 grep -q '"event":"ready"' "$TMP_DIR/responder.out"
-"$ROOT/tests/test_runtime" "$PORT"
+"$ROOT/tests/test_runtime" "$PORT" 2>"$TMP_DIR/runtime.err"
+production_p0_report_profiles \
+    "$TMP_DIR/runtime.err" test_runtime 2 true
 wait "$RESPONDER_PID"
 RESPONDER_PID=""
 

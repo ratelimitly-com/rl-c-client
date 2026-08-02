@@ -42,6 +42,22 @@ typedef struct result_cb_ctx {
     bool success;
 } result_cb_ctx_t;
 
+typedef struct profile_cb_ctx {
+    int calls;
+    r_request_profile_t profile;
+} profile_cb_ctx_t;
+
+static void record_request_profile(
+    void *user,
+    const r_request_profile_t *profile
+) {
+    profile_cb_ctx_t *context = user;
+    assert(context != NULL);
+    assert(profile != NULL);
+    context->calls += 1;
+    context->profile = *profile;
+}
+
 static void fill_ipv4_addr(r_addr_t *addr, const char *ip);
 
 static int test_udp_send(void *ctx, const r_addr_t *to, const uint8_t *buf, size_t len) {
@@ -190,6 +206,58 @@ static int test_resolve_srv_async(
     }
     test->pending_srv_cb = cb;
     test->pending_srv_user = user;
+    return 0;
+}
+
+static int test_resolve_srv_failure(
+    void *ctx,
+    const char *name,
+    r_dns_req_id_t *out_req_id,
+    r_dns_srv_cb cb,
+    void *user
+) {
+    (void)ctx;
+    (void)name;
+    (void)out_req_id;
+    (void)cb;
+    (void)user;
+    return -1;
+}
+
+static int test_resolve_srv_empty(
+    void *ctx,
+    const char *name,
+    r_dns_req_id_t *out_req_id,
+    r_dns_srv_cb cb,
+    void *user
+) {
+    (void)ctx;
+    (void)name;
+    if (out_req_id) {
+        *out_req_id = 303u;
+    }
+    cb(user, 0, NULL, 0u);
+    return 0;
+}
+
+static int test_resolve_srv_nonconforming(
+    void *ctx,
+    const char *name,
+    r_dns_req_id_t *out_req_id,
+    r_dns_srv_cb cb,
+    void *user
+) {
+    (void)ctx;
+    (void)name;
+    if (out_req_id) {
+        *out_req_id = 404u;
+    }
+    const r_srv_record_t record = {
+        .target = "legacy.local",
+        .port = 8080u,
+        .ttl_ms = 60000u,
+    };
+    cb(user, 0, &record, 1u);
     return 0;
 }
 
@@ -437,6 +505,37 @@ static r_client_t *make_client_with_policy(
     return client;
 }
 
+static r_client_t *make_client_with_policy_and_profile(
+    test_ctx_t *ctx,
+    const r_request_policy_t *policy,
+    profile_cb_ctx_t *profile
+) {
+    r_io_ops_t io = {
+        .ctx = ctx,
+        .udp_send = test_udp_send,
+        .now_ms = test_now_ms,
+    };
+    r_resolver_ops_t resolver = {
+        .ctx = ctx,
+        .resolve_srv = test_resolve_srv,
+        .resolve_addrs = test_resolve_addrs,
+        .cancel = test_cancel,
+    };
+    r_client_config_t config;
+    memset(&config, 0, sizeof(config));
+    config.tenant.dns_name = "example.local";
+    config.tenant.key_id = 2;
+    config.tenant.auth.type = R_AUTH_COOKIE;
+    config.tenant.auth.secret = SAMPLE_COOKIE_KEY_TENANT_2;
+    config.request_policy = policy;
+    config.request_profile_cb = record_request_profile;
+    config.request_profile_user = profile;
+
+    r_client_t *client = NULL;
+    assert(r_client_create(&config, &io, &resolver, &client) == RCLIENT_OK);
+    return client;
+}
+
 static r_client_t *make_client_with_ops(
     test_ctx_t *ctx,
     const r_io_ops_t *io,
@@ -624,6 +723,53 @@ static r_resource_request_t sample_resource(void) {
     resource.rate_limit = 100;
     resource.tokens_requested = 1;
     return resource;
+}
+
+static void assert_srv_only_discovery_failure(
+    int (*resolve_srv)(
+        void *,
+        const char *,
+        r_dns_req_id_t *,
+        r_dns_srv_cb,
+        void *
+    )
+) {
+    test_ctx_t ctx = {0};
+    r_io_ops_t io = {
+        .ctx = &ctx,
+        .udp_send = test_udp_send,
+        .now_ms = test_now_ms,
+    };
+    r_resolver_ops_t resolver = {
+        .ctx = &ctx,
+        .resolve_srv = resolve_srv,
+        .resolve_addrs = test_resolve_addrs_unexpected,
+        .cancel = test_cancel,
+    };
+    r_client_t *client = make_client_with_ops(&ctx, &io, &resolver);
+    r_resource_request_t resource = sample_resource();
+    r_client_req_t *request = NULL;
+    assert(r_client_check_rate_limit_async(
+        client,
+        &resource,
+        1u,
+        NULL,
+        0u,
+        NULL,
+        0u,
+        noop_rate_limit_cb,
+        NULL,
+        &request
+    ) == RCLIENT_ERR_DNS);
+    assert(request == NULL);
+    assert(ctx.send_count == 0u);
+    r_client_destroy(client);
+}
+
+static void test_discovery_remains_srv_only(void) {
+    assert_srv_only_discovery_failure(test_resolve_srv_failure);
+    assert_srv_only_discovery_failure(test_resolve_srv_empty);
+    assert_srv_only_discovery_failure(test_resolve_srv_nonconforming);
 }
 
 static r_client_req_t *start_sample_request(
@@ -887,6 +1033,116 @@ static void test_report_latency_filters_oversized_reports(void) {
     ctx.send_count = 0;
     rc = r_client_report_latency(client, &reports[1], 1);
     assert(rc == RCLIENT_OK);
+    assert(ctx.send_count == 0);
+
+    r_client_destroy(client);
+}
+
+static void fill_latency_reports(r_service_latency_report_t *reports, size_t count) {
+    memset(reports, 0, count * sizeof(*reports));
+    for (size_t i = 0; i < count; i++) {
+        memcpy(reports[i].latency_tracker_id, "svc", 3);
+        reports[i].observed_latency = 10;
+        reports[i].ttl_ms = 1000;
+        reports[i].max_samples = 10;
+        reports[i].buffer_size = 64;
+        reports[i].min_sample_threshold = 1;
+    }
+}
+
+/*
+ * Latency reports are framed into a fixed R_MAX_PACKET_SIZE buffer:
+ *   cookie: 40 (tenant) + 4 (auth TLV) + 32 (cookie) + 8 (PDU) + 4 + 36 * n
+ *   aes:    40 (tenant) + 4 (auth TLV) + 12 (nonce) + 16 (tag) + 8 + 4 + 36 * n
+ * so 30 reports fit under cookie auth and 31 under AES. r_build_latency_report_body
+ * only rejects at n >= 34, leaving a window where the framing memcpys would run past
+ * the packet buffer. Oversized batches must be rejected before any copy happens.
+ */
+#define LATENCY_COOKIE_MAX_REPORTS 30u
+#define LATENCY_AES_MAX_REPORTS 31u
+
+static void test_report_latency_accepts_largest_cookie_batch(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    r_client_t *client = make_client(&ctx);
+
+    r_service_latency_report_t reports[LATENCY_COOKIE_MAX_REPORTS];
+    fill_latency_reports(reports, LATENCY_COOKIE_MAX_REPORTS);
+
+    int rc = r_client_report_latency(client, reports, LATENCY_COOKIE_MAX_REPORTS);
+    assert(rc == RCLIENT_OK);
+    assert(ctx.send_count == 1);
+    /* Every report survived the buffer_size filter and landed in one packet. */
+    assert(ctx.last_packet_len == 88u + 36u * LATENCY_COOKIE_MAX_REPORTS);
+    assert(ctx.last_packet_len <= R_MAX_PACKET_SIZE);
+
+    r_client_destroy(client);
+}
+
+static void test_report_latency_rejects_oversized_cookie_batch(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    r_client_t *client = make_client(&ctx);
+
+    r_service_latency_report_t reports[LATENCY_COOKIE_MAX_REPORTS + 1u];
+    fill_latency_reports(reports, LATENCY_COOKIE_MAX_REPORTS + 1u);
+
+    int rc = r_client_report_latency(client, reports, LATENCY_COOKIE_MAX_REPORTS + 1u);
+    assert(rc == RCLIENT_ERR_PROTOCOL);
+    assert(ctx.send_count == 0);
+
+    r_client_destroy(client);
+}
+
+static void test_report_latency_rejects_oversized_batch_after_filtering(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    r_client_t *client = make_client(&ctx);
+
+    /* Reports above the buffer_size quota are dropped into a heap-allocated
+     * filtered copy, so the capacity rejection must release it too. Three of
+     * these 34 are filtered out, leaving 31 - one past cookie capacity. */
+    enum { TOTAL = LATENCY_COOKIE_MAX_REPORTS + 4u };
+    r_service_latency_report_t reports[TOTAL];
+    fill_latency_reports(reports, TOTAL);
+    reports[0].buffer_size = 65;
+    reports[1].buffer_size = 65;
+    reports[2].buffer_size = 65;
+
+    int rc = r_client_report_latency(client, reports, TOTAL);
+    assert(rc == RCLIENT_ERR_PROTOCOL);
+    assert(ctx.send_count == 0);
+
+    r_client_destroy(client);
+}
+
+static void test_report_latency_accepts_largest_aes_batch(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    r_client_t *client = make_aes_client(&ctx);
+
+    r_service_latency_report_t reports[LATENCY_AES_MAX_REPORTS];
+    fill_latency_reports(reports, LATENCY_AES_MAX_REPORTS);
+
+    int rc = r_client_report_latency(client, reports, LATENCY_AES_MAX_REPORTS);
+    assert(rc == RCLIENT_OK);
+    assert(ctx.send_count == 1);
+    assert(ctx.last_packet_len == 84u + 36u * LATENCY_AES_MAX_REPORTS);
+    assert(ctx.last_packet_len <= R_MAX_PACKET_SIZE);
+
+    r_client_destroy(client);
+}
+
+static void test_report_latency_rejects_oversized_aes_batch(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    r_client_t *client = make_aes_client(&ctx);
+
+    r_service_latency_report_t reports[LATENCY_AES_MAX_REPORTS + 1u];
+    fill_latency_reports(reports, LATENCY_AES_MAX_REPORTS + 1u);
+
+    int rc = r_client_report_latency(client, reports, LATENCY_AES_MAX_REPORTS + 1u);
+    assert(rc == RCLIENT_ERR_PROTOCOL);
     assert(ctx.send_count == 0);
 
     r_client_destroy(client);
@@ -1388,6 +1644,54 @@ static void test_exponential_schedule_uses_absolute_deadlines(void) {
     r_client_destroy(client);
 }
 
+static void test_request_profile_reports_wait_round_and_final_phase(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.now_ms = 1000u;
+
+    r_request_policy_t policy;
+    r_client_default_request_policy(&policy);
+    policy.unit_ms = 25u;
+    policy.replay_count = 3u;
+    policy.completion_delivery = false;
+
+    profile_cb_ctx_t profile = {0};
+    r_client_t *client = make_client_with_policy_and_profile(
+        &ctx,
+        &policy,
+        &profile
+    );
+    result_cb_ctx_t result = {0};
+    r_client_req_t *request = start_sample_request(client, &result);
+
+    const uint64_t expected_deadlines[] = {
+        1025u,
+        1050u,
+        1075u,
+        1100u,
+        1125u,
+    };
+    for (size_t index = 0u;
+            index < sizeof(expected_deadlines) / sizeof(expected_deadlines[0]);
+            index++) {
+        uint64_t deadline = 0u;
+        assert(r_client_request_deadline_ms(request, &deadline) == RCLIENT_OK);
+        assert(deadline == expected_deadlines[index]);
+        ctx.now_ms = deadline;
+        assert(r_client_on_timeout(client, request, deadline) == RCLIENT_OK);
+    }
+
+    assert(result.calls == 1);
+    assert(result.status == RCLIENT_ERR_TIMEOUT);
+    assert(profile.calls == 1);
+    assert(profile.profile.wait_ms == 125u);
+    assert(profile.profile.round == 3u);
+    assert(profile.profile.phase == R_REQUEST_COMPLETION_FINAL_RECEIVE);
+    assert(profile.profile.status == RCLIENT_ERR_TIMEOUT);
+    assert(!profile.profile.response_selected);
+    r_client_destroy(client);
+}
+
 static void test_linear_schedule_has_distinct_gaps(void) {
     test_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
@@ -1843,12 +2147,18 @@ int main(void) {
     test_client_rejects_explicit_key_metadata_mismatch();
     test_check_rate_limit_rejects_oversized_guard();
     test_report_latency_filters_oversized_reports();
+    test_report_latency_accepts_largest_cookie_batch();
+    test_report_latency_rejects_oversized_cookie_batch();
+    test_report_latency_rejects_oversized_batch_after_filtering();
+    test_report_latency_accepts_largest_aes_batch();
+    test_report_latency_rejects_oversized_aes_batch();
     test_report_latency_requires_udp_send();
     test_empty_aes_response_is_rejected_explicitly();
     test_callback_can_cancel_same_request_without_double_free();
     test_destroy_ignores_late_dns_srv_callback();
     test_destroy_ignores_late_dns_addr_callback();
     test_destroy_handles_dns_cancel_callback();
+    test_discovery_remains_srv_only();
     test_default_policy_replays_once_then_enters_receive_only_phase();
     test_default_policy_late_timers_remain_bounded_by_dedup_ttl();
     test_default_policy_final_phase_returns_first_valid_without_replay();
@@ -1856,6 +2166,7 @@ int main(void) {
     test_default_policy_returns_oldest_immediately();
     test_default_policy_rejects_ttl_above_credential_limit();
     test_exponential_schedule_uses_absolute_deadlines();
+    test_request_profile_reports_wait_round_and_final_phase();
     test_linear_schedule_has_distinct_gaps();
     test_preference_is_independent_of_replay_gap();
     test_response_after_preference_returns_immediately();

@@ -2,6 +2,9 @@
 set -euo pipefail
 
 TEST_NAME=test_production_p0_win32_wine
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+source "$ROOT/tests/production_p0_profile.sh"
+production_p0_apply_request_profile
 
 usage() {
   echo "usage: $0 [win32-example.exe [wine-runner]]" >&2
@@ -231,7 +234,7 @@ sanitize_stream() {
       break
     fi
     protected=${line//"$AUTH_KEY"/[REDACTED_AUTH_KEY]}
-    while [[ $protected =~ (rl-(aes|hmac)[[:alnum:]_-]+) ]]; do
+    while [[ $protected =~ (rl-(aes|cookie)[[:alnum:]_-]+) ]]; do
       token=${BASH_REMATCH[1]}
       protected=${protected//"$token"/[REDACTED_AUTH_KEY]}
     done
@@ -342,8 +345,9 @@ assert_output() {
     END { exit !(NR == 1 && valid) }
   ' "$TMP_DIR/example.out" \
     || fail_case "stdout was not the single documented allowed/latency line"
-  [[ ! -s $TMP_DIR/example.err ]] \
-    || fail_case "example wrote unexpected stderr"
+  production_p0_report_profiles \
+      "$TMP_DIR/example.err" "$TEST_NAME" 1 true \
+    || fail_case "expected one valid 25 ms / 3-replay request profile"
 }
 
 initialize_prefix

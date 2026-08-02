@@ -22,6 +22,8 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+
+#include "../src/r_win32_udp.h"
 typedef SOCKET responder_socket_t;
 typedef int responder_socklen_t;
 #define R_TEST_INVALID_SOCKET INVALID_SOCKET
@@ -513,7 +515,8 @@ static int receive_packet(
     );
     if (received == SOCKET_ERROR) {
         int error = WSAGetLastError();
-        if (error == WSAEINTR || error == WSAEWOULDBLOCK) {
+        if (error == WSAEINTR || error == WSAEWOULDBLOCK
+            || error == WSAECONNRESET) {
             return -2;
         }
         print_socket_error("recvfrom");
@@ -552,11 +555,10 @@ static int send_packet(
         return -1;
     }
 #ifdef _WIN32
-    int sent = sendto(
+    int sent = r_win32_udp_sendto(
         socket_value,
         (const char *)buffer,
         (int)length,
-        0,
         (const struct sockaddr *)peer,
         peer_len
     );
@@ -637,6 +639,9 @@ int main(int argc, char **argv) {
         OPENSSL_cleanse(&state, sizeof(state));
         return 1;
     }
+#ifdef _WIN32
+    r_win32_udp_disable_connreset(fd);
+#endif
     if (bind(fd, (struct sockaddr *)&address.storage, address.len) != 0) {
         print_socket_error("bind");
         close_responder_socket(fd);

@@ -21,6 +21,11 @@ typedef struct r_runtime_options {
     const char *auth_key;
     const char *server_host;
     uint16_t server_port;
+    /* Optional explicit policy, populated by r_runtime_options_from_env(). */
+    r_request_policy_t request_policy;
+    bool has_request_policy;
+    /* Emit one credential-free scheduler profile for every completed request. */
+    bool profile_requests;
 } r_runtime_options_t;
 
 /*
@@ -42,12 +47,18 @@ typedef struct r_runtime_client {
     size_t socket_count;
     char server_host[256];
     uint16_t server_port;
+    uint64_t request_unit_ms;
+    uint32_t request_replay_count;
     bool network_started;
 } r_runtime_client_t;
 
 RCLIENT_API const char *r_runtime_status_name(int status);
 
-/* Read the required key plus optional DNS/fixed-endpoint overrides. */
+/*
+ * Read the required key plus optional DNS/fixed-endpoint overrides. The
+ * optional RATELIMITLY_REQUEST_UNIT_MS, RATELIMITLY_REQUEST_REPLAY_COUNT, and
+ * RATELIMITLY_REQUEST_PROFILE=1 settings configure the example runtime only.
+ */
 RCLIENT_API int r_runtime_options_from_env(
     r_runtime_options_t *out_options
 );
@@ -68,11 +79,10 @@ RCLIENT_API r_runtime_socket_t r_runtime_socket_at(
     size_t index
 );
 
-/* Drain one ready socket, delivering datagrams to the client until the
- * socket is empty or a datagram produces a non-RCLIENT_OK ingress status,
- * which is returned. Such statuses are informational (any off-path sender
- * can trigger them): log and continue — never treat them as fatal. Remaining
- * datagrams are delivered on the next readiness event. */
+/*
+ * Drain one ready socket and deliver all valid datagrams to the client.
+ * Malformed or unauthenticated datagrams are discarded as packet-local noise.
+ */
 RCLIENT_API int r_runtime_client_on_readable(
     r_runtime_client_t *runtime,
     r_runtime_socket_t socket_value
@@ -105,6 +115,10 @@ typedef int (*r_runtime_protected_work_cb)(void *user);
 /*
  * Run admitted work, measure it monotonically, and report one sample.
  * Denied/cancelled requests and failed work never emit a latency report.
+ * Protected work is invoked at most once; every later call returns
+ * RCLIENT_ERR_CONFIG, including when the first call's report send failed.
+ * After a report failure, callers that retained out_observed_latency_ms may
+ * retry only r_client_admission_report_latency() with that measured value.
  */
 RCLIENT_API int r_runtime_admission_run_and_report(
     r_runtime_client_t *runtime,

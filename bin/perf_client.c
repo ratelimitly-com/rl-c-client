@@ -609,17 +609,6 @@ static int perf_dns_cache_init(perf_dns_cache_t *cache, const char *tenant_name)
         addr_list_free(&list);
     }
 
-    addr_list_t fallback;
-    memset(&fallback, 0, sizeof(fallback));
-    if (dns_query_addrs(&resolver, tenant_name, &fallback) == 0) {
-        if (perf_dns_cache_add_addrs(cache, tenant_name, &fallback) != 0) {
-            addr_list_free(&fallback);
-            dns_resolver_close(&resolver);
-            perf_dns_cache_reset(cache);
-            return -1;
-        }
-    }
-    addr_list_free(&fallback);
     dns_resolver_close(&resolver);
     return 0;
 }
@@ -986,8 +975,8 @@ static perf_config_t perf_config_from_args(int argc, char **argv) {
         exit(2);
     }
     if (perf_parse_auth_bech32(cfg.auth_bech32, &cfg.auth_type, &cfg.tenant_id) != 0) {
-        fprintf(stderr, "Invalid --auth value '%s' (expected rl-cookie... or rl-aes...)\n",
-                cfg.auth_bech32 ? cfg.auth_bech32 : "");
+        fprintf(stderr,
+            "Invalid --auth value (expected rl-cookie... or rl-aes...)\n");
         exit(2);
     }
 

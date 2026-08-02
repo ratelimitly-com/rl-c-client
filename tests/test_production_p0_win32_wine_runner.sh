@@ -62,12 +62,19 @@ if [[ ${1:-} == cmd ]]; then
 fi
 
 printf '%s\n' "$BASHPID" >"$FIXTURE_STATE_DIR/child.pid"
-printf 'key=%s\n' "${RATELIMITLY_AUTH_KEY:+present}" \
+printf 'key=%s unit=%s replays=%s profile=%s\n' \
+  "${RATELIMITLY_AUTH_KEY:+present}" \
+  "${RATELIMITLY_REQUEST_UNIT_MS:-}" \
+  "${RATELIMITLY_REQUEST_REPLAY_COUNT:-}" \
+  "${RATELIMITLY_REQUEST_PROFILE:-}" \
   >>"$FIXTURE_STATE_DIR/example.log"
 case ${FAKE_WINE_MODE:-success} in
   success)
     printf '%s\r\n' \
       'allowed: inventory response prepared by Win32; latency=7 ms'
+    printf '%s\r\n' \
+      'rl-c-client[profile]: wait_ms=17 unit_ms=25 replay_count=3 round=0 phase=round status=0 response=selected' \
+      >&2
     ;;
   bad-output)
     printf '%s\n' 'unexpected output'
@@ -167,8 +174,9 @@ test_success() {
     || fail "success wrote unexpected stderr"
   grep -Fxq 'key=' "$directory/wine-init.log" \
     || fail "Wine prefix initialization inherited the credential"
-  grep -Fxq 'key=present' "$directory/example.log" \
-    || fail "the Win32 child did not inherit the credential"
+  grep -Fxq 'key=present unit=25 replays=3 profile=1' \
+    "$directory/example.log" \
+    || fail "the Win32 child did not inherit the credential and request profile"
   [[ $(grep -Fxc 'key= args=-k' "$directory/wineserver.log") -eq 2 ]] \
     || fail "success did not issue both prefix-scoped wineserver kills"
   [[ $(grep -Fxc 'key= args=-w' "$directory/wineserver.log") -eq 2 ]] \

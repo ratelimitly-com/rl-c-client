@@ -41,6 +41,7 @@ LIB_OBJS := $(LIB_SRCS:.c=.o)
 TEST_BINS = \
 	tests/test_protocol \
 	tests/test_client_quota \
+	tests/test_random_failure \
 	tests/test_public_api \
 	tests/test_workflow \
 	tests/test_runtime \
@@ -79,14 +80,16 @@ src/%.o: src/%.c
 tools/%.o: tools/%.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-test: $(TEST_BINS) $(TEST_RESPONDER_BIN)
+test: $(TEST_BINS) $(TEST_RESPONDER_BIN) $(PERF_BIN)
 	./tests/test_protocol
 	./tests/test_client_quota
+	./tests/test_random_failure
 	./tests/test_public_api
 	./tests/test_workflow
 	./tests/test_responder
 	bash ./tests/test_responder_cli.sh
 	bash ./tests/test_runtime.sh
+	bash ./tests/test_perf_client_cli.sh
 	bash ./tests/test_latency_tracker.sh
 	bash ./tests/test_examples.sh
 	python3 ./tests/test_readme_quality_unit.py
@@ -101,6 +104,9 @@ tests/test_protocol: tests/test_protocol.c src/r_protocol.o src/r_crypto.o
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $^ -o $@ -lcrypto
 
 tests/test_client_quota: tests/test_client_quota.c librclient.a
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $^ -o $@ -lcrypto -lresolv -pthread
+
+tests/test_random_failure: tests/test_random_failure.c librclient.a
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $^ -o $@ -lcrypto -lresolv -pthread
 
 tests/test_public_api: tests/test_public_api.c librclient.a

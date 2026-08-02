@@ -48,6 +48,11 @@ request ID before returning so the client can call `cancel` during teardown.
 Late resolver callbacks after cancellation are allowed; the client will ignore
 them.
 
+`udp_send` is different from a resolver callback: it must return before the
+host calls any `r_client_*` API. If a test transport or custom I/O layer obtains
+a response synchronously, queue that datagram and deliver it through
+`r_client_on_datagram` only after `udp_send` has unwound.
+
 ## Request Flow
 
 1. Create the client with `r_client_create`.
@@ -100,6 +105,10 @@ traffic to port 8080 of the tenant host as the signature of a missing or
 mis-labeled SRV zone. (The protocol specification does not treat direct
 A/AAAA records as a substitute for the SRV layer; this fallback is a
 client-side convenience for development setups.)
+
+Discovery is SRV-only. A failed or empty SRV lookup does not fall back to the
+configured tenant name on a hard-coded UDP port; submissions return
+`RCLIENT_ERR_DNS` until usable SRV membership is available.
 
 If TTL values are available, pass them in `r_srv_record_t.ttl_ms`. The client
 uses TTLs to cap refresh intervals. If TTLs are unavailable, set `ttl_ms` to

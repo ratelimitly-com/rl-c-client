@@ -16,12 +16,14 @@ LWAN_CMAKE="$ROOT/examples/lwan/CMakeLists.txt"
 GLIB_SOURCE="$ROOT/examples/glib/main.c"
 KORE_SOURCE="$ROOT/examples/kore/main.c"
 PERF_SOURCE="$ROOT/bin/perf_client.c"
+CLIENT_IO_HEADER="$ROOT/include/r_client_io.h"
 LINUX_ONE_SHOT_MATRIX="$ROOT/tests/linux-one-shot-examples.txt"
 LINUX_HTTP_MATRIX="$ROOT/tests/linux-http-examples.txt"
 MACOS_LOCAL_MATRIX="$ROOT/tests/macos-local-examples.txt"
 WINDOWS_NATIVE_RUNNER="$ROOT/tests/test_windows_native_example.ps1"
 PRODUCTION_P0_SOURCE="$ROOT/tests/production_p0_probe.c"
 PRODUCTION_P0_RUNNER="$ROOT/tests/test_production_p0.sh"
+PRODUCTION_P0_PROFILE="$ROOT/tests/production_p0_profile.sh"
 PRODUCTION_P0_ONE_SHOT_RUNNER="$ROOT/tests/test_production_p0_one_shot_examples.sh"
 PRODUCTION_P0_HTTP_MATRIX_RUNNER="$ROOT/tests/test_production_p0_http_examples.sh"
 PRODUCTION_P0_HTTP_RUNNER="$ROOT/tests/run_production_p0_http_example.sh"
@@ -146,6 +148,8 @@ require_production_step_gate() {
   || fail "missing production P0 protocol probe"
 [[ -x "$PRODUCTION_P0_RUNNER" ]] \
   || fail "missing executable production P0 runner"
+[[ -r "$PRODUCTION_P0_PROFILE" ]] \
+  || fail "missing shared production P0 request profile"
 [[ -x "$PRODUCTION_P0_ONE_SHOT_RUNNER" ]] \
   || fail "missing executable production P0 one-shot runner"
 [[ -x "$PRODUCTION_P0_HTTP_MATRIX_RUNNER" ]] \
@@ -172,6 +176,10 @@ for required_text in \
   'MinGW/Wine' \
   '37 ms' \
   'positive token deficit' \
+  '25 ms' \
+  'three internal request replays' \
+  '125 ms' \
+  'request profile' \
   'does not prove that production accepted' \
   'kqueue and libdispatch remain local-only' \
   'server binary' \
@@ -191,10 +199,23 @@ for stale_text in \
   fi
 done
 if grep -Eq -- \
-    'c-[0-9]{8,}|s-[0-9]{6,}|rl-(aes|hmac)[A-Za-z0-9_-]{32,}' \
+    'c-[0-9]{8,}|s-[0-9]{6,}|rl-(aes|cookie)[A-Za-z0-9_-]{32,}' \
     "$CLOUD_CI_GUIDE"; then
   fail "production P0 CI guide contains a concrete credential or endpoint"
 fi
+for redaction_runner in \
+  "$PRODUCTION_P0_ONE_SHOT_RUNNER" \
+  "$PRODUCTION_P0_HTTP_RUNNER" \
+  "$PRODUCTION_P0_WIN32_WINE_RUNNER" \
+  "$PRODUCTION_P0_WIN32_NATIVE_RUNNER"; do
+  grep -Fq -- 'rl-(aes|cookie)' "$redaction_runner" \
+    || fail "$(basename "$redaction_runner") does not redact rl-cookie credentials"
+  if grep -Fq -- 'rl-(aes|hmac)' "$redaction_runner"; then
+    fail "$(basename "$redaction_runner") still matches obsolete rl-hmac credentials"
+  fi
+done
+grep -Fq -- 'must not call any r_client_' "$CLIENT_IO_HEADER" \
+  || fail "udp_send reentrancy prohibition is absent from the public IO contract"
 grep -Fxq -- '/bin/production_p0_probe' "$ROOT/.gitignore" \
   || fail "production P0 build artifact is not ignored"
 grep -Fq -- 'bash tests/test_linux_one_shot_examples.sh' "$CI_WORKFLOW" \
@@ -345,6 +366,38 @@ grep -Eq -- \
   '^[[:space:]]*timeout --signal=TERM --kill-after=1s 29s ' \
   "$PRODUCTION_P0_ONE_SHOT_RUNNER" \
   || fail "one-shot P0 runner lacks its hard 30-second deadline"
+for shell_runner in \
+  "$PRODUCTION_P0_RUNNER" \
+  "$PRODUCTION_P0_ONE_SHOT_RUNNER" \
+  "$PRODUCTION_P0_HTTP_RUNNER" \
+  "$PRODUCTION_P0_WIN32_WINE_RUNNER"; do
+  grep -Fq -- 'production_p0_profile.sh' "$shell_runner" \
+    || fail "production runner does not load the shared request profile: $shell_runner"
+  grep -Fq -- 'production_p0_apply_request_profile' "$shell_runner" \
+    || fail "production runner does not apply the shared request profile: $shell_runner"
+done
+for profile_setting in \
+  'RATELIMITLY_REQUEST_UNIT_MS=25' \
+  'RATELIMITLY_REQUEST_REPLAY_COUNT=3' \
+  'RATELIMITLY_REQUEST_PROFILE=1'; do
+  grep -Fq -- "$profile_setting" "$PRODUCTION_P0_PROFILE" \
+    || fail "shared production profile omits: $profile_setting"
+done
+if rg -n '(^|[[:space:]])(mapfile|readarray)([[:space:]]|$)' \
+    "$PRODUCTION_P0_PROFILE" >/dev/null; then
+  fail "shared production profile requires Bash newer than macOS Bash 3.2"
+fi
+grep -Fq -- 'production_p0_report_profiles' \
+  "$PRODUCTION_P0_ONE_SHOT_RUNNER" \
+  || fail "one-shot P0 runner does not report request wait profiles"
+grep -Fq -- 'tests/test_public_api' \
+  "$ROOT/tests/build_linux_one_shot_examples.sh" \
+  || fail "one-shot build does not verify the unchanged release policy"
+if rg -n 'R_CLIENT_DEFAULT_REPLAY_COUNT' \
+    "$ROOT/src" "$ROOT/include" \
+    "$ROOT/tests/build_linux_one_shot_examples.sh" >/dev/null; then
+  fail "production retries must not be compiled into the release default"
+fi
 linux_http_job=$(sed -n \
   '/^  linux-http-examples:/,/^  win32-example:/p' \
   "$CI_WORKFLOW")
@@ -385,7 +438,10 @@ grep -Fq -- 'ulimit -c 0' "$PRODUCTION_P0_HTTP_RUNNER" \
   || fail "HTTP P0 runner permits secret-bearing core dumps"
 grep -Fq -- 'assert_http_port_is_free' "$PRODUCTION_P0_HTTP_RUNNER" \
   || fail "HTTP P0 runner can attach to an unrelated listener"
+grep -Fq -- 'production_p0_report_profiles' "$PRODUCTION_P0_HTTP_RUNNER" \
+  || fail "HTTP P0 runner does not report request wait profiles"
 bash -n \
+  "$PRODUCTION_P0_PROFILE" \
   "$PRODUCTION_P0_HTTP_MATRIX_RUNNER" \
   "$PRODUCTION_P0_HTTP_RUNNER" \
   || fail "HTTP P0 runner has invalid Bash syntax"
@@ -443,6 +499,9 @@ grep -Fq -- 'stop_wineserver || cleanup_failed=true' \
 grep -Fq -- 'inventory response prepared by Win32' \
   "$PRODUCTION_P0_WIN32_WINE_RUNNER" \
   || fail "Wine P0 runner does not assert protected work"
+grep -Fq -- 'production_p0_report_profiles' \
+  "$PRODUCTION_P0_WIN32_WINE_RUNNER" \
+  || fail "Wine P0 runner does not report request wait profiles"
 for variable in \
   RATELIMITLY_TENANT \
   RATELIMITLY_EXAMPLE_SERVER_HOST \
@@ -487,6 +546,16 @@ grep -Fq -- 'taskkill.exe' "$PRODUCTION_P0_WIN32_NATIVE_RUNNER" \
 grep -Fq -- '$StartInfo.Environment["RATELIMITLY_AUTH_KEY"] = $AuthKey' \
   "$PRODUCTION_P0_WIN32_NATIVE_RUNNER" \
   || fail "native Win32 P0 runner does not construct an explicit child environment"
+for profile_setting in \
+  '"RATELIMITLY_REQUEST_UNIT_MS" = "25"' \
+  '"RATELIMITLY_REQUEST_REPLAY_COUNT" = "3"' \
+  '"RATELIMITLY_REQUEST_PROFILE" = "1"'; do
+  grep -Fq -- "$profile_setting" "$PRODUCTION_P0_WIN32_NATIVE_RUNNER" \
+    || fail "native Win32 P0 runner omits request profile setting: $profile_setting"
+done
+grep -Fq -- 'rl-c-client\[profile\]' \
+  "$PRODUCTION_P0_WIN32_NATIVE_RUNNER" \
+  || fail "native Win32 P0 runner does not validate request profiles"
 grep -Fq -- '$StartInfo.Environment.Remove($Name)' \
   "$PRODUCTION_P0_WIN32_NATIVE_RUNNER" \
   || fail "native Win32 P0 child environment retains discovery overrides"
@@ -554,6 +623,9 @@ grep -Fq -- 'r_client_format_default_tenant_dns(' "$PERF_SOURCE" \
   || fail "perf client does not use key-derived production DNS"
 if grep -Fq -- 'glar.com' "$PERF_SOURCE"; then
   fail "perf client still uses its legacy DNS default"
+fi
+if grep -Fq -- 'dns_query_addrs(&resolver, tenant_name' "$PERF_SOURCE"; then
+  fail "perf client still pre-resolves the removed direct-address fallback"
 fi
 [[ ! -e "$ROOT/examples/common" ]] \
   || fail "legacy examples/common adapter still exists"
