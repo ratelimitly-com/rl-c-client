@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.5.1 - 2026-08-06
+
+- **Bugfix / API Simplification:** simplified `r_request_policy_t` by removing
+  the redundant `preference` and `final_preference_units` schedule parameters.
+- Standardized request policy preference deadlines so Round 0 ($k=0$) always
+  prefers the oldest discovered server until the Round 0 deadline (`replay_gap`),
+  completing immediately if the oldest server answers or at round end otherwise.
+- Guaranteed that consecutive replay rounds ($k \ge 1$) and the final receive
+  phase complete immediately upon receiving a valid response from any server
+  with zero additional latency delay.
+
 ## 0.5.0 - 2026-08-02
 
 - **Breaking:** replaced the previous wait/quorum/selection/retry policy
