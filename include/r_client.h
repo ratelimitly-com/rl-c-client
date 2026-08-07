@@ -89,9 +89,7 @@ typedef struct r_request_policy {
     uint64_t unit_ms;                    // Base scheduling unit U.
     uint32_t replay_count;               // Replays after the initial send.
     r_ha_schedule_t replay_gap;          // Round durations B(k), in U.
-    r_ha_schedule_t preference;          // Oldest-server preference P(k), in U.
     uint32_t final_receive_units;        // Receive-only duration F, in U.
-    uint32_t final_preference_units;     // Oldest preference in final phase.
     bool completion_delivery;            // Best-effort delivery to missing servers.
 } r_request_policy_t;
 

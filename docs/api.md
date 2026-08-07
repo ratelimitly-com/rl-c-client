@@ -591,15 +591,13 @@ Its parameters are:
 | `unit_ms` | Base time unit `U`, frozen for one request. |
 | `replay_count` | Number of replays `N` after the initial transmission. |
 | `replay_gap` | Round-duration schedule `B(k)`, in units of `U`. |
-| `preference` | Oldest-server preference schedule `P(k)`, in units of `U`. |
 | `final_receive_units` | Final receive-only duration `F`. |
-| `final_preference_units` | Oldest preference within the final interval. Zero makes its first valid response immediate. |
 | `completion_delivery` | Before returning a selected allow or deny, fire-and-forget the same request to servers still missing a valid response. |
 
 Always initialize the policy with `r_client_default_request_policy()` before
 overriding individual fields.
 
-Both schedules use `r_ha_schedule_t`. A fixed schedule always uses
+`replay_gap` uses `r_ha_schedule_t`. A fixed schedule always uses
 `initial_units`; a linear schedule adds `growth.linear_step_units` per round;
 and an exponential schedule multiplies by
 `growth.exponential_factor` per round. Growth beyond `max_units` is capped at
@@ -607,13 +605,10 @@ and an exponential schedule multiplies by
 validity error, not a cap. The full validity rules, all enforced with
 `RCLIENT_ERR_CONFIG` at request submission (not at `r_client_create`):
 
-- `unit_ms > 0`, and `replay_gap.initial_units > 0` (a preference schedule may
-  start at zero);
-- `initial_units <= max_units` for both schedules;
+- `unit_ms > 0`, and `replay_gap.initial_units > 0`;
+- `initial_units <= max_units` for the schedule;
 - a linear schedule needs `growth.linear_step_units >= 1`;
 - an exponential schedule needs `growth.exponential_factor >= 2`;
-- `P(k) <= B(k)` for every transmission round;
-- `final_preference_units <= final_receive_units`;
 - `replay_count <= R_CLIENT_HA_MAX_REPLAY_COUNT` (65535); the credential TTL
   normally imposes a much smaller practical bound.
 
@@ -654,15 +649,13 @@ fails with `RCLIENT_ERR_DNS` when discovery has no conforming target.
 
 At round zero the client sends to the immutable request membership snapshot.
 A valid response from the oldest server completes immediately. Other valid
-responses update the oldest candidate and wait only until that round's
-preference deadline. If the preference deadline already passed, the response
-completes immediately. A response-free replay deadline starts the next round
-and sends only to servers still missing a valid response. After the last
-transmission round, the final receive-only interval sends nothing.
+responses in round zero update the candidate and wait until the end of round zero
+(`replay_gap`). For subsequent replay rounds ($k \ge 1$) and the final receive phase,
+any valid response from any server completes immediately.
 
 Completion delivery is outcome-independent and best effort. It runs before
 every successful selection path—including an immediate oldest response,
-preference-deadline fallback, and final-phase response—and never changes or
+round-deadline fallback, and final-phase response—and never changes or
 delays the selected result.
 
 The default configuration is:

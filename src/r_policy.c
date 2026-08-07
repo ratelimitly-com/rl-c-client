@@ -12,10 +12,6 @@ void r_client_default_request_policy(r_request_policy_t *out_policy) {
     out_policy->replay_gap.kind = R_HA_SCHEDULE_FIXED;
     out_policy->replay_gap.initial_units = 1u;
     out_policy->replay_gap.max_units = 1u;
-    out_policy->preference.kind = R_HA_SCHEDULE_FIXED;
-    out_policy->preference.initial_units = 1u;
-    out_policy->preference.max_units = 1u;
     out_policy->final_receive_units = 1u;
-    out_policy->final_preference_units = 0u;
     out_policy->completion_delivery = true;
 }

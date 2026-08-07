@@ -277,8 +277,7 @@ static int r_request_policy_ttl_ms(
     }
     const r_request_policy_t *policy = &client->policy;
     if (policy->unit_ms == 0u
-        || policy->replay_count > R_CLIENT_HA_MAX_REPLAY_COUNT
-        || policy->final_preference_units > policy->final_receive_units) {
+        || policy->replay_count > R_CLIENT_HA_MAX_REPLAY_COUNT) {
         return RCLIENT_ERR_CONFIG;
     }
 
@@ -293,20 +292,12 @@ static int r_request_policy_ttl_ms(
     uint64_t total_units = 0u;
     for (uint32_t round = 0u; round <= policy->replay_count; round++) {
         uint32_t gap_units = 0u;
-        uint32_t preference_units = 0u;
         if (r_ha_schedule_units(
                 &policy->replay_gap,
                 round,
                 false,
                 &gap_units
-            ) != RCLIENT_OK
-            || r_ha_schedule_units(
-                &policy->preference,
-                round,
-                true,
-                &preference_units
-            ) != RCLIENT_OK
-            || preference_units > gap_units) {
+            ) != RCLIENT_OK) {
             return RCLIENT_ERR_CONFIG;
         }
         if (total_units > UINT64_MAX - gap_units) {
@@ -1447,7 +1438,6 @@ static int r_start_round(
     }
 
     uint32_t gap_units = 0u;
-    uint32_t preference_units = 0u;
     int rc = r_ha_schedule_units(
         &policy->replay_gap,
         round,
@@ -1457,24 +1447,15 @@ static int r_start_round(
     if (rc != RCLIENT_OK) {
         return rc;
     }
-    rc = r_ha_schedule_units(
-        &policy->preference,
-        round,
-        true,
-        &preference_units
-    );
-    if (rc != RCLIENT_OK || preference_units > gap_units) {
-        return RCLIENT_ERR_CONFIG;
-    }
 
     req->phase = R_REQUEST_PHASE_ROUND;
     req->ha_round = round;
     req->ha_round_start_ms = round == 0u
         ? req->start_ms : req->ha_round_deadline_ms;
-    req->ha_preference_deadline_ms =
-        req->ha_round_start_ms + policy->unit_ms * preference_units;
     req->ha_round_deadline_ms =
         req->ha_round_start_ms + policy->unit_ms * gap_units;
+    req->ha_preference_deadline_ms = round == 0u
+        ? req->ha_round_deadline_ms : req->ha_round_start_ms;
     req->attempt_deadline_ms = req->ha_round_deadline_ms;
 
     rc = r_send_rate_request(client, req, round > 0u, false);
@@ -1494,8 +1475,7 @@ static int r_enter_final(
     }
     req->phase = R_REQUEST_PHASE_FINAL;
     req->ha_round_start_ms = req->ha_round_deadline_ms;
-    req->ha_preference_deadline_ms = req->ha_round_start_ms
-        + policy->unit_ms * policy->final_preference_units;
+    req->ha_preference_deadline_ms = req->ha_round_start_ms;
     req->ha_round_deadline_ms = req->ha_round_start_ms
         + policy->unit_ms * policy->final_receive_units;
     req->attempt_deadline_ms = req->ha_round_deadline_ms;
