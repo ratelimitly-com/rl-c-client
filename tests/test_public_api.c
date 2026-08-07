@@ -122,11 +122,7 @@ static void test_default_request_policy(void) {
     assert(policy.replay_gap.kind == R_HA_SCHEDULE_FIXED);
     assert(policy.replay_gap.initial_units == 1u);
     assert(policy.replay_gap.max_units == 1u);
-    assert(policy.preference.kind == R_HA_SCHEDULE_FIXED);
-    assert(policy.preference.initial_units == 1u);
-    assert(policy.preference.max_units == 1u);
     assert(policy.final_receive_units == 1u);
-    assert(policy.final_preference_units == 0u);
     assert(policy.completion_delivery);
 }
 

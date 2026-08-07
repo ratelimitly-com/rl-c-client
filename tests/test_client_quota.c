@@ -1609,15 +1609,7 @@ static void test_exponential_schedule_uses_absolute_deadlines(void) {
         4u,
         2u
     );
-    set_ha_schedule(
-        &policy.preference,
-        R_HA_SCHEDULE_FIXED,
-        1u,
-        1u,
-        0u
-    );
     policy.final_receive_units = 1u;
-    policy.final_preference_units = 0u;
     policy.completion_delivery = false;
 
     r_client_t *client = make_client_with_policy(&ctx, &policy);
@@ -1708,15 +1700,7 @@ static void test_linear_schedule_has_distinct_gaps(void) {
         3u,
         1u
     );
-    set_ha_schedule(
-        &policy.preference,
-        R_HA_SCHEDULE_FIXED,
-        1u,
-        1u,
-        0u
-    );
     policy.final_receive_units = 0u;
-    policy.final_preference_units = 0u;
     policy.completion_delivery = false;
 
     r_client_t *client = make_client_with_policy(&ctx, &policy);
@@ -1738,7 +1722,7 @@ static void test_linear_schedule_has_distinct_gaps(void) {
     r_client_destroy(client);
 }
 
-static void test_preference_is_independent_of_replay_gap(void) {
+static void test_round_zero_waits_for_oldest_server_until_round_deadline(void) {
     test_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
     ctx.now_ms = 3000u;
@@ -1752,13 +1736,6 @@ static void test_preference_is_independent_of_replay_gap(void) {
         R_HA_SCHEDULE_FIXED,
         5u,
         5u,
-        0u
-    );
-    set_ha_schedule(
-        &policy.preference,
-        R_HA_SCHEDULE_FIXED,
-        1u,
-        1u,
         0u
     );
     policy.final_receive_units = 0u;
@@ -1784,7 +1761,7 @@ static void test_preference_is_independent_of_replay_gap(void) {
 
     uint64_t deadline = 0;
     assert(r_client_request_deadline_ms(req, &deadline) == RCLIENT_OK);
-    assert(deadline == 3010u);
+    assert(deadline == 3050u);
     ctx.now_ms = deadline;
     assert(r_client_on_timeout(client, req, deadline) == RCLIENT_OK);
     assert(result.calls == 1);
@@ -1792,7 +1769,7 @@ static void test_preference_is_independent_of_replay_gap(void) {
     r_client_destroy(client);
 }
 
-static void test_response_after_preference_returns_immediately(void) {
+static void test_replay_round_any_server_completes_immediately(void) {
     test_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
     ctx.now_ms = 4000u;
@@ -1800,19 +1777,12 @@ static void test_response_after_preference_returns_immediately(void) {
     r_request_policy_t policy;
     r_client_default_request_policy(&policy);
     policy.unit_ms = 10u;
-    policy.replay_count = 0u;
+    policy.replay_count = 1u;
     set_ha_schedule(
         &policy.replay_gap,
         R_HA_SCHEDULE_FIXED,
-        5u,
-        5u,
-        0u
-    );
-    set_ha_schedule(
-        &policy.preference,
-        R_HA_SCHEDULE_FIXED,
-        1u,
-        1u,
+        2u,
+        2u,
         0u
     );
     policy.final_receive_units = 0u;
@@ -1820,11 +1790,16 @@ static void test_response_after_preference_returns_immediately(void) {
 
     r_client_t *client = make_two_server_client_with_policy(&ctx, &policy);
     result_cb_ctx_t result = {0};
-    (void)start_sample_request(client, &result);
+    r_client_req_t *req = start_sample_request(client, &result);
+
+    ctx.now_ms = 4020u;
+    assert(r_client_on_timeout(client, req, 4020u) == RCLIENT_OK);
+    assert(result.calls == 0);
+
     uint8_t request_id[16];
     copy_last_request_id(&ctx, request_id);
 
-    ctx.now_ms = 4015u;
+    ctx.now_ms = 4025u;
     uint8_t response[R_MAX_PACKET_SIZE];
     size_t response_len = build_cookie_success_response_from(
         2u, request_id, response, sizeof(response)
@@ -2109,24 +2084,6 @@ static void test_policy_rejects_invalid_schedules(void) {
     assert_policy_rejected(&policy);
 
     r_client_default_request_policy(&policy);
-    policy.preference.initial_units = 2u;
-    policy.preference.max_units = 2u;
-    assert_policy_rejected(&policy);
-
-    r_client_default_request_policy(&policy);
-    policy.replay_count = 1u;
-    policy.replay_gap.initial_units = 2u;
-    policy.replay_gap.max_units = 2u;
-    set_ha_schedule(
-        &policy.preference,
-        R_HA_SCHEDULE_LINEAR,
-        1u,
-        3u,
-        2u
-    );
-    assert_policy_rejected(&policy);
-
-    r_client_default_request_policy(&policy);
     set_ha_schedule(
         &policy.replay_gap,
         R_HA_SCHEDULE_EXPONENTIAL,
@@ -2168,8 +2125,8 @@ int main(void) {
     test_exponential_schedule_uses_absolute_deadlines();
     test_request_profile_reports_wait_round_and_final_phase();
     test_linear_schedule_has_distinct_gaps();
-    test_preference_is_independent_of_replay_gap();
-    test_response_after_preference_returns_immediately();
+    test_round_zero_waits_for_oldest_server_until_round_deadline();
+    test_replay_round_any_server_completes_immediately();
     test_completion_delivery_covers_allow_and_deny();
     test_completion_delivery_can_be_disabled();
     test_final_phase_completion_delivery();
