@@ -15,11 +15,12 @@ future decisions.
 
 The library exposes two independent operations:
 
-- A **resource request** describes work the application wants to perform as one
-  or more resource consumptions and zero or more latency guards. Ratelimitly
-  evaluates the request as one atomic decision. A grant consumes every
-  requested quantity and authorizes the application to proceed; a rejection
-  consumes none.
+- A **resource request** describes work the application wants to perform as
+  zero or more resource consumptions and zero or more latency guards.
+  Ratelimitly evaluates every non-empty request as one atomic decision. A grant
+  consumes every requested quantity and authorizes the application to proceed;
+  a rejection consumes none. The empty request is the identity case: the client
+  returns local success without network activity.
 - A **latency report** contributes one or more measured service latencies to
   the trackers used by latency guards in later resource requests. It neither
   requests nor consumes resources and does not itself make an admission
@@ -593,7 +594,7 @@ strategy through `r_request_policy_t`.
 | --- | --- |
 | Ratelimitly | Distributed admission-control service that atomically evaluates resource consumption and optional latency guards. |
 | r-server | Ratelimitly server discovered by the client and sent resource requests or latency reports. |
-| resource request | Request containing one or more resource consumptions and zero or more latency guards; a grant consumes all requested quantities atomically. |
+| resource request | Request containing zero or more resource consumptions and zero or more latency guards. Non-empty requests are evaluated atomically by r-servers; the empty request succeeds locally without network activity. |
 | resource consumption | Quantity requested from one configured resource bucket as part of a resource request. |
 | latency report | Independent operation that contributes one or more measured service latencies to latency trackers. |
 | service | Application-defined name for a measured operation or dependency; together with its tracker settings, it defines a canonical latency-tracker ID. |

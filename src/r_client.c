@@ -1705,11 +1705,43 @@ static int r_client_check_rate_limit_async_impl(
     r_client_req_t **out_req,
     bool borrowed
 ) {
-    if (!client || !resources || resource_count == 0 || !cb) {
+    if (!client || !cb) {
+        return RCLIENT_ERR_CONFIG;
+    }
+    if (resource_count > 0 && !resources) {
         return RCLIENT_ERR_CONFIG;
     }
     if (guard_count > 0 && !guards) {
         return RCLIENT_ERR_CONFIG;
+    }
+    if (resource_count == 0 && guard_count == 0) {
+        if (out_req) {
+            *out_req = NULL;
+        }
+        if (client->config.request_profile_cb) {
+            const r_request_profile_t profile = {
+                .wait_ms = 0u,
+                .round = 0u,
+                .phase = R_REQUEST_COMPLETION_ROUND,
+                .status = RCLIENT_OK,
+                .response_selected = false,
+            };
+            client->config.request_profile_cb(
+                client->config.request_profile_user,
+                &profile
+            );
+        }
+        const r_rate_limit_result_t result = {
+            .success = true,
+            .server_id = 0u,
+            .steering_feedback = false,
+            .guards = NULL,
+            .guard_count = 0u,
+            .resources = NULL,
+            .resource_count = 0u,
+        };
+        cb(user, NULL, RCLIENT_OK, &result);
+        return RCLIENT_OK;
     }
     int rc = r_validate_latency_guards(client, guards, guard_count);
     if (rc != RCLIENT_OK) {
@@ -1729,19 +1761,21 @@ static int r_client_check_rate_limit_async_impl(
     req->cb = cb;
     req->user = user;
 
-    if (borrowed) {
-        req->resources = (r_resource_request_t *)resources;
-        req->resource_count = resource_count;
-        req->owns_resources = false;
-    } else {
-        req->resources = (r_resource_request_t *)calloc(resource_count, sizeof(r_resource_request_t));
-        if (!req->resources) {
-            r_request_free(req);
-            return RCLIENT_ERR_NOMEM;
+    if (resource_count > 0) {
+        if (borrowed) {
+            req->resources = (r_resource_request_t *)resources;
+            req->resource_count = resource_count;
+            req->owns_resources = false;
+        } else {
+            req->resources = (r_resource_request_t *)calloc(resource_count, sizeof(r_resource_request_t));
+            if (!req->resources) {
+                r_request_free(req);
+                return RCLIENT_ERR_NOMEM;
+            }
+            memcpy(req->resources, resources, resource_count * sizeof(r_resource_request_t));
+            req->resource_count = resource_count;
+            req->owns_resources = true;
         }
-        memcpy(req->resources, resources, resource_count * sizeof(r_resource_request_t));
-        req->resource_count = resource_count;
-        req->owns_resources = true;
     }
 
     if (guard_count > 0) {

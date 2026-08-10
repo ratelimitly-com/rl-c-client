@@ -805,6 +805,11 @@ grep -Fq -- 'The library exposes two independent operations:' \
   || fail "root README does not introduce the two independent operations"
 grep -Fq -- 'A **resource request**' "$ROOT_README" \
   || fail "root README does not define a resource request"
+grep -Fq -- 'zero or more resource consumptions and zero or more latency guards' \
+  "$ROOT_README" \
+  || fail "root README does not document independent request shapes"
+grep -Fq -- 'empty request is the identity case' "$ROOT_README" \
+  || fail "root README does not document empty local success"
 grep -Fq -- 'A **latency report**' "$ROOT_README" \
   || fail "root README does not define a latency report"
 if grep -Fiq -- '**Prerequisites.**' "$ROOT_README"; then
@@ -902,6 +907,11 @@ grep -Fq -- 'Proxy modules and other high-throughput embedders commonly choose t
 grep -Fq -- '`result->success` combines resource and latency-guard decisions' \
   "$API_GUIDE" \
   || fail "API guide does not explain combined admission results"
+grep -Fq -- 'The three non-empty shapes—resource-only,' "$API_GUIDE" \
+  || fail "API guide does not document resource-only, guard-only, and combined requests"
+grep -Fq -- 'invokes the completion callback synchronously before submit returns' \
+  "$API_GUIDE" \
+  || fail "API guide does not document synchronous empty completion"
 grep -Fq -- 'The core client exposes two independent operations:' "$API_GUIDE" \
   || fail "API guide does not define the independent operation model"
 grep -Fq -- \

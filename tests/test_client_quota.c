@@ -20,6 +20,7 @@ typedef struct test_ctx {
     r_addr_t sent_to[64];
     size_t fail_send_number;
     uint64_t now_ms;
+    size_t resolve_srv_count;
     char last_srv_name[256];
     r_dns_srv_cb pending_srv_cb;
     void *pending_srv_user;
@@ -38,14 +39,33 @@ typedef struct cancel_cb_ctx {
 typedef struct result_cb_ctx {
     int calls;
     int status;
+    bool has_result;
     uint64_t server_id;
     bool success;
+    size_t guard_count;
+    size_t resource_count;
+    bool guards_present;
+    bool resources_present;
+    bool first_guard_passed;
 } result_cb_ctx_t;
 
 typedef struct profile_cb_ctx {
     int calls;
     r_request_profile_t profile;
 } profile_cb_ctx_t;
+
+typedef struct empty_cb_ctx {
+    int state;
+    int calls;
+    r_client_req_t **out_request;
+    profile_cb_ctx_t *profile;
+    int expected_profile_calls;
+} empty_cb_ctx_t;
+
+typedef struct recursive_empty_cb_ctx {
+    r_client_t *client;
+    int calls;
+} recursive_empty_cb_ctx_t;
 
 static void record_request_profile(
     void *user,
@@ -87,6 +107,7 @@ static int test_resolve_srv(
     void *user
 ) {
     test_ctx_t *test = (test_ctx_t *)ctx;
+    test->resolve_srv_count += 1u;
     assert(strlen(name) < sizeof(test->last_srv_name));
     strcpy(test->last_srv_name, name);
     if (out_req_id) {
@@ -216,7 +237,8 @@ static int test_resolve_srv_failure(
     r_dns_srv_cb cb,
     void *user
 ) {
-    (void)ctx;
+    test_ctx_t *test = (test_ctx_t *)ctx;
+    test->resolve_srv_count += 1u;
     (void)name;
     (void)out_req_id;
     (void)cb;
@@ -337,12 +359,80 @@ static void record_rate_limit_cb(
     int status,
     const r_rate_limit_result_t *result
 ) {
-    (void)req;
     result_cb_ctx_t *ctx = (result_cb_ctx_t *)user;
     ctx->calls += 1;
     ctx->status = status;
+    (void)req;
+    ctx->has_result = result != NULL;
     ctx->server_id = result ? result->server_id : 0u;
     ctx->success = result && result->success;
+    ctx->guard_count = result ? result->guard_count : 0u;
+    ctx->resource_count = result ? result->resource_count : 0u;
+    ctx->guards_present = result && result->guards;
+    ctx->resources_present = result && result->resources;
+    ctx->first_guard_passed = result
+        && result->guard_count > 0u
+        && result->guards[0].passed;
+}
+
+static void record_empty_rate_limit_cb(
+    void *user,
+    r_client_req_t *req,
+    int status,
+    const r_rate_limit_result_t *result
+) {
+    empty_cb_ctx_t *ctx = (empty_cb_ctx_t *)user;
+    assert(ctx != NULL);
+    assert(ctx->state == 1);
+    assert(ctx->out_request != NULL);
+    assert(*ctx->out_request == NULL);
+    assert(ctx->profile != NULL);
+    assert(ctx->profile->calls == ctx->expected_profile_calls);
+    assert(req == NULL);
+    assert(status == RCLIENT_OK);
+    assert(result != NULL);
+    assert(result->success);
+    assert(result->server_id == 0u);
+    assert(!result->steering_feedback);
+    assert(result->guards == NULL);
+    assert(result->guard_count == 0u);
+    assert(result->resources == NULL);
+    assert(result->resource_count == 0u);
+    ctx->calls += 1;
+    ctx->state = 2;
+}
+
+static void recurse_empty_rate_limit_cb(
+    void *user,
+    r_client_req_t *req,
+    int status,
+    const r_rate_limit_result_t *result
+) {
+    recursive_empty_cb_ctx_t *ctx = (recursive_empty_cb_ctx_t *)user;
+    assert(ctx != NULL);
+    assert(req == NULL);
+    assert(status == RCLIENT_OK);
+    assert(result != NULL);
+    assert(result->success);
+    assert(result->guard_count == 0u);
+    assert(result->resource_count == 0u);
+    ctx->calls += 1;
+    if (ctx->calls == 1) {
+        r_client_req_t *nested_request = (r_client_req_t *)(uintptr_t)1u;
+        assert(r_client_check_rate_limit_async(
+            ctx->client,
+            NULL,
+            0u,
+            NULL,
+            0u,
+            NULL,
+            0u,
+            recurse_empty_rate_limit_cb,
+            ctx,
+            &nested_request
+        ) == RCLIENT_OK);
+        assert(nested_request == NULL);
+    }
 }
 
 static void cancel_same_request_cb(
@@ -382,6 +472,13 @@ static void assert_ipv4_addr(const r_addr_t *addr, const char *expected_ip) {
 static void write_le16(uint8_t *p, uint16_t v) {
     p[0] = (uint8_t)(v & 0xff);
     p[1] = (uint8_t)((v >> 8) & 0xff);
+}
+
+static void write_le32(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)(v & 0xffu);
+    p[1] = (uint8_t)((v >> 8) & 0xffu);
+    p[2] = (uint8_t)((v >> 16) & 0xffu);
+    p[3] = (uint8_t)((v >> 24) & 0xffu);
 }
 
 static uint32_t read_le32(const uint8_t *p) {
@@ -893,6 +990,54 @@ static size_t build_cookie_denied_response_from(
     return pos + pdu_len;
 }
 
+static size_t build_cookie_guard_response_from(
+    uint64_t server_id,
+    const uint8_t unique_id[16],
+    uint32_t threshold_ms,
+    uint32_t current_latency_ms,
+    uint8_t *out,
+    size_t out_cap
+) {
+    assert(out_cap >= R_MAX_PACKET_SIZE);
+    r_tenant_header_t tenant;
+    memset(&tenant, 0, sizeof(tenant));
+    tenant.tlv_type = R_TLV_TENANT;
+    tenant.tlv_size = R_TENANT_TLV_LEN;
+    tenant.key_id = server_id;
+    memcpy(tenant.unique_id, unique_id, 16);
+    tenant.time_stamp = test_now_ms(NULL);
+    tenant.steering_feedback = 1;
+
+    size_t pos = 0;
+    r_tenant_header_write(&tenant, out, out_cap);
+    pos += R_TENANT_TLV_LEN;
+    write_le16(out + pos, R_TLV_AUTH_COOKIE);
+    write_le16(out + pos + 2, 36u);
+    pos += 4;
+    memset(out + pos, 2, 32);
+    pos += 32;
+
+    uint8_t body[4 + R_GUARD_BLOCK_WIRE_LEN];
+    memset(body, 0, sizeof(body));
+    write_le16(body, 1u);
+    write_le16(body + 2, 0u);
+    memcpy(body + 4, "guard", 5);
+    write_le32(body + 4 + 32, threshold_ms);
+    write_le32(body + 4 + 36, current_latency_ms);
+
+    size_t pdu_len = 0;
+    int rc = r_build_pdu(
+        R_PDU_RATE_RESPONSE,
+        body,
+        sizeof(body),
+        out + pos,
+        out_cap - pos,
+        &pdu_len
+    );
+    assert(rc == RCLIENT_OK);
+    return pos + pdu_len;
+}
+
 static size_t build_cookie_success_response(
     const uint8_t unique_id[16],
     uint8_t *out,
@@ -925,6 +1070,300 @@ static size_t build_aes_empty_response(
     memset(out + pos, 0, 12 + 16);
     pos += 12 + 16;
     return pos;
+}
+
+static r_latency_guard_t sample_guard(void) {
+    r_latency_guard_t guard;
+    memset(&guard, 0, sizeof(guard));
+    memcpy(guard.latency_tracker_id, "guard", 5);
+    guard.threshold_ms = 50u;
+    guard.ttl_ms = 1000u;
+    guard.max_samples = 10u;
+    guard.buffer_size = 64u;
+    guard.min_sample_threshold = 1u;
+    return guard;
+}
+
+static void assert_last_request_shape(
+    const test_ctx_t *ctx,
+    uint16_t expected_guard_count,
+    uint16_t expected_resource_count
+) {
+    r_tenant_header_t tenant;
+    size_t auth_pos = 0;
+    assert(r_parse_tenant_header(
+        ctx->last_packet,
+        ctx->last_packet_len,
+        &tenant,
+        &auth_pos
+    ) == RCLIENT_OK);
+
+    uint16_t auth_type = 0;
+    size_t auth_size = 0;
+    const uint8_t *auth_body = NULL;
+    size_t auth_body_len = 0;
+    size_t pdu_pos = 0;
+    assert(r_parse_auth_tlv_header(
+        ctx->last_packet,
+        ctx->last_packet_len,
+        auth_pos,
+        &auth_type,
+        &auth_size,
+        &auth_body,
+        &auth_body_len,
+        &pdu_pos
+    ) == RCLIENT_OK);
+    assert(auth_type == R_TLV_AUTH_COOKIE);
+    assert(pdu_pos + 12u <= ctx->last_packet_len);
+
+    const uint8_t *pdu = ctx->last_packet + pdu_pos;
+    uint16_t pdu_type = (uint16_t)pdu[0] | ((uint16_t)pdu[1] << 8);
+    uint16_t guard_count = (uint16_t)pdu[8] | ((uint16_t)pdu[9] << 8);
+    uint16_t resource_count = (uint16_t)pdu[10] | ((uint16_t)pdu[11] << 8);
+    assert(pdu_type == R_PDU_RATE_REQUEST);
+    assert(guard_count == expected_guard_count);
+    assert(resource_count == expected_resource_count);
+}
+
+static void test_guard_only_requests_allow_and_deny(void) {
+    test_ctx_t ctx = {0};
+    r_client_t *client = make_client(&ctx);
+    r_latency_guard_t guard = sample_guard();
+    r_addr_t from;
+    fill_loopback_addr(&from);
+
+    result_cb_ctx_t allowed = {0};
+    r_client_req_t *request = NULL;
+    assert(r_client_check_rate_limit_async(
+        client,
+        NULL,
+        0u,
+        &guard,
+        1u,
+        NULL,
+        0u,
+        record_rate_limit_cb,
+        &allowed,
+        &request
+    ) == RCLIENT_OK);
+    assert(request != NULL);
+    assert(ctx.send_count == 1u);
+    assert_last_request_shape(&ctx, 1u, 0u);
+
+    uint8_t request_id[16];
+    copy_last_request_id(&ctx, request_id);
+    uint8_t response[R_MAX_PACKET_SIZE];
+    size_t response_len = build_cookie_guard_response_from(
+        1u,
+        request_id,
+        guard.threshold_ms,
+        20u,
+        response,
+        sizeof(response)
+    );
+    assert(r_client_on_datagram(
+        client,
+        response,
+        response_len,
+        &from
+    ) == RCLIENT_OK);
+    assert(allowed.calls == 1);
+    assert(allowed.status == RCLIENT_OK);
+    assert(allowed.has_result);
+    assert(allowed.success);
+    assert(allowed.guard_count == 1u);
+    assert(allowed.resource_count == 0u);
+    assert(allowed.guards_present);
+    assert(!allowed.resources_present);
+    assert(allowed.first_guard_passed);
+
+    result_cb_ctx_t denied = {0};
+    request = NULL;
+    assert(r_client_check_rate_limit_async_borrowed(
+        client,
+        NULL,
+        0u,
+        &guard,
+        1u,
+        NULL,
+        0u,
+        record_rate_limit_cb,
+        &denied,
+        &request
+    ) == RCLIENT_OK);
+    assert(request != NULL);
+    assert(ctx.send_count == 2u);
+    assert_last_request_shape(&ctx, 1u, 0u);
+
+    copy_last_request_id(&ctx, request_id);
+    response_len = build_cookie_guard_response_from(
+        1u,
+        request_id,
+        guard.threshold_ms,
+        75u,
+        response,
+        sizeof(response)
+    );
+    assert(r_client_on_datagram(
+        client,
+        response,
+        response_len,
+        &from
+    ) == RCLIENT_OK);
+    assert(denied.calls == 1);
+    assert(denied.status == RCLIENT_OK);
+    assert(denied.has_result);
+    assert(!denied.success);
+    assert(denied.guard_count == 1u);
+    assert(denied.resource_count == 0u);
+    assert(denied.guards_present);
+    assert(!denied.resources_present);
+    assert(!denied.first_guard_passed);
+
+    r_client_destroy(client);
+}
+
+static void test_empty_requests_complete_locally(void) {
+    test_ctx_t ctx = {0};
+    r_io_ops_t io = {
+        .ctx = &ctx,
+        .udp_send = test_udp_send,
+        .now_ms = test_now_ms,
+    };
+    r_resolver_ops_t resolver = {
+        .ctx = &ctx,
+        .resolve_srv = test_resolve_srv_failure,
+        .resolve_addrs = test_resolve_addrs_unexpected,
+        .cancel = test_cancel,
+    };
+    profile_cb_ctx_t profile = {0};
+    r_request_policy_t invalid_policy;
+    r_client_default_request_policy(&invalid_policy);
+    invalid_policy.unit_ms = 0u;
+    r_client_config_t config;
+    memset(&config, 0, sizeof(config));
+    config.tenant.dns_name = "example.local";
+    config.tenant.key_id = 2u;
+    config.tenant.auth.type = R_AUTH_COOKIE;
+    config.tenant.auth.secret = SAMPLE_COOKIE_KEY_TENANT_2;
+    config.request_policy = &invalid_policy;
+    config.request_profile_cb = record_request_profile;
+    config.request_profile_user = &profile;
+
+    r_client_t *client = NULL;
+    assert(r_client_create(&config, &io, &resolver, &client) == RCLIENT_OK);
+    assert(client != NULL);
+    assert(ctx.resolve_srv_count == 1u);
+
+    r_client_req_t *request = (r_client_req_t *)(uintptr_t)1u;
+    empty_cb_ctx_t copied = {
+        .state = 1,
+        .out_request = &request,
+        .profile = &profile,
+        .expected_profile_calls = 1,
+    };
+    assert(r_client_check_rate_limit_async(
+        client,
+        NULL,
+        0u,
+        NULL,
+        0u,
+        "ignored-empty-label",
+        0u,
+        record_empty_rate_limit_cb,
+        &copied,
+        &request
+    ) == RCLIENT_OK);
+    assert(copied.state == 2);
+    assert(copied.calls == 1);
+    assert(request == NULL);
+    assert(ctx.send_count == 0u);
+    assert(ctx.resolve_srv_count == 1u);
+    assert(profile.calls == 1);
+    assert(profile.profile.wait_ms == 0u);
+    assert(profile.profile.round == 0u);
+    assert(profile.profile.phase == R_REQUEST_COMPLETION_ROUND);
+    assert(profile.profile.status == RCLIENT_OK);
+    assert(!profile.profile.response_selected);
+
+    request = (r_client_req_t *)(uintptr_t)1u;
+    empty_cb_ctx_t borrowed = {
+        .state = 1,
+        .out_request = &request,
+        .profile = &profile,
+        .expected_profile_calls = 2,
+    };
+    assert(r_client_check_rate_limit_async_borrowed(
+        client,
+        NULL,
+        0u,
+        NULL,
+        0u,
+        NULL,
+        0u,
+        record_empty_rate_limit_cb,
+        &borrowed,
+        &request
+    ) == RCLIENT_OK);
+    assert(borrowed.state == 2);
+    assert(borrowed.calls == 1);
+    assert(request == NULL);
+    assert(ctx.send_count == 0u);
+    assert(ctx.resolve_srv_count == 1u);
+    assert(profile.calls == 2);
+
+    r_client_destroy(client);
+}
+
+static void test_request_shape_pointer_validation(void) {
+    test_ctx_t ctx = {0};
+    r_client_t *client = make_client(&ctx);
+    r_resource_request_t resource = sample_resource();
+    r_latency_guard_t guard = sample_guard();
+
+    assert(r_client_check_rate_limit_async(
+        client, NULL, 1u, NULL, 0u, NULL, 0u,
+        noop_rate_limit_cb, NULL, NULL
+    ) == RCLIENT_ERR_CONFIG);
+    assert(r_client_check_rate_limit_async(
+        client, &resource, 1u, NULL, 1u, NULL, 0u,
+        noop_rate_limit_cb, NULL, NULL
+    ) == RCLIENT_ERR_CONFIG);
+    assert(r_client_check_rate_limit_async_borrowed(
+        client, NULL, 1u, &guard, 1u, NULL, 0u,
+        noop_rate_limit_cb, NULL, NULL
+    ) == RCLIENT_ERR_CONFIG);
+    assert(ctx.send_count == 0u);
+
+    r_client_destroy(client);
+}
+
+static void test_empty_request_callback_may_submit_recursively(void) {
+    test_ctx_t ctx = {0};
+    r_client_t *client = make_client(&ctx);
+    recursive_empty_cb_ctx_t callback = {
+        .client = client,
+        .calls = 0,
+    };
+    r_client_req_t *request = (r_client_req_t *)(uintptr_t)1u;
+
+    assert(r_client_check_rate_limit_async(
+        client,
+        NULL,
+        0u,
+        NULL,
+        0u,
+        NULL,
+        0u,
+        recurse_empty_rate_limit_cb,
+        &callback,
+        &request
+    ) == RCLIENT_OK);
+    assert(request == NULL);
+    assert(callback.calls == 2);
+    assert(ctx.send_count == 0u);
+
+    r_client_destroy(client);
 }
 
 static void test_check_rate_limit_rejects_oversized_guard(void) {
@@ -2102,6 +2541,10 @@ int main(void) {
     test_client_derives_production_tenant_from_key();
     test_client_preserves_explicit_tenant_override();
     test_client_rejects_explicit_key_metadata_mismatch();
+    test_guard_only_requests_allow_and_deny();
+    test_empty_requests_complete_locally();
+    test_empty_request_callback_may_submit_recursively();
+    test_request_shape_pointer_validation();
     test_check_rate_limit_rejects_oversized_guard();
     test_report_latency_filters_oversized_reports();
     test_report_latency_accepts_largest_cookie_batch();
