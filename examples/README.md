@@ -769,7 +769,7 @@ and error-handling details.
 
 | Term | Meaning |
 | --- | --- |
-| resource request | Core operation containing one or more resource consumptions and zero or more latency guards. |
+| resource request | Core operation containing zero or more resource consumptions and zero or more latency guards. Non-empty requests go to r-servers; the empty request succeeds locally without network activity. |
 | resource consumption | Quantity requested from one configured resource bucket. |
 | latency report | Independent fire-and-forget operation containing one or more measured service latencies. |
 | README | Folder-level guide that explains how to build, run, adapt, and test one integration. |

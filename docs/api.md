@@ -8,10 +8,12 @@ compatibility adapters.
 
 The core client exposes two independent operations:
 
-1. A **resource request** contains at least one `r_resource_request_t` resource
-   consumption and may contain any number of `r_latency_guard_t` latency
-   guards. Ratelimitly evaluates the complete request atomically. A grant
-   consumes every requested quantity; a rejection consumes none.
+1. A **resource request** contains zero or more `r_resource_request_t` resource
+   consumptions and zero or more `r_latency_guard_t` latency guards. Ratelimitly
+   evaluates every non-empty request atomically. A grant consumes every
+   requested quantity; a rejection consumes none. The empty request is the
+   identity case and completes successfully inside the client without network
+   activity.
 2. A **latency report** contains at least one
    `r_service_latency_report_t` service observation and contributes it to the
    corresponding server-side latency tracker.
@@ -49,7 +51,8 @@ The normal asynchronous request API copies request inputs. The borrowed API
 avoids those copies, so its input buffers must remain valid until callback or
 cancellation. In both forms, copy any result data needed after the completion
 callback returns; the request handle and result arrays expire with that
-callback.
+callback. The empty request is the sole synchronous-completion case: its
+callback fires inside the submit call and it creates no request handle.
 
 Proxy modules and other high-throughput embedders commonly choose the core and
 borrowed APIs. The examples choose the workflow and public runtime so each
@@ -218,10 +221,36 @@ the buffers alive until the callback fires.
 
 Required input:
 
-- at least one `r_resource_request_t`
-- optional `r_latency_guard_t` array
+- zero or more `r_resource_request_t` values
+- zero or more `r_latency_guard_t` values
 - optional metrics label string
 - callback
+
+Resource and guard counts are independent. A positive count requires a
+non-null corresponding array. The three non-empty shapes—resource-only,
+guard-only, and combined—are serialized and sent to r-servers through the same
+HA policy. A guard-only request carries `resource_count = 0`; its decision is
+the conjunction of its guard results. It remains a real server operation and a
+successful evaluation may record the server's normal speculative latency for
+its guards; it is not a read-only tracker query.
+
+When both counts are zero, the atomic decision is vacuously successful. The
+client performs no DNS refresh, request-ID generation, policy scheduling, UDP
+send, or server-side mutation. Instead, it:
+
+- sets `*out_req` to `NULL` when `out_req` is supplied;
+- invokes the request-profile observer, when configured, with zero wait,
+  round zero, `RCLIENT_OK`, and no selected response;
+- invokes the completion callback synchronously before submit returns, with
+  `req == NULL`, `status == RCLIENT_OK`, and an empty successful result;
+- reports `server_id == 0`, `steering_feedback == false`, zero result counts,
+  and null result arrays; and
+- ignores any metrics label, because there is no packet to carry it.
+
+Callers must therefore install their completion state before submitting and
+must check whether the callback already fired before arming a timer. A null
+`*out_req` after `RCLIENT_OK` identifies this local completion; non-empty
+successful submissions return a live request handle.
 
 Each `r_resource_request_t` declares its own rate model: the request asks for
 `tokens_requested` tokens from the bucket, and the bucket's capacity is the
@@ -236,7 +265,8 @@ The metrics label tags the request for per-label server-side metrics. Labels
 are counted against the credential's `metrics_labels_max` cardinality quota; on
 overflow the server rewrites the label to the fixed label `overflow` instead of
 rejecting the request. Pass an empty or NULL label to send none.
-`metrics_label_len` of `0` means the label is null-terminated.
+`metrics_label_len` of `0` means the label is null-terminated. Empty requests
+ignore the label because they send no server request.
 
 Capacity limits: the whole request must fit one 1200-byte datagram. With no
 guards and no label that allows at most 39 resources; guards reduce the budget
@@ -245,7 +275,9 @@ guards and no label that allows at most 39 resources; guards reduce the budget
 
 Submit errors and callback errors are separate channels. When the submit
 function returns a nonzero status, the request was never created: the callback
-will not fire and `*out_req` is not set. `RCLIENT_ERR_CONFIG` (bad arguments or
+will not fire and `*out_req` is not set. An empty request is different: submit
+returns `RCLIENT_OK`, sets `*out_req` to `NULL`, and has already delivered its
+successful callback. `RCLIENT_ERR_CONFIG` (bad arguments or
 an invalid policy), `RCLIENT_ERR_DNS` (no servers known yet), `RCLIENT_ERR_NOMEM`,
 `RCLIENT_ERR_PROTOCOL` (the request does not fit one datagram, or a guard
 exceeds the credential's buffer-size quota), and first-transmission
@@ -258,6 +290,7 @@ resubmitting creates a new request identity.
 
 The callback receives:
 
+- `RCLIENT_OK` and an empty successful result synchronously for an empty request
 - `RCLIENT_OK` and a non-null `r_rate_limit_result_t` on a parsed response
 - `RCLIENT_ERR_TIMEOUT` when no acceptable response arrived in time — including
   every case where servers dropped the request silently (see Error Codes)
@@ -282,13 +315,15 @@ Result fields:
 | `guards[i].latency_tracker_id` | The tracker this entry describes; match by ID. |
 | `guards[i].current_latency_ms` | The tracker's current latency estimate on the responding server. |
 | `guards[i].passed` | True when `current_latency_ms` is below the guard's threshold. |
-| `server_id` | The 64-bit ID of the server whose response was selected. Servers place their own ID in the response header. Its upper bits encode the server's start time (see Resource-Request HA Policy). |
-| `steering_feedback` | Wire keep-port flag: `true` means keep the current UDP source port; `false` means the server requested a source-port rebind. See IO_ABSTRACTION.md Steering Feedback. Despite the name, `true` requires no action. |
+| `server_id` | The 64-bit ID of the server whose response was selected. Servers place their own ID in the response header. Its upper bits encode the server's start time (see Resource-Request HA Policy). Local empty success uses the sentinel `0` because no server was selected. |
+| `steering_feedback` | Wire keep-port flag: `true` means keep the current UDP source port; `false` means the server requested a source-port rebind. See IO_ABSTRACTION.md Steering Feedback. Despite the name, `true` requires no action. Local empty success sets this to `false`, but no steering action is implied because there is no request handle or server response. |
 
 Pointers inside `r_rate_limit_result_t` are valid only during the callback.
 The `r_client_req_t *` passed to the callback is owned by the client and is not
 valid after the callback returns. Calling `r_client_cancel_request` on that same
 request from inside the completion callback is harmless and treated as a no-op.
+For local empty success, the callback receives `req == NULL` and both result
+arrays are null.
 
 ## Threading and reentrancy
 
@@ -303,6 +338,12 @@ which is a no-op). Do **not** call `r_client_destroy` from inside a callback:
 the client dereferences internal state after the callback returns, so
 destroying it there is undefined behavior. Defer destruction until the stack
 has unwound to the event loop.
+
+An empty request invokes its callback synchronously from
+`r_client_check_rate_limit_async` or its borrowed counterpart. This includes
+recursive empty or non-empty submission from that callback. Install all caller
+state before the call and do not assume that `RCLIENT_OK` always means a future
+callback.
 
 The host's `udp_send` hook is not a reentrant ingress point: it must return
 before the host calls any `r_client_*` API. A synchronous test transport must
@@ -519,6 +560,8 @@ round or final-receive phase, status, and whether a response was selected.
 `wait_ms` is measured in the client's scheduling clock from the start of the
 initial send attempt through selection or failure. It intentionally excludes
 discovery, protected work, latency reporting, and cleanup.
+An empty request produces a profile with zero wait, round zero, round phase,
+`RCLIENT_OK`, and no selected response before its local completion callback.
 
 ## Datagrams and Timers
 
@@ -530,8 +573,9 @@ The host owns network receive and timers:
 - call `r_client_on_timeout` when the host timer fires
 - call `r_client_cancel_request` if the HTTP/request context is abandoned
 
-**Completion is signaled solely by the completion callback firing during a
-`r_client_on_datagram` or `r_client_on_timeout` call.** Both functions return
+For a non-empty request, **completion is signaled solely by the completion
+callback firing during a `r_client_on_datagram` or `r_client_on_timeout`
+call.** Both functions return
 `RCLIENT_OK` on paths that complete — and free — the request, so their return
 values carry no liveness information. Track a per-request flag set by the
 callback, and re-check it after every datagram and timeout delivery: if the
@@ -540,6 +584,10 @@ passed to `r_client_request_deadline_ms`, `r_client_on_timeout`, or
 `r_client_cancel_request` again. If the callback did not fire, the event was
 nonterminal — re-query the deadline and re-arm the timer. Calling
 `r_client_on_timeout` before the deadline is a safe no-op.
+
+The empty request is the exception: it fires the callback synchronously from
+the submit call, leaves `*out_req == NULL`, and needs no readiness watcher or
+timer.
 
 Per-datagram return values from `r_client_on_datagram` are informational and
 expected under normal operation on an open UDP port: `RCLIENT_ERR_PROTOCOL`
@@ -583,6 +631,10 @@ logical request or its atomic grant/rejection result.
 `r_request_policy_t` configures the client's sole resource-request strategy.
 It owns fan-out, oldest-first response selection, replay scheduling, completion
 delivery, and deduplication-TTL derivation.
+
+This policy applies only to non-empty requests. An empty request performs no
+policy validation or scheduling and completes locally even if no r-server is
+known.
 
 Its parameters are:
 
@@ -695,6 +747,9 @@ that warm-up as expected. Failed refreshes do not arm the pacing throttle, so
 retrying submits during an outage re-attempts resolution each time. With the
 public runtime's synchronous resolver, each such failing submit performs
 blocking DNS on the calling thread.
+
+Empty requests are local identity operations and do not inspect or refresh DNS
+membership. They therefore succeed even while no r-server is known.
 
 ## Error Codes
 

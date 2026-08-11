@@ -122,14 +122,20 @@ When the timer fires:
 r_client_on_timeout(client, req, now_ms);
 ```
 
-Replay rounds may update the next deadline. Completion is signaled **only** by
-the request callback firing during the `r_client_on_timeout` (or
-`r_client_on_datagram`) call — the return value is `RCLIENT_OK` both when the
-event was nonterminal and when it completed and freed the request. Track a
-flag from the callback: if it fired, the request handle is invalid and must
-not be used again; if it did not, re-query
+Replay rounds may update the next deadline. For a non-empty request, completion
+is signaled **only** by the request callback firing during the
+`r_client_on_timeout` (or `r_client_on_datagram`) call — the return value is
+`RCLIENT_OK` both when the event was nonterminal and when it completed and
+freed the request. Track a flag from the callback: if it fired, the request
+handle is invalid and must not be used again; if it did not, re-query
 `r_client_request_deadline_ms` and re-arm the host timer. Firing the timer
 early is a safe no-op.
+
+An empty request (zero resources and zero guards) is the exception. Submission
+fires its successful callback synchronously, returns `RCLIENT_OK`, and leaves
+`*out_req == NULL`; it performs no DNS or UDP operation and needs no timer.
+Install callback state before submitting and test the returned handle before
+querying a deadline.
 
 ## Clock domains
 
@@ -154,6 +160,8 @@ clock value into `r_io_ops_t.now_ms`.
 `r_client_check_rate_limit_async_borrowed` avoids copying resources, guards, and
 metrics labels. The caller must keep every borrowed buffer valid until the
 request callback fires, the request is canceled, or the client is destroyed.
+For an empty request there are no borrowed buffers and the callback fires
+synchronously during submission.
 
 This is the preferred path for embedders that already have per-request memory
 with a lifetime that extends to callback completion.

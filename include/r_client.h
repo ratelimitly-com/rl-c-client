@@ -84,7 +84,7 @@ typedef struct r_ha_schedule {
     r_ha_schedule_growth_t growth;
 } r_ha_schedule_t;
 
-// The sole resource-request policy implemented by the MVP client.
+// The sole non-empty resource-request policy implemented by the MVP client.
 typedef struct r_request_policy {
     uint64_t unit_ms;                    // Base scheduling unit U.
     uint32_t replay_count;               // Replays after the initial send.
@@ -207,7 +207,11 @@ RCLIENT_API int r_client_create(
 // same client — the client contains no locks.
 RCLIENT_API void r_client_destroy(r_client_t *client);
 
-// Async rate limit request.
+// Async rate limit request. Resource and guard counts are independent; a
+// positive count requires a non-NULL array. A request with neither resources
+// nor guards is a successful local no-op: no packet is sent, *out_req is set
+// to NULL when supplied, and cb fires synchronously before this call returns
+// with req == NULL and an empty successful result. Its metrics label is ignored.
 RCLIENT_API int r_client_check_rate_limit_async(
     r_client_t *client,
     const r_resource_request_t *resources,
@@ -221,7 +225,8 @@ RCLIENT_API int r_client_check_rate_limit_async(
     r_client_req_t **out_req
 );
 
-// Async rate limit request using caller-owned buffers (no internal copies).
+// Same request-shape and empty-completion contract as the copying API, using
+// caller-owned buffers for non-empty requests (no internal copies).
 // Caller must keep buffers alive until the callback fires, the request is
 // canceled, or the client is destroyed (the latter two suppress the callback).
 RCLIENT_API int r_client_check_rate_limit_async_borrowed(
@@ -260,9 +265,10 @@ RCLIENT_API int r_client_on_datagram(
     const r_addr_t *from
 );
 
-// Per-request timer support. The req handle is invalid once the completion
-// callback has fired (during on_datagram/on_timeout) — track a flag from the
-// callback before touching req again.
+// Per-request timer support for non-empty requests. The req handle is invalid
+// once the completion callback has fired (during on_datagram/on_timeout) —
+// track a flag from the callback before touching req again. Empty requests
+// complete during submission and return no handle.
 RCLIENT_API int r_client_request_deadline_ms(
     const r_client_req_t *req,
     uint64_t *out_deadline_ms
