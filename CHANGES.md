@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.0 - 2026-08-10
+
 - Allowed resource-only, guard-only, combined, and empty core request shapes.
   Guard-only requests use the normal r-server path; empty requests complete
   synchronously as successful local no-ops without DNS or UDP activity.
