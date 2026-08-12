@@ -44,6 +44,10 @@ int r_decode_api_key_bech32_with_quotas(
     size_t *out_secret_len,
     r_bech32_quotas_t *out_quotas
 );
+int r_decode_management_key_bech32(
+    const char *encoded,
+    uint8_t out_secret[32]
+);
 
 int r_encrypt_pdu_aes_gcm(
     const uint8_t *pdu,

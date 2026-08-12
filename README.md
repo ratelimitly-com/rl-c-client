@@ -381,6 +381,12 @@ Build the perf client:
 make perf_client
 ```
 
+Build the server audit client:
+
+```sh
+make audit_client
+```
+
 Run local tests:
 
 ```sh
@@ -588,6 +594,32 @@ uses the default fixed replay and preference schedules, final receive-only
 interval, and completion delivery. Applications can configure the full
 strategy through `r_request_policy_t`.
 
+## Server audit client
+
+`audit_client` runs a short, observational check against the r-servers assigned
+to one tenant API key. It derives the tenant DNS name from the key, discovers
+all current r-servers through DNS SRV, exercises a rate bucket and latency
+tracker, and reports every selected result with a timestamp and duration.
+
+```sh
+make audit_client
+bin/audit_client \
+  --auth="$(tr -d '\r\n' < /path/to/api.key)" \
+  --unit-ms=25 \
+  --replay-count=3
+```
+
+The output is deliberately neutral: grant/rejection ratios are observations,
+not built-in correctness assertions. The process fails only for operational
+errors such as invalid configuration, DNS failure, timeout, authentication or
+protocol failure, or a requested metrics snapshot that cannot be retrieved.
+
+An optional server-management `rl-secret...` enables tenant and latency-tracker
+metrics snapshots. Without it, the four request workloads still run and the
+output states that metrics were skipped. See
+[the audit-client guide](docs/audit-client.md) for the exact workloads,
+credentials, HA-policy options, output semantics, and exit codes.
+
 ## Glossary
 
 | Term | Meaning |
@@ -641,6 +673,8 @@ strategy through `r_request_policy_t`.
   boundary for custom event-loop integrations.
 - [Integration examples](examples/README.md) compares supported event loops,
   HTTP frameworks, parsers, and platforms.
+- [Server audit client](docs/audit-client.md) documents the live diagnostic,
+  its four workloads, optional administrative metrics, and neutral output.
 - [`r_client.h`](include/r_client.h), [`r_client_workflow.h`](include/r_client_workflow.h),
   and [`r_client_runtime.h`](include/r_client_runtime.h) are the public source
   contracts behind this overview.

@@ -21,6 +21,7 @@ endif
 
 BIN_DIR := bin
 PERF_BIN := $(BIN_DIR)/perf_client
+AUDIT_BIN := $(BIN_DIR)/audit_client
 TEST_RESPONDER_BIN := $(BIN_DIR)/r_test_responder
 PRODUCTION_P0_PROBE_BIN := $(BIN_DIR)/production_p0_probe
 TEST_RESPONDER_OBJS := \
@@ -40,6 +41,7 @@ LIB_OBJS := $(LIB_SRCS:.c=.o)
 
 TEST_BINS = \
 	tests/test_protocol \
+	tests/test_audit_client \
 	tests/test_client_quota \
 	tests/test_random_failure \
 	tests/test_public_api \
@@ -48,11 +50,13 @@ TEST_BINS = \
 	tests/test_responder \
 	tests/test_latency_tracker
 
-.PHONY: all clean test perf_client production-p0-probe test-responder
+.PHONY: all clean test perf_client audit_client production-p0-probe test-responder
 
 all: librclient.a librclient.so
 
 perf_client: $(PERF_BIN)
+
+audit_client: $(AUDIT_BIN)
 
 test-responder: $(TEST_RESPONDER_BIN)
 
@@ -63,6 +67,9 @@ $(BIN_DIR):
 
 $(PERF_BIN): $(BIN_DIR) librclient.a $(BIN_DIR)/perf_client.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ $(BIN_DIR)/perf_client.c librclient.a -lcrypto -lresolv -pthread
+
+$(AUDIT_BIN): $(BIN_DIR) librclient.a $(BIN_DIR)/audit_client.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ $(BIN_DIR)/audit_client.c librclient.a -lcrypto -lresolv -pthread
 
 $(TEST_RESPONDER_BIN): $(BIN_DIR) librclient.a $(TEST_RESPONDER_OBJS)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ $(TEST_RESPONDER_OBJS) librclient.a -lcrypto -lresolv -pthread
@@ -80,8 +87,9 @@ src/%.o: src/%.c
 tools/%.o: tools/%.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-test: $(TEST_BINS) $(TEST_RESPONDER_BIN) $(PERF_BIN)
+test: $(TEST_BINS) $(TEST_RESPONDER_BIN) $(PERF_BIN) $(AUDIT_BIN)
 	./tests/test_protocol
+	./tests/test_audit_client
 	./tests/test_client_quota
 	./tests/test_random_failure
 	./tests/test_public_api
@@ -90,6 +98,7 @@ test: $(TEST_BINS) $(TEST_RESPONDER_BIN) $(PERF_BIN)
 	bash ./tests/test_responder_cli.sh
 	bash ./tests/test_runtime.sh
 	bash ./tests/test_perf_client_cli.sh
+	bash ./tests/test_audit_client_cli.sh
 	bash ./tests/test_latency_tracker.sh
 	bash ./tests/test_examples.sh
 	python3 ./tests/test_readme_quality_unit.py
@@ -103,6 +112,9 @@ test: $(TEST_BINS) $(TEST_RESPONDER_BIN) $(PERF_BIN)
 	bash ./tests/test_windows_example.sh
 
 tests/test_protocol: tests/test_protocol.c src/r_protocol.o src/r_crypto.o
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $^ -o $@ -lcrypto
+
+tests/test_audit_client: tests/test_audit_client.c src/r_crypto.o
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $^ -o $@ -lcrypto
 
 tests/test_client_quota: tests/test_client_quota.c librclient.a
@@ -137,5 +149,6 @@ clean:
 		librclient.a \
 		librclient.so \
 		$(PERF_BIN) \
+		$(AUDIT_BIN) \
 		$(TEST_RESPONDER_BIN) \
 		$(PRODUCTION_P0_PROBE_BIN)

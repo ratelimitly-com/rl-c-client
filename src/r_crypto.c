@@ -404,6 +404,106 @@ int r_decode_api_key_bech32_with_quotas(
     return 0;
 }
 
+int r_decode_management_key_bech32(
+    const char *encoded,
+    uint8_t out_secret[32]
+) {
+    if (!encoded || !out_secret) {
+        return -1;
+    }
+
+    size_t enc_len = strlen(encoded);
+    if (enc_len == 0u) {
+        return -1;
+    }
+
+    int has_lower = 0;
+    int has_upper = 0;
+    for (size_t i = 0; i < enc_len; i++) {
+        unsigned char c = (unsigned char)encoded[i];
+        if (c < 33u || c > 126u) {
+            return -1;
+        }
+        if (islower(c)) has_lower = 1;
+        if (isupper(c)) has_upper = 1;
+    }
+    if (has_lower && has_upper) {
+        return -1;
+    }
+
+    char *text = (char *)malloc(enc_len + 1u);
+    if (!text) {
+        return -1;
+    }
+    for (size_t i = 0; i < enc_len; i++) {
+        text[i] = (char)tolower((unsigned char)encoded[i]);
+    }
+    text[enc_len] = '\0';
+
+    char *separator = strrchr(text, '1');
+    if (!separator || separator == text) {
+        free(text);
+        return -1;
+    }
+    size_t hrp_len = (size_t)(separator - text);
+    size_t data_chars_len = enc_len - hrp_len - 1u;
+    if (data_chars_len < 6u) {
+        free(text);
+        return -1;
+    }
+    separator[0] = '\0';
+    if (strcmp(text, "rl-secret") != 0) {
+        free(text);
+        return -1;
+    }
+
+    uint8_t *data = (uint8_t *)malloc(data_chars_len);
+    if (!data) {
+        free(text);
+        return -1;
+    }
+    for (size_t i = 0; i < data_chars_len; i++) {
+        if (r_bech32_char_value(separator[1u + i], &data[i]) != 0) {
+            free(data);
+            free(text);
+            return -1;
+        }
+    }
+    if (!r_bech32_verify_checksum(text, data, data_chars_len)) {
+        free(data);
+        free(text);
+        return -1;
+    }
+
+    size_t payload5_len = data_chars_len - 6u;
+    size_t payload_cap = (payload5_len * 5u) / 8u + 2u;
+    uint8_t *payload = (uint8_t *)malloc(payload_cap);
+    if (!payload) {
+        free(data);
+        free(text);
+        return -1;
+    }
+    size_t payload_len = 0u;
+    int rc = r_convert_bits_5_to_8_no_pad(
+        data,
+        payload5_len,
+        payload,
+        payload_cap,
+        &payload_len
+    );
+    if (rc == 0 && payload_len == 32u) {
+        memcpy(out_secret, payload, 32u);
+        rc = 0;
+    } else {
+        rc = -1;
+    }
+
+    r_cleanse_free(payload, payload_cap);
+    free(data);
+    free(text);
+    return rc;
+}
+
 int r_encrypt_pdu_aes_gcm(
     const uint8_t *pdu,
     size_t pdu_len,
