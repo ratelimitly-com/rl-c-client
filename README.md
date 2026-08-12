@@ -614,9 +614,10 @@ not built-in correctness assertions. The process fails only for operational
 errors such as invalid configuration, DNS failure, timeout, authentication or
 protocol failure, or a requested metrics snapshot that cannot be retrieved.
 
-An optional server-management `rl-secret...` enables tenant and latency-tracker
-metrics snapshots. Without it, the four request workloads still run and the
-output states that metrics were skipped. See
+An optional server-management `rl-secret...` enables tenant-summary metrics
+snapshots. Tracker-level metrics are deliberately not fetched. Without the
+management key, the four request workloads still run and the output states
+that metrics were skipped. See
 [the audit-client guide](docs/audit-client.md) for the exact workloads,
 credentials, HA-policy options, output semantics, and exit codes.
 

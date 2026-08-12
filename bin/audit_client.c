@@ -36,14 +36,8 @@
 #define AUDIT_RATE_LIMIT 10u
 #define AUDIT_RATE_REQUEST_COUNT 20u
 #define AUDIT_METRICS_FAMILY_SUMMARY 0x01u
-#define AUDIT_METRICS_FAMILY_SERVICES 0x03u
 #define AUDIT_PDU_METRICS_QUERY 0x514du
 #define AUDIT_PDU_METRICS_RESPONSE 0x524du
-#define AUDIT_SERVICE_RECORD_LEN 64u
-#define AUDIT_METRICS_PAGE_MORE 0x00u
-#define AUDIT_METRICS_PAGE_LAST 0x01u
-#define AUDIT_METRICS_PAGE_EMPTY 0x02u
-#define AUDIT_MAX_METRICS_PAGES 256u
 
 typedef struct audit_addr_entry {
     char *name;
@@ -108,19 +102,10 @@ typedef struct audit_summary_metrics {
     uint64_t service_latency_reports_total;
 } audit_summary_metrics_t;
 
-typedef struct audit_service_metrics {
-    bool present;
-    uint64_t report_count;
-    uint64_t checks_total;
-    uint64_t checks_passed;
-    uint64_t checks_failed;
-} audit_service_metrics_t;
-
 typedef struct audit_metrics_snapshot {
     bool valid;
     uint64_t server_id;
     audit_summary_metrics_t summary;
-    audit_service_metrics_t service;
 } audit_metrics_snapshot_t;
 
 typedef struct audit_metrics_response {
@@ -1177,31 +1162,17 @@ static audit_phase_stats_t audit_run_requests(
 static int audit_build_metrics_packet(
     uint64_t tenant_id,
     const uint8_t management_key[32],
-    uint8_t family,
-    const uint8_t *cursor,
-    size_t cursor_length,
     uint8_t packet[AUDIT_PACKET_CAP],
     size_t *packet_length,
     uint8_t request_id[16]
 ) {
     uint8_t pdu[AUDIT_PACKET_CAP];
-    size_t pdu_length = 8u;
+    const size_t pdu_length = 8u;
     audit_write_le16(pdu, AUDIT_PDU_METRICS_QUERY);
-    pdu[4] = family;
-    pdu[5] = cursor ? 1u : 0u;
+    pdu[4] = AUDIT_METRICS_FAMILY_SUMMARY;
+    pdu[5] = 0u;
     pdu[6] = 0u;
     pdu[7] = 0u;
-    if (cursor) {
-        size_t padding = (4u - (cursor_length % 4u)) % 4u;
-        if (cursor_length > UINT16_MAX || 12u + cursor_length + padding > sizeof(pdu)) {
-            return -1;
-        }
-        audit_write_le16(pdu + 8u, (uint16_t)cursor_length);
-        audit_write_le16(pdu + 10u, 0u);
-        memcpy(pdu + 12u, cursor, cursor_length);
-        memset(pdu + 12u + cursor_length, 0, padding);
-        pdu_length = 12u + cursor_length + padding;
-    }
     audit_write_le16(pdu + 2u, (uint16_t)pdu_length);
 
     if (RAND_bytes(request_id, 16) != 1) {
@@ -1314,14 +1285,11 @@ static int audit_parse_metrics_response(
     return 0;
 }
 
-static int audit_query_metrics_page(
+static int audit_query_summary_response(
     audit_io_t *io,
     const audit_target_t *target,
     uint64_t tenant_id,
     const uint8_t management_key[32],
-    uint8_t family,
-    const uint8_t *cursor,
-    size_t cursor_length,
     uint32_t timeout_ms,
     uint32_t attempts,
     audit_metrics_response_t *response
@@ -1335,9 +1303,6 @@ static int audit_query_metrics_page(
             if (audit_build_metrics_packet(
                     tenant_id,
                     management_key,
-                    family,
-                    cursor,
-                    cursor_length,
                     packet,
                     &packet_length,
                     request_id
@@ -1383,7 +1348,7 @@ static int audit_query_metrics_page(
                         response
                     );
                     if (parsed == 0) {
-                        return response->family == family ? 0 : -1;
+                        return response->family == AUDIT_METRICS_FAMILY_SUMMARY ? 0 : -1;
                     }
                     if (parsed < 0) {
                         return -1;
@@ -1405,14 +1370,11 @@ static int audit_query_summary(
     audit_summary_metrics_t *summary
 ) {
     audit_metrics_response_t response;
-    if (audit_query_metrics_page(
+    if (audit_query_summary_response(
             io,
             target,
             tenant_id,
             management_key,
-            AUDIT_METRICS_FAMILY_SUMMARY,
-            NULL,
-            0u,
             config->metrics_timeout_ms,
             config->metrics_attempts,
             &response
@@ -1429,87 +1391,11 @@ static int audit_query_summary(
     return 0;
 }
 
-static int audit_query_service(
-    audit_io_t *io,
-    const audit_target_t *target,
-    uint64_t tenant_id,
-    const uint8_t management_key[32],
-    const audit_config_t *config,
-    uint64_t expected_server_id,
-    const uint8_t tracker_id[16],
-    audit_service_metrics_t *service
-) {
-    memset(service, 0, sizeof(*service));
-    uint8_t cursor[AUDIT_PACKET_CAP];
-    size_t cursor_length = 0u;
-    bool has_cursor = false;
-    for (uint32_t page = 0u; page < AUDIT_MAX_METRICS_PAGES; page++) {
-        audit_metrics_response_t response;
-        if (audit_query_metrics_page(
-                io,
-                target,
-                tenant_id,
-                management_key,
-                AUDIT_METRICS_FAMILY_SERVICES,
-                has_cursor ? cursor : NULL,
-                cursor_length,
-                config->metrics_timeout_ms,
-                config->metrics_attempts,
-                &response
-            ) != 0
-            || response.server_id != expected_server_id) {
-            return -1;
-        }
-        if (response.page_kind == AUDIT_METRICS_PAGE_EMPTY) {
-            return 0;
-        }
-        if (response.page_kind != AUDIT_METRICS_PAGE_MORE
-            && response.page_kind != AUDIT_METRICS_PAGE_LAST) {
-            return -1;
-        }
-        size_t position = 0u;
-        if (response.page_kind == AUDIT_METRICS_PAGE_MORE) {
-            if (response.body_len < 4u) {
-                return -1;
-            }
-            size_t next_cursor_length = audit_read_le16(response.body);
-            size_t padding = (4u - (next_cursor_length % 4u)) % 4u;
-            if (next_cursor_length > sizeof(cursor)
-                || 4u + next_cursor_length + padding > response.body_len) {
-                return -1;
-            }
-            memcpy(cursor, response.body + 4u, next_cursor_length);
-            cursor_length = next_cursor_length;
-            has_cursor = true;
-            position = 4u + next_cursor_length + padding;
-        }
-        if ((response.body_len - position) % AUDIT_SERVICE_RECORD_LEN != 0u) {
-            return -1;
-        }
-        while (position < response.body_len) {
-            const uint8_t *record = response.body + position;
-            if (CRYPTO_memcmp(record, tracker_id, 16u) == 0) {
-                service->present = true;
-                service->report_count = audit_read_le64(record + 32u);
-                service->checks_total = audit_read_le64(record + 40u);
-                service->checks_passed = audit_read_le64(record + 48u);
-                service->checks_failed = audit_read_le64(record + 56u);
-            }
-            position += AUDIT_SERVICE_RECORD_LEN;
-        }
-        if (response.page_kind == AUDIT_METRICS_PAGE_LAST) {
-            return 0;
-        }
-    }
-    return -1;
-}
-
 static int audit_collect_metrics(
     audit_io_t *io,
     const audit_dns_cache_t *dns,
     uint64_t tenant_id,
     const uint8_t management_key[32],
-    const uint8_t tracker_id[16],
     const audit_config_t *config,
     audit_metrics_snapshot_t *snapshots
 ) {
@@ -1525,19 +1411,9 @@ static int audit_collect_metrics(
                 config,
                 &snapshot.server_id,
                 &snapshot.summary
-            ) != 0
-            || audit_query_service(
-                io,
-                &dns->targets[index],
-                tenant_id,
-                management_key,
-                config,
-                snapshot.server_id,
-                tracker_id,
-                &snapshot.service
             ) != 0) {
             audit_print_timestamp(stderr);
-            fprintf(stderr, " Metrics retrieval failed for %s:%u\n",
+            fprintf(stderr, " Tenant metrics retrieval failed for %s:%u\n",
                 dns->targets[index].name, dns->targets[index].port);
             failures++;
         } else {
@@ -1559,7 +1435,7 @@ static void audit_print_metrics(
     const audit_metrics_snapshot_t *current
 ) {
     audit_print_timestamp(stdout);
-    printf(" Metrics snapshot after %s\n", phase);
+    printf(" Tenant metrics snapshot after %s\n", phase);
     for (size_t index = 0u; index < dns->target_count; index++) {
         const audit_metrics_snapshot_t *now = &current[index];
         const audit_metrics_snapshot_t *before = &previous[index];
@@ -1591,33 +1467,6 @@ static void audit_print_metrics(
                 (unsigned long long)audit_counter_delta(now->summary.requests_auth_failed, before->summary.requests_auth_failed),
                 (unsigned long long)audit_counter_delta(now->summary.service_latency_reports_total, before->summary.service_latency_reports_total));
         }
-        if (now->service.present) {
-            audit_print_timestamp(stdout);
-            printf(" LatencyMetrics{Reports:%llu,Checks:%llu,Passed:%llu,Failed:%llu} Absolute\n",
-                (unsigned long long)now->service.report_count,
-                (unsigned long long)now->service.checks_total,
-                (unsigned long long)now->service.checks_passed,
-                (unsigned long long)now->service.checks_failed);
-            bool service_counters_monotonic = !before->service.present
-                || (now->service.report_count >= before->service.report_count
-                    && now->service.checks_total >= before->service.checks_total
-                    && now->service.checks_passed >= before->service.checks_passed
-                    && now->service.checks_failed >= before->service.checks_failed);
-            if (comparable && service_counters_monotonic) {
-                audit_print_timestamp(stdout);
-                printf(" LatencyMetrics{Reports:%llu,Checks:%llu,Passed:%llu,Failed:%llu} Delta\n",
-                    (unsigned long long)audit_counter_delta(now->service.report_count, before->service.report_count),
-                    (unsigned long long)audit_counter_delta(now->service.checks_total, before->service.checks_total),
-                    (unsigned long long)audit_counter_delta(now->service.checks_passed, before->service.checks_passed),
-                    (unsigned long long)audit_counter_delta(now->service.checks_failed, before->service.checks_failed));
-            } else if (comparable) {
-                audit_print_timestamp(stdout);
-                printf(" LatencyMetrics DeltaUnavailable: tracker counters restarted\n");
-            }
-        } else {
-            audit_print_timestamp(stdout);
-            printf(" LatencyMetrics NotPresentOnListener\n");
-        }
     }
 }
 
@@ -1627,14 +1476,13 @@ static int audit_snapshot_after_phase(
     const audit_dns_cache_t *dns,
     uint64_t tenant_id,
     const uint8_t management_key[32],
-    const uint8_t tracker_id[16],
     const audit_config_t *config,
     audit_metrics_snapshot_t *previous,
     audit_metrics_snapshot_t *current
 ) {
     if (!config->management_key) {
         audit_print_timestamp(stdout);
-        printf(" Metrics snapshot after %s skipped: no --management-key\n", phase);
+        printf(" Tenant metrics snapshot after %s skipped: no --management-key\n", phase);
         return 0;
     }
     int status = audit_collect_metrics(
@@ -1642,7 +1490,6 @@ static int audit_snapshot_after_phase(
         dns,
         tenant_id,
         management_key,
-        tracker_id,
         config,
         current
     );
@@ -1840,7 +1687,7 @@ int main(int argc, char **argv) {
         config.policy.final_receive_units,
         config.policy.completion_delivery ? "true" : "false",
         (unsigned long long)policy_horizon_ms);
-    printf("metrics=%s\n\n", config.management_key ? "enabled" : "disabled");
+    printf("tenant_metrics=%s\n\n", config.management_key ? "enabled" : "disabled");
 
     audit_metrics_snapshot_t *previous = (audit_metrics_snapshot_t *)calloc(
         dns.target_count,
@@ -1866,7 +1713,6 @@ int main(int argc, char **argv) {
             &dns,
             auth_info.key_id,
             management_key,
-            guard.latency_tracker_id,
             &config,
             previous
         ) != 0) {
@@ -1899,7 +1745,6 @@ int main(int argc, char **argv) {
             &dns,
             auth_info.key_id,
             management_key,
-            guard.latency_tracker_id,
             &config,
             previous,
             current
@@ -1917,7 +1762,6 @@ int main(int argc, char **argv) {
             &dns,
             auth_info.key_id,
             management_key,
-            guard.latency_tracker_id,
             &config,
             previous,
             current
@@ -1956,7 +1800,6 @@ int main(int argc, char **argv) {
             &dns,
             auth_info.key_id,
             management_key,
-            guard.latency_tracker_id,
             &config,
             previous,
             current
@@ -1993,7 +1836,6 @@ int main(int argc, char **argv) {
             &dns,
             auth_info.key_id,
             management_key,
-            guard.latency_tracker_id,
             &config,
             previous,
             current

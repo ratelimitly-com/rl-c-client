@@ -136,30 +136,26 @@ bin/audit_client \
 ```
 
 With the management key, the client queries every discovered SRV endpoint
-before the workloads and after each one. It prints absolute counters and,
+before the workloads and after each one. It retrieves only tenant-summary
+counters: successful, rate-limited, guard-failed, and authentication-failed
+requests plus accepted latency-report blocks. It prints absolute counters and,
 where the responding server identity is unchanged, deltas from the preceding
-snapshot. The retrieved families are:
-
-- tenant summary counters: successful, rate-limited, guard-failed, and
-  authentication-failed requests plus accepted latency-report blocks;
-- latency-tracker counters for this run's tracker: reports, checks, passed
-  checks, and failed checks.
+snapshot. Tracker-level metrics are deliberately not fetched because the audit
+already reports every request outcome directly and tracker records make the
+output harder to interpret.
 
 Metrics are listener-local rather than cluster-aggregated. Each endpoint is
 printed separately, and different endpoints may legitimately show different
-values. When a tracker expires and is recreated, its counters restart; the
-client identifies that decrease and marks the delta unavailable instead of
-printing a misleading zero. The management credential must authenticate every
-discovered endpoint for a completely successful metrics run, and is never
-printed. If it is omitted, each
-metrics point is logged as skipped and does not affect the audit.
+values. The management credential must authenticate every discovered endpoint
+for a completely successful metrics run, and is never printed. If it is
+omitted, each metrics point is logged as skipped and does not affect the audit.
 
 Metrics query controls:
 
 | Option | Default | Meaning |
 | --- | ---: | --- |
 | `--metrics-timeout-ms=<n>` | 200 | Response wait for one administrative query attempt. |
-| `--metrics-attempts=<n>` | 3 | Attempts per endpoint and page. |
+| `--metrics-attempts=<n>` | 3 | Tenant-summary query attempts per endpoint. |
 
 ## HA policy options
 
