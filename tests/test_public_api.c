@@ -5,16 +5,21 @@
 #include "../include/r_client.h"
 
 static const char *SAMPLE_COOKIE_KEY_TENANT_2 =
-    "rl-cookie1qgqqqqqqqqqqqqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqqqqzqqqqsqqqqqsqqqyqqqqqqkqzqqqfn54mv";
+    "rl-cookie1qypqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqfgtruhcgpj8ys";
 static const char *SAMPLE_AES_KEY_TENANT_3 =
+    "rl-aes1qypsqqqqqqqqqqqrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqdgtruhcxwfed9";
+
+static const char *LEGACY_AES_KEY_TENANT_3 =
     "rl-aes1qvqqqqqqqqqqqqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqqqqzqqqqsqqqqqsqqqyqqqqqqkqzqqqhmzd8l";
 
 static void assert_default_quotas(const r_auth_key_info_t *info) {
+    assert(info->format_version == 1u);
     assert(info->rate_buckets_max == 65536u);
     assert(info->latency_services_max == 1024u);
     assert(info->metrics_labels_max == 4096u);
-    assert(info->latency_buffer_size_max == 64u);
+    assert(info->latency_buffer_size_max == 32u);
     assert(info->dedup_ttl_ms_max == 300u);
+    assert(info->rate_window_size_ms_max == UINT32_MAX);
 }
 
 static void test_parse_cookie_key(void) {
@@ -55,6 +60,7 @@ static void test_reject_invalid_key(void) {
     assert(info.secret_len == 0u);
     assert(r_client_parse_auth_key(NULL, &info) == RCLIENT_ERR_CONFIG);
     assert(r_client_parse_auth_key(SAMPLE_AES_KEY_TENANT_3, NULL) == RCLIENT_ERR_CONFIG);
+    assert(r_client_parse_auth_key(LEGACY_AES_KEY_TENANT_3, &info) == RCLIENT_ERR_CONFIG);
 }
 
 static void test_canonical_id_known_vectors(void) {
