@@ -2360,6 +2360,7 @@ int r_client_parse_auth_key(const char *encoded, r_auth_key_info_t *out_info) {
     }
 
     info.type = type;
+    info.format_version = quotas.format_version;
     info.key_id = key_id;
     info.secret_len = secret_len;
     info.rate_buckets_max = quotas.rate_buckets_max;
@@ -2367,6 +2368,7 @@ int r_client_parse_auth_key(const char *encoded, r_auth_key_info_t *out_info) {
     info.metrics_labels_max = quotas.metrics_labels_max;
     info.latency_buffer_size_max = quotas.latency_buffer_size_max;
     info.dedup_ttl_ms_max = quotas.dedup_ttl_ms_max;
+    info.rate_window_size_ms_max = quotas.rate_window_size_ms_max;
 
     *out_info = info;
     return RCLIENT_OK;

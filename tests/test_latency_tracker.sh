@@ -6,7 +6,7 @@ PORT="${R_LATENCY_EXAMPLE_TEST_PORT:-39083}"
 DENY_PORT=$((PORT + 1))
 TMP_DIR="$(mktemp -d)"
 RESPONDER_PID=""
-TEST_AES_KEY="rl-aes1qvqqqqqqqqqqqqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqqqqzqqqqsqqqqqsqqqyqqqqqqkqzqqqhmzd8l"
+TEST_AES_KEY="rl-aes1qypsqqqqqqqqqqqrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqdgrrulcvcn0x5"
 
 cleanup() {
   if [[ -n "$RESPONDER_PID" ]] && kill -0 "$RESPONDER_PID" 2>/dev/null; then

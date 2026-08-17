@@ -47,6 +47,7 @@ typedef struct r_auth_config {
 } r_auth_config_t;
 
 typedef struct r_auth_key_info {
+    uint8_t format_version;
     r_auth_type_t type;
     uint64_t key_id;
     uint8_t secret[32];
@@ -56,6 +57,7 @@ typedef struct r_auth_key_info {
     uint32_t metrics_labels_max;
     uint32_t latency_buffer_size_max;
     uint32_t dedup_ttl_ms_max;
+    uint32_t rate_window_size_ms_max;
 } r_auth_key_info_t;
 
 typedef struct r_tenant_config {

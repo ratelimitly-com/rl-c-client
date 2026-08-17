@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RESPONDER="$ROOT/bin/r_test_responder"
-TEST_AES_KEY="rl-aes1qvqqqqqqqqqqqqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqqqqzqqqqsqqqqqsqqqyqqqqqqkqzqqqhmzd8l"
+TEST_AES_KEY="rl-aes1qypsqqqqqqqqqqqrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqdgrrulcvcn0x5"
 TRACKER_JSON='"tracker":{"ttl_ms":10000,"max_samples":100,"buffer_size":32,"min_sample_threshold":5}'
 
 if [[ "$#" -ne 7 ]]; then

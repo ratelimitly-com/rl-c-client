@@ -7,7 +7,7 @@ MINGW_AR="${MINGW_AR:-$(command -v x86_64-w64-mingw32-ar || true)}"
 OPENSSL_PREFIX="${MINGW_OPENSSL_PREFIX:-}"
 WINDOWS_RUNNER="${WINDOWS_RUNNER:-}"
 PORT="${R_WINDOWS_RESPONDER_TEST_PORT:-39120}"
-TEST_AES_KEY="rl-aes1qvqqqqqqqqqqqqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqqqqzqqqqsqqqqqsqqqyqqqqqqkqzqqqhmzd8l"
+TEST_AES_KEY="rl-aes1qypsqqqqqqqqqqqrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqdgrrulcvcn0x5"
 
 skip() {
   echo "test_windows_responder: SKIP ($*)"
