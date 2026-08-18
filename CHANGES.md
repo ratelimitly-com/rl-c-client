@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 1.0.0 - 2026-08-18
+
+- **Breaking:** adopted versioned API-key format 1 and intentionally rejected
+  legacy unversioned credentials and unknown format versions.
+- Replaced the five unpacked API-key quota values with one compact quota word
+  carrying six limits, including `rate_window_size_ms_max`.
+- Added `format_version` and `rate_window_size_ms_max` to
+  `r_auth_key_info_t`, and rejected complete resource requests locally when a
+  resource window exceeds the credential quota, before DNS, serialization, or
+  UDP transmission.
+- Established API-key format 1, the public C API, and the documented request
+  policy as the first stable `rl-c-client` release contract.
+
 ## 0.6.0 - 2026-08-10
 
 - Allowed resource-only, guard-only, combined, and empty core request shapes.
