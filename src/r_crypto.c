@@ -159,12 +159,40 @@ static uint32_t r_read_le32_local(const uint8_t *p) {
 }
 
 enum {
+    R_CREDENTIAL_FORMAT_VERSION = 1u,
+    R_CREDENTIAL_VERSION_LEN = 1u,
     R_CREDENTIAL_KEY_ID_LEN = 8u,
     R_CREDENTIAL_SECRET_LEN = 32u,
-    R_CREDENTIAL_QUOTA_OFFSET = 40u,
-    R_CREDENTIAL_QUOTA_LEN = 20u,
-    R_CREDENTIAL_PAYLOAD_LEN = 60u,
+    R_CREDENTIAL_KEY_ID_OFFSET = R_CREDENTIAL_VERSION_LEN,
+    R_CREDENTIAL_SECRET_OFFSET = R_CREDENTIAL_KEY_ID_OFFSET + R_CREDENTIAL_KEY_ID_LEN,
+    R_CREDENTIAL_QUOTA_OFFSET = R_CREDENTIAL_SECRET_OFFSET + R_CREDENTIAL_SECRET_LEN,
+    R_CREDENTIAL_QUOTA_LEN = 4u,
+    R_CREDENTIAL_PAYLOAD_LEN = R_CREDENTIAL_QUOTA_OFFSET + R_CREDENTIAL_QUOTA_LEN,
 };
+
+static int r_decode_quota_word(uint32_t word, r_bech32_quotas_t *out) {
+    const uint32_t rate_exp = word & 0x1fu;
+    const uint32_t latency_exp = (word >> 5) & 0x1fu;
+    const uint32_t labels_exp = (word >> 10) & 0x1fu;
+    const uint32_t buffer_exp = (word >> 15) & 0x0fu;
+    const uint32_t dedup_units = (word >> 19) & 0xffu;
+    const uint32_t window_exp = (word >> 27) & 0x1fu;
+
+    if (!out || rate_exp > 24u || latency_exp > 24u ||
+        dedup_units < 1u || dedup_units > 200u) {
+        return -1;
+    }
+
+    out->format_version = R_CREDENTIAL_FORMAT_VERSION;
+    out->rate_buckets_max = UINT32_C(1) << rate_exp;
+    out->latency_services_max = UINT32_C(1) << latency_exp;
+    out->metrics_labels_max = UINT32_C(1) << labels_exp;
+    out->latency_buffer_size_max = UINT32_C(1) << buffer_exp;
+    out->dedup_ttl_ms_max = dedup_units * 10u;
+    out->rate_window_size_ms_max =
+        window_exp == 31u ? UINT32_MAX : UINT32_C(1) << window_exp;
+    return 0;
+}
 
 int r_hash_content_id_blake2s_128(
     const uint8_t *domain,
@@ -370,7 +398,13 @@ int r_decode_api_key_bech32_with_quotas(
         free(s);
         return -1;
     }
-    key_id = r_read_le64_local(payload);
+    if (payload[0] != R_CREDENTIAL_FORMAT_VERSION) {
+        r_cleanse_free(payload, payload_cap);
+        free(data);
+        free(s);
+        return -1;
+    }
+    key_id = r_read_le64_local(payload + R_CREDENTIAL_KEY_ID_OFFSET);
     secret_len = R_CREDENTIAL_SECRET_LEN;
     if (secret_len > out_secret_cap) {
         r_cleanse_free(payload, payload_cap);
@@ -378,24 +412,24 @@ int r_decode_api_key_bech32_with_quotas(
         free(s);
         return -1;
     }
-    memcpy(out_secret, payload + R_CREDENTIAL_KEY_ID_LEN, secret_len);
+    memcpy(out_secret, payload + R_CREDENTIAL_SECRET_OFFSET, secret_len);
 
     *out_type = auth_type;
     *out_key_id = key_id;
     *out_secret_len = secret_len;
+    r_bech32_quotas_t decoded_quotas;
+    memset(&decoded_quotas, 0, sizeof(decoded_quotas));
+    if (payload_len < R_CREDENTIAL_QUOTA_OFFSET + R_CREDENTIAL_QUOTA_LEN ||
+        r_decode_quota_word(
+            r_read_le32_local(payload + R_CREDENTIAL_QUOTA_OFFSET),
+            &decoded_quotas) != 0) {
+        r_cleanse_free(payload, payload_cap);
+        free(data);
+        free(s);
+        return -1;
+    }
     if (out_quotas) {
-        if (payload_len < R_CREDENTIAL_QUOTA_OFFSET + R_CREDENTIAL_QUOTA_LEN) {
-            r_cleanse_free(payload, payload_cap);
-            free(data);
-            free(s);
-            return -1;
-        }
-        size_t quota_offset = R_CREDENTIAL_QUOTA_OFFSET;
-        out_quotas->rate_buckets_max = r_read_le32_local(payload + quota_offset);
-        out_quotas->latency_services_max = r_read_le32_local(payload + quota_offset + 4u);
-        out_quotas->metrics_labels_max = r_read_le32_local(payload + quota_offset + 8u);
-        out_quotas->latency_buffer_size_max = r_read_le32_local(payload + quota_offset + 12u);
-        out_quotas->dedup_ttl_ms_max = r_read_le32_local(payload + quota_offset + 16u);
+        *out_quotas = decoded_quotas;
     }
 
     r_cleanse_free(payload, payload_cap);

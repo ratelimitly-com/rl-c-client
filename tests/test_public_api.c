@@ -3,48 +3,45 @@
 #include <string.h>
 
 #include "../include/r_client.h"
+#include "fixtures/api_key_v1_test_vectors.h"
 
-static const char *SAMPLE_COOKIE_KEY_TENANT_2 =
-    "rl-cookie1qgqqqqqqqqqqqqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqqqqzqqqqsqqqqqsqqqyqqqqqqkqzqqqfn54mv";
-static const char *SAMPLE_AES_KEY_TENANT_3 =
-    "rl-aes1qvqqqqqqqqqqqqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqqqqzqqqqsqqqqqsqqqyqqqqqqkqzqqqhmzd8l";
+static void test_parse_api_key_v1_vectors(void) {
+    for (size_t i = 0;
+         i < sizeof(R_API_KEY_V1_VALID_VECTORS) /
+                 sizeof(R_API_KEY_V1_VALID_VECTORS[0]);
+         i++) {
+        const r_api_key_v1_valid_vector_t *vector =
+            &R_API_KEY_V1_VALID_VECTORS[i];
+        r_auth_key_info_t info;
+        memset(&info, 0, sizeof(info));
 
-static void assert_default_quotas(const r_auth_key_info_t *info) {
-    assert(info->rate_buckets_max == 65536u);
-    assert(info->latency_services_max == 1024u);
-    assert(info->metrics_labels_max == 4096u);
-    assert(info->latency_buffer_size_max == 64u);
-    assert(info->dedup_ttl_ms_max == 300u);
-}
-
-static void test_parse_cookie_key(void) {
-    r_auth_key_info_t info;
-    memset(&info, 0, sizeof(info));
-
-    int rc = r_client_parse_auth_key(SAMPLE_COOKIE_KEY_TENANT_2, &info);
-    assert(rc == RCLIENT_OK);
-    assert(info.type == R_AUTH_COOKIE);
-    assert(info.key_id == 2u);
-    assert(info.secret_len == 32u);
-    for (size_t i = 0; i < info.secret_len; i++) {
-        assert(info.secret[i] == 2u);
+        assert(r_client_parse_auth_key(vector->encoded, &info) == RCLIENT_OK);
+        assert(info.format_version == 1u);
+        assert(info.type == vector->auth_type);
+        assert(info.key_id == vector->key_id);
+        assert(info.secret_len == sizeof(vector->secret));
+        assert(memcmp(info.secret, vector->secret, sizeof(vector->secret)) == 0);
+        assert(info.rate_buckets_max == vector->rate_buckets_max);
+        assert(info.latency_services_max == vector->latency_services_max);
+        assert(info.metrics_labels_max == vector->metrics_labels_max);
+        assert(info.latency_buffer_size_max == vector->latency_buffer_size_max);
+        assert(info.dedup_ttl_ms_max == vector->dedup_ttl_ms_max);
+        assert(info.rate_window_size_ms_max == vector->rate_window_size_ms_max);
     }
-    assert_default_quotas(&info);
-}
 
-static void test_parse_aes_key(void) {
-    r_auth_key_info_t info;
-    memset(&info, 0, sizeof(info));
-
-    int rc = r_client_parse_auth_key(SAMPLE_AES_KEY_TENANT_3, &info);
-    assert(rc == RCLIENT_OK);
-    assert(info.type == R_AUTH_AES_GCM);
-    assert(info.key_id == 3u);
-    assert(info.secret_len == 32u);
-    for (size_t i = 0; i < info.secret_len; i++) {
-        assert(info.secret[i] == 3u);
+    for (size_t i = 0;
+         i < sizeof(R_API_KEY_V1_INVALID_VECTORS) /
+                 sizeof(R_API_KEY_V1_INVALID_VECTORS[0]);
+         i++) {
+        r_auth_key_info_t info;
+        memset(&info, 0xff, sizeof(info));
+        assert(r_client_parse_auth_key(
+            R_API_KEY_V1_INVALID_VECTORS[i].encoded,
+            &info
+        ) == RCLIENT_ERR_CONFIG);
+        assert(info.key_id == 0u);
+        assert(info.secret_len == 0u);
     }
-    assert_default_quotas(&info);
 }
 
 static void test_reject_invalid_key(void) {
@@ -54,7 +51,8 @@ static void test_reject_invalid_key(void) {
     assert(info.key_id == 0u);
     assert(info.secret_len == 0u);
     assert(r_client_parse_auth_key(NULL, &info) == RCLIENT_ERR_CONFIG);
-    assert(r_client_parse_auth_key(SAMPLE_AES_KEY_TENANT_3, NULL) == RCLIENT_ERR_CONFIG);
+    assert(r_client_parse_auth_key(R_API_KEY_V1_VALID_VECTORS[0].encoded, NULL)
+        == RCLIENT_ERR_CONFIG);
 }
 
 static void test_canonical_id_known_vectors(void) {
@@ -160,8 +158,7 @@ static void test_format_default_tenant_dns(void) {
 }
 
 int main(void) {
-    test_parse_cookie_key();
-    test_parse_aes_key();
+    test_parse_api_key_v1_vectors();
     test_reject_invalid_key();
     test_canonical_id_known_vectors();
     test_default_request_policy();

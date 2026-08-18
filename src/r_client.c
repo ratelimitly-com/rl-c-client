@@ -214,6 +214,14 @@ static bool r_latency_buffer_size_quota(const r_client_t *client, uint32_t *out_
     return true;
 }
 
+static bool r_rate_window_size_quota(const r_client_t *client, uint32_t *out_limit) {
+    if (!client || !client->has_quotas || !out_limit) {
+        return false;
+    }
+    *out_limit = client->quotas.rate_window_size_ms_max;
+    return true;
+}
+
 static int r_ha_schedule_units(
     const r_ha_schedule_t *schedule,
     uint32_t round,
@@ -333,6 +341,23 @@ static int r_validate_latency_guards(
     }
     for (size_t i = 0; i < guard_count; i++) {
         if (guards[i].buffer_size > limit) {
+            return RCLIENT_ERR_PROTOCOL;
+        }
+    }
+    return RCLIENT_OK;
+}
+
+static int r_validate_resource_windows(
+    const r_client_t *client,
+    const r_resource_request_t *resources,
+    size_t resource_count
+) {
+    uint32_t limit = 0;
+    if (!r_rate_window_size_quota(client, &limit)) {
+        return RCLIENT_OK;
+    }
+    for (size_t i = 0; i < resource_count; i++) {
+        if (resources[i].window_size_ms > limit) {
             return RCLIENT_ERR_PROTOCOL;
         }
     }
@@ -1743,7 +1768,11 @@ static int r_client_check_rate_limit_async_impl(
         cb(user, NULL, RCLIENT_OK, &result);
         return RCLIENT_OK;
     }
-    int rc = r_validate_latency_guards(client, guards, guard_count);
+    int rc = r_validate_resource_windows(client, resources, resource_count);
+    if (rc != RCLIENT_OK) {
+        return rc;
+    }
+    rc = r_validate_latency_guards(client, guards, guard_count);
     if (rc != RCLIENT_OK) {
         return rc;
     }
@@ -2360,6 +2389,7 @@ int r_client_parse_auth_key(const char *encoded, r_auth_key_info_t *out_info) {
     }
 
     info.type = type;
+    info.format_version = quotas.format_version;
     info.key_id = key_id;
     info.secret_len = secret_len;
     info.rate_buckets_max = quotas.rate_buckets_max;
@@ -2367,6 +2397,7 @@ int r_client_parse_auth_key(const char *encoded, r_auth_key_info_t *out_info) {
     info.metrics_labels_max = quotas.metrics_labels_max;
     info.latency_buffer_size_max = quotas.latency_buffer_size_max;
     info.dedup_ttl_ms_max = quotas.dedup_ttl_ms_max;
+    info.rate_window_size_ms_max = quotas.rate_window_size_ms_max;
 
     *out_info = info;
     return RCLIENT_OK;

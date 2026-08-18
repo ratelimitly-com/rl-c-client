@@ -9,9 +9,11 @@
 #include "../src/r_protocol.h"
 
 static const char *SAMPLE_COOKIE_KEY_TENANT_2 =
-    "rl-cookie1qgqqqqqqqqqqqqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqqqqzqqqqsqqqqqsqqqyqqqqqqkqzqqqfn54mv";
+    "rl-cookie1qypqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqfgrrulczhg30p";
+static const char *COOKIE_KEY_WITH_1024_MS_RATE_WINDOW =
+    "rl-cookie1qypqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqfgrru6sx3k5lz";
 static const char *SAMPLE_AES_KEY_TENANT_3 =
-    "rl-aes1qvqqqqqqqqqqqqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqqqqzqqqqsqqqqqsqqqyqqqqqqkqzqqqhmzd8l";
+    "rl-aes1qypsqqqqqqqqqqqrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqdgrrulcvcn0x5";
 
 typedef struct test_ctx {
     uint8_t last_packet[R_MAX_PACKET_SIZE];
@@ -488,7 +490,7 @@ static uint32_t read_le32(const uint8_t *p) {
         | ((uint32_t)p[3] << 24);
 }
 
-static r_client_t *make_client(test_ctx_t *ctx) {
+static r_client_t *make_client_with_key(test_ctx_t *ctx, const char *encoded_key) {
     r_io_ops_t io = {
         .ctx = ctx,
         .udp_send = test_udp_send,
@@ -507,7 +509,7 @@ static r_client_t *make_client(test_ctx_t *ctx) {
     config.tenant.dns_name = "example.local";
     config.tenant.key_id = 2;
     config.tenant.auth.type = R_AUTH_COOKIE;
-    config.tenant.auth.secret = SAMPLE_COOKIE_KEY_TENANT_2;
+    config.tenant.auth.secret = encoded_key;
     config.tenant.auth.secret_len = 0;
 
     r_client_t *client = NULL;
@@ -515,6 +517,10 @@ static r_client_t *make_client(test_ctx_t *ctx) {
     assert(rc == RCLIENT_OK);
     assert(client != NULL);
     return client;
+}
+
+static r_client_t *make_client(test_ctx_t *ctx) {
+    return make_client_with_key(ctx, SAMPLE_COOKIE_KEY_TENANT_2);
 }
 
 static r_client_t *make_two_server_client_with_policy(
@@ -1401,6 +1407,40 @@ static void test_check_rate_limit_rejects_oversized_guard(void) {
     );
     assert(rc == RCLIENT_ERR_PROTOCOL);
     assert(ctx.send_count == 0);
+
+    r_client_destroy(client);
+}
+
+static void test_check_rate_limit_rejects_oversized_resource_window(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    r_client_t *client = make_client_with_key(
+        &ctx,
+        COOKIE_KEY_WITH_1024_MS_RATE_WINDOW
+    );
+
+    r_resource_request_t resource;
+    memset(&resource, 0, sizeof(resource));
+    memcpy(resource.bucket_id, "oversized-window", 16);
+    resource.window_size_ms = 1025;
+    resource.rate_limit = 100;
+    resource.tokens_requested = 1;
+
+    const size_t sends_before_request = ctx.send_count;
+    int rc = r_client_check_rate_limit_async(
+        client,
+        &resource,
+        1,
+        NULL,
+        0,
+        NULL,
+        0,
+        noop_rate_limit_cb,
+        NULL,
+        NULL
+    );
+    assert(rc == RCLIENT_ERR_PROTOCOL);
+    assert(ctx.send_count == sends_before_request);
 
     r_client_destroy(client);
 }
@@ -2546,6 +2586,7 @@ int main(void) {
     test_empty_request_callback_may_submit_recursively();
     test_request_shape_pointer_validation();
     test_check_rate_limit_rejects_oversized_guard();
+    test_check_rate_limit_rejects_oversized_resource_window();
     test_report_latency_filters_oversized_reports();
     test_report_latency_accepts_largest_cookie_batch();
     test_report_latency_rejects_oversized_cookie_batch();
