@@ -122,6 +122,7 @@ struct r_client {
     bool has_aes_key;
 
     r_server_endpoint_t *servers;
+    uint64_t send_failure_count;
     size_t server_count;
     size_t server_cap;
     uint64_t last_dns_refresh_ms;
@@ -1197,34 +1198,25 @@ static bool r_request_target_responded(
 }
 
 /**
- * Reports that a send reached some endpoints but not all of them.
+ * Counts endpoints a send could not reach.
  *
  * Partial delivery is otherwise invisible: the call still returns RCLIENT_OK
- * through the endpoints that worked, but the HA path selects the oldest
+ * through the endpoints that worked, while the HA path selects the oldest
  * replica's answer, so losing the oldest replica silently downgrades the
- * result. Total failure is not logged here - the caller already gets
- * RCLIENT_ERR_IO for that.
+ * result. This is a counter rather than an io.log call because it sits on the
+ * per-request send path, where a persistently unreachable endpoint would
+ * otherwise emit one record per request for as long as it stays down. Total
+ * failure is not counted here - the caller already gets RCLIENT_ERR_IO.
  */
-static void r_log_partial_delivery(
-    const r_client_t *client,
-    const char *what,
-    size_t failed,
-    size_t attempted
-) {
-    if (!client || !client->io.log) {
+static void r_record_send_failures(r_client_t *client, uint64_t failures) {
+    if (!client || failures == 0) {
         return;
     }
-    char message[128];
-    snprintf(
-        message,
-        sizeof(message),
-        "%s reached %zu of %zu endpoints (%zu unreachable)",
-        what,
-        attempted - failed,
-        attempted,
-        failed
-    );
-    client->io.log(client->io.ctx, R_LOG_WARN, message);
+    if (client->send_failure_count > UINT64_MAX - failures) {
+        client->send_failure_count = UINT64_MAX;
+        return;
+    }
+    client->send_failure_count += failures;
 }
 
 static int r_send_packet_to_targets(
@@ -1267,9 +1259,7 @@ static int r_send_packet_to_targets(
         return RCLIENT_ERR_IO;
     }
     if (!best_effort && delivered > 0 && delivered < attempted) {
-        r_log_partial_delivery(
-            client, "rate request", attempted - delivered, attempted
-        );
+        r_record_send_failures(client, (uint64_t)(attempted - delivered));
     }
     return RCLIENT_OK;
 }
@@ -2162,12 +2152,7 @@ int r_client_report_latency(
         return RCLIENT_ERR_IO;
     }
     if (delivered > 0 && delivered < client->server_count) {
-        r_log_partial_delivery(
-            client,
-            "latency report",
-            client->server_count - delivered,
-            client->server_count
-        );
+        r_record_send_failures(client, (uint64_t)(client->server_count - delivered));
     }
     if (owns_filtered_reports) {
         free(filtered_reports);
@@ -2351,6 +2336,10 @@ int r_client_on_timeout(
         return RCLIENT_OK;
     }
     return r_request_policy_on_timeout(client, req, now_ms);
+}
+
+uint64_t r_client_send_failure_count(const r_client_t *client) {
+    return client ? client->send_failure_count : 0u;
 }
 
 void r_client_cancel_request(r_client_t *client, r_client_req_t *req) {

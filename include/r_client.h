@@ -286,6 +286,17 @@ RCLIENT_API int r_client_on_timeout(
 );
 
 // Cancellation.
+/**
+ * Returns how many endpoints a send could not reach across this client's life.
+ *
+ * Nonzero means at least one request or latency report was delivered to only
+ * some of its endpoints. Those calls still succeed, so this counter is the only
+ * signal that delivery was partial; a rising value against a healthy success
+ * rate usually means one address of a dual-stack target is unroutable from this
+ * host. Total-failure sends are not counted here - they return RCLIENT_ERR_IO.
+ */
+RCLIENT_API uint64_t r_client_send_failure_count(const r_client_t *client);
+
 RCLIENT_API void r_client_cancel_request(
     r_client_t *client,
     r_client_req_t *req

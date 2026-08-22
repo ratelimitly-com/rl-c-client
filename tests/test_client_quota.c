@@ -2492,6 +2492,8 @@ static void test_rate_request_survives_endpoint_send_failure(void) {
     assert(result.status == RCLIENT_OK);
     assert(result.success);
     assert(result.server_id == 2u);
+    /* Partial delivery is counted, never logged per request. */
+    assert(r_client_send_failure_count(client) >= 1u);
     r_client_destroy(client);
 }
 
@@ -2509,6 +2511,8 @@ static void test_rate_request_fails_when_no_endpoint_reachable(void) {
         record_rate_limit_cb, &result, &req
     ) == RCLIENT_ERR_IO);
     assert(ctx.send_count == 2u);
+    /* Total failure returns an error, so it is not counted as partial. */
+    assert(r_client_send_failure_count(client) == 0u);
     r_client_destroy(client);
 }
 
