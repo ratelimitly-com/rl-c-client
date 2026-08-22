@@ -140,9 +140,13 @@ static int wait_for_admission(
     r_admission_request_t *request,
     admission_result_t *result
 ) {
+    /* Count only idle timeouts toward the budget. Stale duplicate responses
+     * from the previous request (two servers x two address families x
+     * replay_count copies, all answered via the server dedup cache) arrive as
+     * POLLIN events during this request's wait; counting those wakeups burned
+     * the entire budget before this request's own response could arrive. */
     for (unsigned int iteration = 0u;
-            iteration < MAX_WAIT_ITERATIONS && !result->done;
-            iteration++) {
+            iteration < MAX_WAIT_ITERATIONS && !result->done;) {
         uint64_t delay_ms = 0u;
         int status = r_runtime_admission_delay_ms(request, &delay_ms);
         if (status != RCLIENT_OK) {
@@ -156,6 +160,7 @@ static int wait_for_admission(
             return ready;
         }
         if (ready == 0 && !result->done) {
+            iteration++;
             status = r_runtime_admission_on_timeout(runtime, request);
             if (status != RCLIENT_OK) {
                 return status;
