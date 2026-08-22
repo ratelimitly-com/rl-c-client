@@ -555,6 +555,87 @@ static void test_rejects_bad_input(void) {
     r_client_destroy(client);
 }
 
+static void test_steering_waits_for_every_inflight_request(void) {
+    test_context_t context;
+    memset(&context, 0, sizeof(context));
+    r_client_t *client = create_client(&context, R_TEST_RESPONDER_COOKIE_KEY);
+
+    r_client_req_t *first = submit_request(client, &context);
+    uint8_t first_packet[2048];
+    size_t first_packet_len = context.packet_len;
+    memcpy(first_packet, context.packet, first_packet_len);
+
+    r_client_req_t *second = submit_request(client, &context);
+    uint8_t second_packet[2048];
+    size_t second_packet_len = context.packet_len;
+    memcpy(second_packet, context.packet, second_packet_len);
+    r_client_req_t *third = submit_request(client, &context);
+
+    r_test_responder_state_t rebind_state;
+    assert(r_test_responder_init(
+        &rebind_state,
+        R_TEST_SCENARIO_ALLOW,
+        R_TEST_RESPONDER_COOKIE_KEY,
+        1u,
+        false,
+        1u
+    ) == RCLIENT_OK);
+    memcpy(context.packet, first_packet, first_packet_len);
+    context.packet_len = first_packet_len;
+
+    uint8_t response[1200];
+    size_t response_len = 0u;
+    bool send_response = false;
+    r_test_event_t event;
+    assert(process_captured_request(
+        &rebind_state,
+        &context,
+        response,
+        &response_len,
+        &send_response,
+        &event
+    ) == RCLIENT_OK);
+    assert(send_response);
+
+    r_addr_t source;
+    fill_source_address(&source);
+    assert(r_client_on_datagram(client, response, response_len, &source) == RCLIENT_OK);
+    assert(context.callback_count == 1u);
+    assert(context.steering_count == 0u);
+
+    r_test_responder_state_t keep_state;
+    assert(r_test_responder_init(
+        &keep_state,
+        R_TEST_SCENARIO_ALLOW,
+        R_TEST_RESPONDER_COOKIE_KEY,
+        1u,
+        true,
+        1u
+    ) == RCLIENT_OK);
+    memcpy(context.packet, second_packet, second_packet_len);
+    context.packet_len = second_packet_len;
+    assert(process_captured_request(
+        &keep_state,
+        &context,
+        response,
+        &response_len,
+        &send_response,
+        &event
+    ) == RCLIENT_OK);
+    assert(send_response);
+    assert(r_client_on_datagram(client, response, response_len, &source) == RCLIENT_OK);
+    assert(context.callback_count == 2u);
+    assert(context.steering_count == 0u);
+
+    r_client_cancel_request(client, third);
+    assert(context.steering_count == 1u);
+    assert(!context.last_keep_port);
+
+    (void)first;
+    (void)second;
+    r_client_destroy(client);
+}
+
 static void test_scenario_parser(void) {
     for (int value = R_TEST_SCENARIO_ALLOW; value <= R_TEST_SCENARIO_COUNT_EXTRA; value++) {
         r_test_scenario_t parsed = R_TEST_SCENARIO_ALLOW;
@@ -569,6 +650,7 @@ static void test_scenario_parser(void) {
 int main(void) {
     test_scenario_parser();
     test_valid_scenarios();
+    test_steering_waits_for_every_inflight_request();
     test_quota_scenario();
     test_no_response_and_malformed_scenarios();
     test_latency_report_observation();

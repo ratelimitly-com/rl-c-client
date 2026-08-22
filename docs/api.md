@@ -538,11 +538,15 @@ event loop of their own. Contracts that differ from the core client:
   unauthenticated datagrams are discarded as packet-local noise and draining
   continues; they are not returned to the host. Non-OK returns are reserved for
   real socket or client failures.
-- The runtime installs **no steering-feedback hook**: server source-port
-  rebind requests are ignored at this layer. Integrations that need steering
-  must use the core client.
-- Runtime-owned socket handles remain valid until
-  `r_runtime_client_destroy()`. On Windows the runtime performs
+- The runtime applies source-port steering after the core in-flight set drains.
+  Each address family advances monotonically through ports 49152 through
+  65535, skips occupied candidates, and never falls back to port zero. It binds
+  every replacement before closing the old socket. Windows sockets set
+  `SO_EXCLUSIVEADDRUSE` before binding.
+- Runtime-owned socket handles remain valid until destruction or a completed
+  steering replacement. Hosts must rebuild their poll/watch set after a request
+  callback because `r_runtime_socket_at()` may then return a new handle. On
+  Windows the runtime performs
   `WSAStartup`/`WSACleanup` as part of init/destroy; hosts managing their own
   Winsock lifetime should account for the reference counts.
 - Threading follows the core rule: one runtime per thread or loop, calls

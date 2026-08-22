@@ -45,6 +45,7 @@ TEST_BINS = \
 	tests/test_public_api \
 	tests/test_workflow \
 	tests/test_runtime \
+	tests/test_steering \
 	tests/test_responder \
 	tests/test_latency_tracker
 
@@ -86,6 +87,7 @@ test: $(TEST_BINS) $(TEST_RESPONDER_BIN) $(PERF_BIN)
 	./tests/test_random_failure
 	./tests/test_public_api
 	./tests/test_workflow
+	./tests/test_steering
 	./tests/test_responder
 	bash ./tests/test_responder_cli.sh
 	bash ./tests/test_runtime.sh
@@ -118,6 +120,9 @@ tests/test_workflow: tests/test_workflow.c librclient.a
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $^ -o $@ -lcrypto -lresolv -pthread
 
 tests/test_runtime: tests/test_runtime.c librclient.a
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $^ -o $@ -lcrypto -lresolv -pthread
+
+tests/test_steering: tests/test_steering.c librclient.a
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $^ -o $@ -lcrypto -lresolv -pthread
 
 tests/test_responder: tests/test_responder.c tools/r_test_responder_protocol.o librclient.a

@@ -10,6 +10,7 @@ find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 
 set(RL_CLIENT_SOURCES
     "${RL_CLIENT_ROOT}/src/r_client.c"
+    "${RL_CLIENT_ROOT}/src/r_client_steering.c"
     "${RL_CLIENT_ROOT}/src/r_client_runtime.c"
     "${RL_CLIENT_ROOT}/src/r_client_workflow.c"
     "${RL_CLIENT_ROOT}/src/r_protocol.c"
@@ -49,19 +50,26 @@ target_include_directories(r-test-responder PRIVATE
 add_executable(r-test-win32-udp-connreset
     "${RL_CLIENT_ROOT}/tests/test_win32_udp_connreset.c"
 )
+add_executable(r-test-steering
+    "${RL_CLIENT_ROOT}/tests/test_steering.c"
+)
 target_compile_features(r-test-win32-udp-connreset PRIVATE c_std_11)
+target_compile_features(r-test-steering PRIVATE c_std_11)
 if(MSVC)
     target_compile_options(rclient PRIVATE /W4 /WX)
     target_compile_options(win32-example PRIVATE /W4 /WX)
     target_compile_options(r-test-responder PRIVATE /W4 /WX)
     target_compile_options(r-test-win32-udp-connreset PRIVATE /W4 /WX)
+    target_compile_options(r-test-steering PRIVATE /W4 /WX)
 else()
     target_compile_options(rclient PRIVATE -Wall -Wextra -Werror)
     target_compile_options(win32-example PRIVATE -Wall -Wextra -Werror)
     target_compile_options(r-test-responder PRIVATE -Wall -Wextra -Werror)
     target_compile_options(r-test-win32-udp-connreset
         PRIVATE -Wall -Wextra -Werror)
+    target_compile_options(r-test-steering PRIVATE -Wall -Wextra -Werror)
 endif()
 target_link_libraries(win32-example PRIVATE rclient)
 target_link_libraries(r-test-responder PRIVATE rclient)
 target_link_libraries(r-test-win32-udp-connreset PRIVATE rclient)
+target_link_libraries(r-test-steering PRIVATE rclient)

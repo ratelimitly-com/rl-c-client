@@ -922,6 +922,8 @@ grep -Fq -- 'one or more r-servers' "$API_GUIDE" \
   || fail "API guide does not place r-server membership in the HA policy"
 grep -Fq -- '`r_client_runtime.h`' "$API_GUIDE" \
   || fail "API guide does not document the public runtime header"
+grep -Fq -- '`r_client_steering.h`' "$IO_GUIDE" \
+  || fail "I/O guide does not document the public steering header"
 grep -Fq -- '`r_client_workflow.h`' "$API_GUIDE" \
   || fail "API guide does not document the public workflow header"
 if grep -Fq -- '../examples/latency_tracker.c' "$API_GUIDE"; then

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Coalesce source-port steering until all in-flight requests drain, and add a
+  shared full-range monotonic port selector with no port-zero fallback.
+- Make the portable runtime and performance client apply deterministic
+  steering; runtime sockets use exclusive wildcard binds on Windows.
+
 ## 1.0.0 - 2026-08-18
 
 - **Breaking:** adopted versioned API-key format 1 and intentionally rejected

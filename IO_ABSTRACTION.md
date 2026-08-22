@@ -189,8 +189,9 @@ for runnable pass/report and deny/no-report behavior.
 Servers can ask clients to change UDP source port — typically to redistribute
 load across server-side receive paths; ignoring the request costs load-balance
 quality, not correctness. If a completed request contains any response that
-requests rebinding, the client calls, once, after the completion callback has
-returned:
+requests rebinding, the client records one pending steering action. Concurrent
+requests coalesce into that action. The hook runs only after the completion
+callback has returned and the complete in-flight request set has drained:
 
 ```c
 on_steering_feedback(ctx, false)
@@ -200,9 +201,19 @@ on_steering_feedback(ctx, false)
 keep-port response simply produces no call. The selected result's
 `steering_feedback` field carries the raw wire flag (`true` = keep port).
 
-Do not close or rebind the socket while a request is in flight. Event-loop
-integrations should mark a worker-level rebind flag and reopen the UDP socket
-after the current request has completed.
+`r_client_steering.h` provides the shared deterministic port-selection
+primitive. Begin with the successor of the current port, advance by exactly one
+through 49152 through 65535, skip occupied candidates, and scan the complete
+range. There is no port-zero fallback, so a source port cannot recur until the
+range has been traversed. A successful bind callback retains the replacement
+socket and receives both the selected and following ports.
+
+Bind the replacement before closing the old socket. On Windows, set
+`SO_EXCLUSIVEADDRUSE` before binding the wildcard address so another socket
+bound to a specific local address cannot divert replies. The hook already
+means no core request remains in flight, but an event-loop integration must
+also activate its receive watcher for the replacement before retiring the old
+watcher.
 
 ## Proxy Module Notes
 
@@ -211,7 +222,8 @@ A proxy or HTTP-server module can wire the client as follows:
 - `udp_send`: module UDP socket wrapper
 - `now_ms`: event-loop clock in Unix epoch milliseconds
 - `log`: leave NULL (reserved; the library currently emits no log messages)
-- `on_steering_feedback`: mark socket rebind pending
+- `on_steering_feedback`: bind and activate a replacement socket using
+  `r_client_select_steering_port()`
 - `resolve_srv`: event-loop resolver SRV query
 - `resolve_addrs`: event-loop resolver A/AAAA query
 - request timers: one host timer per in-flight request

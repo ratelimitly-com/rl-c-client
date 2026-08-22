@@ -27,6 +27,7 @@ for header in \
   r_client_export.h \
   r_client_io.h \
   r_client_runtime.h \
+  r_client_steering.h \
   r_client_workflow.h; do
   test -s "$PREFIX/include/$header"
 done

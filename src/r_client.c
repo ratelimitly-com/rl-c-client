@@ -129,6 +129,7 @@ struct r_client {
     bool dns_refresh_inflight;
 
     r_client_req_t *inflight;
+    bool steering_rebind_pending;
     struct r_dns_refresh *dns_refresh;
 };
 
@@ -1509,6 +1510,16 @@ static int r_enter_final(
 
 static void r_request_complete(r_client_t *client, r_client_req_t *req, int status, r_candidate_t *selected);
 
+static void r_notify_steering_when_drained(r_client_t *client) {
+    if (client
+            && client->steering_rebind_pending
+            && !client->inflight
+            && client->io.on_steering_feedback) {
+        client->steering_rebind_pending = false;
+        client->io.on_steering_feedback(client->io.ctx, false);
+    }
+}
+
 static void r_request_complete(r_client_t *client, r_client_req_t *req, int status, r_candidate_t *selected) {
     if (!client || !req) {
         return;
@@ -1535,13 +1546,13 @@ static void r_request_complete(r_client_t *client, r_client_req_t *req, int stat
         r_completion_delivery(client, req);
     }
     r_request_remove(client, req);
+    client->steering_rebind_pending = client->steering_rebind_pending
+        || req->steering_rebind;
     if (req->cb) {
         const r_rate_limit_result_t *result = selected ? &selected->result : NULL;
         req->cb(req->user, req, status, result);
     }
-    if (req->steering_rebind && client->io.on_steering_feedback) {
-        client->io.on_steering_feedback(client->io.ctx, false);
-    }
+    r_notify_steering_when_drained(client);
     r_request_free(req);
 }
 
@@ -2303,6 +2314,7 @@ void r_client_cancel_request(r_client_t *client, r_client_req_t *req) {
         return;
     }
     r_request_free(req);
+    r_notify_steering_when_drained(client);
 }
 
 int r_client_derive_bucket_id(

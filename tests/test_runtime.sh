@@ -20,6 +20,7 @@ trap cleanup EXIT
   "--listen=127.0.0.1:$PORT" \
   --scenario=guard-pass \
   --auth=aes \
+  --steering=rebind \
   >"$TMP_DIR/responder.out" 2>"$TMP_DIR/responder.err" &
 RESPONDER_PID=$!
 
@@ -33,7 +34,10 @@ for _ in {1..100}; do
 done
 
 grep -q '"event":"ready"' "$TMP_DIR/responder.out"
-"$ROOT/tests/test_runtime" "$PORT" 2>"$TMP_DIR/runtime.err"
+if ! "$ROOT/tests/test_runtime" "$PORT" 2>"$TMP_DIR/runtime.err"; then
+  sed -n '1,160p' "$TMP_DIR/runtime.err" >&2
+  exit 1
+fi
 production_p0_report_profiles \
     "$TMP_DIR/runtime.err" test_runtime 2 true
 sleep 0.1
