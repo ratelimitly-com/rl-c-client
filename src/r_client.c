@@ -1196,6 +1196,37 @@ static bool r_request_target_responded(
     return false;
 }
 
+/**
+ * Reports that a send reached some endpoints but not all of them.
+ *
+ * Partial delivery is otherwise invisible: the call still returns RCLIENT_OK
+ * through the endpoints that worked, but the HA path selects the oldest
+ * replica's answer, so losing the oldest replica silently downgrades the
+ * result. Total failure is not logged here - the caller already gets
+ * RCLIENT_ERR_IO for that.
+ */
+static void r_log_partial_delivery(
+    const r_client_t *client,
+    const char *what,
+    size_t failed,
+    size_t attempted
+) {
+    if (!client || !client->io.log) {
+        return;
+    }
+    char message[128];
+    snprintf(
+        message,
+        sizeof(message),
+        "%s reached %zu of %zu endpoints (%zu unreachable)",
+        what,
+        attempted - failed,
+        attempted,
+        failed
+    );
+    client->io.log(client->io.ctx, R_LOG_WARN, message);
+}
+
 static int r_send_packet_to_targets(
     r_client_t *client,
     r_client_req_t *req,
@@ -1210,20 +1241,35 @@ static int r_send_packet_to_targets(
     if (!client->io.udp_send) {
         return RCLIENT_ERR_IO;
     }
+    size_t attempted = 0;
+    size_t delivered = 0;
     for (size_t i = 0; i < req->target_count; i++) {
         if (missing_only
             && r_request_target_responded(req, &req->targets[i])) {
             continue;
         }
+        attempted++;
         int rc = client->io.udp_send(
             client->io.ctx,
             &req->targets[i].addr,
             packet,
             packet_len
         );
-        if (rc != 0 && !best_effort) {
-            return RCLIENT_ERR_IO;
+        if (rc == 0) {
+            delivered++;
         }
+    }
+    // One unreachable endpoint must not discard the endpoints behind it: a
+    // dual-stack SRV target expands to one endpoint per address sharing a
+    // server_id, so an IPv6 address on an IPv4-only host would otherwise fail
+    // every request. Report an error only when nothing at all got out.
+    if (!best_effort && attempted > 0 && delivered == 0) {
+        return RCLIENT_ERR_IO;
+    }
+    if (!best_effort && delivered > 0 && delivered < attempted) {
+        r_log_partial_delivery(
+            client, "rate request", attempted - delivered, attempted
+        );
     }
     return RCLIENT_OK;
 }
@@ -2102,14 +2148,26 @@ int r_client_report_latency(
         return RCLIENT_ERR_PROTOCOL;
     }
 
+    size_t delivered = 0;
     for (size_t i = 0; i < client->server_count; i++) {
         int send_rc = client->io.udp_send(client->io.ctx, &client->servers[i].addr, packet, pos);
-        if (send_rc != 0) {
-            if (owns_filtered_reports) {
-                free(filtered_reports);
-            }
-            return RCLIENT_ERR_IO;
+        if (send_rc == 0) {
+            delivered++;
         }
+    }
+    if (client->server_count > 0 && delivered == 0) {
+        if (owns_filtered_reports) {
+            free(filtered_reports);
+        }
+        return RCLIENT_ERR_IO;
+    }
+    if (delivered > 0 && delivered < client->server_count) {
+        r_log_partial_delivery(
+            client,
+            "latency report",
+            client->server_count - delivered,
+            client->server_count
+        );
     }
     if (owns_filtered_reports) {
         free(filtered_reports);

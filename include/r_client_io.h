@@ -43,8 +43,12 @@ typedef struct r_io_ops {
     // Milliseconds since UNIX epoch.
     uint64_t (*now_ms)(void *ctx);
 
-    // Reserved logging hook (may be NULL). The current library never
-    // invokes it.
+    // Logging hook (may be NULL). Invoked at R_LOG_WARN when a rate request or
+    // latency report reached some endpoints but not all of them; the call still
+    // returns RCLIENT_OK, so this is the only signal that delivery was partial.
+    // Total failure returns RCLIENT_ERR_IO instead and is not logged, and
+    // best-effort completion delivery stays silent. The hook must not call any
+    // r_client_* API before returning.
     void (*log)(void *ctx, r_log_level_t level, const char *msg);
 
     // Optional steering feedback hook (keep_port == false means change port).

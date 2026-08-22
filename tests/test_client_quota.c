@@ -21,6 +21,7 @@ typedef struct test_ctx {
     size_t send_count;
     r_addr_t sent_to[64];
     size_t fail_send_number;
+    bool fail_all_sends;
     uint64_t now_ms;
     size_t resolve_srv_count;
     char last_srv_name[256];
@@ -90,7 +91,7 @@ static int test_udp_send(void *ctx, const r_addr_t *to, const uint8_t *buf, size
     test->last_packet_len = len;
     test->sent_to[test->send_count] = *to;
     test->send_count += 1;
-    if (test->fail_send_number == test->send_count) {
+    if (test->fail_all_sends || test->fail_send_number == test->send_count) {
         return -1;
     }
     return 0;
@@ -2443,6 +2444,74 @@ static void test_completion_send_failure_keeps_result(void) {
     r_client_destroy(client);
 }
 
+/*
+ * One unreachable endpoint must not abort the request. The first send fails, so
+ * a client that stopped at the first failure would never reach server 2 and
+ * r_client_check_rate_limit_async would return RCLIENT_ERR_IO.
+ */
+static void test_rate_request_survives_endpoint_send_failure(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.now_ms = 3000u;
+    ctx.fail_send_number = 1u;
+
+    r_request_policy_t policy;
+    r_client_default_request_policy(&policy);
+    policy.unit_ms = 10u;
+    policy.replay_count = 0u;
+    set_ha_schedule(&policy.replay_gap, R_HA_SCHEDULE_FIXED, 5u, 5u, 0u);
+    policy.final_receive_units = 0u;
+    policy.completion_delivery = false;
+
+    r_client_t *client = make_two_server_client_with_policy(&ctx, &policy);
+    result_cb_ctx_t result = {0};
+    /* start_sample_request asserts RCLIENT_OK, which is the regression: before
+     * the fix the failing first send returned RCLIENT_ERR_IO from here. */
+    r_client_req_t *req = start_sample_request(client, &result);
+    /* Both endpoints attempted, so the loop did not stop at the failure. */
+    assert(ctx.send_count == 2u);
+
+    uint8_t request_id[16];
+    copy_last_request_id(&ctx, request_id);
+    ctx.now_ms = 3005u;
+    uint8_t response[R_MAX_PACKET_SIZE];
+    size_t response_len = build_cookie_success_response_from(
+        2u, request_id, response, sizeof(response)
+    );
+    r_addr_t from;
+    fill_ipv4_addr(&from, "127.0.0.2");
+    assert(r_client_on_datagram(
+        client, response, response_len, &from
+    ) == RCLIENT_OK);
+
+    uint64_t deadline = 0;
+    assert(r_client_request_deadline_ms(req, &deadline) == RCLIENT_OK);
+    ctx.now_ms = deadline;
+    assert(r_client_on_timeout(client, req, deadline) == RCLIENT_OK);
+    assert(result.calls == 1);
+    assert(result.status == RCLIENT_OK);
+    assert(result.success);
+    assert(result.server_id == 2u);
+    r_client_destroy(client);
+}
+
+/* Every endpoint failing is still an error: nothing reached the network. */
+static void test_rate_request_fails_when_no_endpoint_reachable(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.fail_all_sends = true;
+    r_client_t *client = make_two_server_client(&ctx);
+    r_resource_request_t resource = sample_resource();
+    result_cb_ctx_t result = {0};
+    r_client_req_t *req = NULL;
+    assert(r_client_check_rate_limit_async(
+        client, &resource, 1, NULL, 0, NULL, 0,
+        record_rate_limit_cb, &result, &req
+    ) == RCLIENT_ERR_IO);
+    assert(ctx.send_count == 2u);
+    r_client_destroy(client);
+}
+
 static void test_late_response_cannot_change_timeout(void) {
     test_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
@@ -2616,6 +2685,8 @@ int main(void) {
     test_final_phase_completion_delivery();
     test_completion_delivery_uses_server_identity();
     test_completion_send_failure_keeps_result();
+    test_rate_request_survives_endpoint_send_failure();
+    test_rate_request_fails_when_no_endpoint_reachable();
     test_late_response_cannot_change_timeout();
     test_completion_does_not_send_at_deadline();
     test_late_timer_does_not_replay_at_dedup_deadline();
