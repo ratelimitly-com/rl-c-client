@@ -67,6 +67,7 @@ wait_with_deadline() {
 
 client_sources=(
   r_client
+  r_client_steering
   r_client_runtime
   r_client_workflow
   r_protocol

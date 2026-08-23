@@ -10,6 +10,7 @@ pkg_check_modules(GIO REQUIRED IMPORTED_TARGET gio-2.0)
 
 set(RL_CLIENT_SOURCES
     "${RL_CLIENT_ROOT}/src/r_client.c"
+    "${RL_CLIENT_ROOT}/src/r_client_steering.c"
     "${RL_CLIENT_ROOT}/src/r_client_runtime.c"
     "${RL_CLIENT_ROOT}/src/r_client_workflow.c"
     "${RL_CLIENT_ROOT}/src/r_protocol.c"
