@@ -4,6 +4,7 @@
 #endif
 
 #include "../include/r_client_runtime.h"
+#include "../include/r_client_steering.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -143,6 +144,22 @@ static void close_socket(r_runtime_socket_t socket_value) {
 #endif
 }
 
+static int socket_last_error(void) {
+#ifdef _WIN32
+    return WSAGetLastError();
+#else
+    return errno;
+#endif
+}
+
+static bool socket_error_is_address_in_use(int error) {
+#ifdef _WIN32
+    return error == WSAEADDRINUSE || error == WSAEACCES;
+#else
+    return error == EADDRINUSE;
+#endif
+}
+
 static int set_nonblocking(r_runtime_socket_t socket_value) {
 #ifdef _WIN32
     u_long enabled = 1u;
@@ -156,15 +173,42 @@ static int set_nonblocking(r_runtime_socket_t socket_value) {
 #endif
 }
 
-static r_runtime_socket_t open_udp_socket(int family) {
+static r_runtime_socket_t open_udp_socket(
+    int family,
+    uint16_t port,
+    int *out_error
+) {
+    if (out_error) {
+        *out_error = 0;
+    }
     r_runtime_socket_t socket_value = socket(family, SOCK_DGRAM, IPPROTO_UDP);
     if (socket_value == R_RUNTIME_INVALID_SOCKET) {
+        if (out_error) {
+            *out_error = socket_last_error();
+        }
         return R_RUNTIME_INVALID_SOCKET;
     }
 #ifdef _WIN32
     r_win32_udp_disable_connreset(socket_value);
+    int exclusive = 1;
+    if (setsockopt(
+            socket_value,
+            SOL_SOCKET,
+            SO_EXCLUSIVEADDRUSE,
+            (const char *)&exclusive,
+            (int)sizeof(exclusive)
+        ) != 0) {
+        if (out_error) {
+            *out_error = socket_last_error();
+        }
+        close_socket(socket_value);
+        return R_RUNTIME_INVALID_SOCKET;
+    }
 #endif
     if (set_nonblocking(socket_value) != 0) {
+        if (out_error) {
+            *out_error = socket_last_error();
+        }
         close_socket(socket_value);
         return R_RUNTIME_INVALID_SOCKET;
     }
@@ -173,8 +217,12 @@ static r_runtime_socket_t open_udp_socket(int family) {
         struct sockaddr_in address = {0};
         address.sin_family = AF_INET;
         address.sin_addr.s_addr = htonl(INADDR_ANY);
+        address.sin_port = htons(port);
         if (bind(socket_value, (const struct sockaddr *)&address,
                 (r_socklen_t)sizeof(address)) != 0) {
+            if (out_error) {
+                *out_error = socket_last_error();
+            }
             close_socket(socket_value);
             return R_RUNTIME_INVALID_SOCKET;
         }
@@ -182,6 +230,7 @@ static r_runtime_socket_t open_udp_socket(int family) {
         struct sockaddr_in6 address = {0};
         address.sin6_family = AF_INET6;
         address.sin6_addr = in6addr_any;
+        address.sin6_port = htons(port);
         int ipv6_only = 1;
 #ifdef _WIN32
         (void)setsockopt(socket_value, IPPROTO_IPV6, IPV6_V6ONLY,
@@ -192,11 +241,120 @@ static r_runtime_socket_t open_udp_socket(int family) {
 #endif
         if (bind(socket_value, (const struct sockaddr *)&address,
                 (r_socklen_t)sizeof(address)) != 0) {
+            if (out_error) {
+                *out_error = socket_last_error();
+            }
             close_socket(socket_value);
             return R_RUNTIME_INVALID_SOCKET;
         }
     }
     return socket_value;
+}
+
+typedef struct runtime_steering_bind {
+    int family;
+    r_runtime_socket_t socket_value;
+} runtime_steering_bind_t;
+
+static r_steering_bind_result_t runtime_try_steering_port(
+    void *user,
+    uint16_t port
+) {
+    runtime_steering_bind_t *binding = user;
+    int error = 0;
+    binding->socket_value = open_udp_socket(binding->family, port, &error);
+    if (binding->socket_value != R_RUNTIME_INVALID_SOCKET) {
+        return R_STEERING_BIND_OK;
+    }
+    return socket_error_is_address_in_use(error)
+        ? R_STEERING_BIND_OCCUPIED
+        : R_STEERING_BIND_ERROR;
+}
+
+static int runtime_socket_family_and_port(
+    r_runtime_socket_t socket_value,
+    int *out_family,
+    uint16_t *out_port
+) {
+    struct sockaddr_storage address;
+    memset(&address, 0, sizeof(address));
+    r_socklen_t address_length = (r_socklen_t)sizeof(address);
+    if (getsockname(
+            socket_value,
+            (struct sockaddr *)&address,
+            &address_length
+        ) != 0) {
+        return RCLIENT_ERR_IO;
+    }
+    if (address.ss_family == AF_INET) {
+        *out_family = AF_INET;
+        *out_port = ntohs(((struct sockaddr_in *)&address)->sin_port);
+        return RCLIENT_OK;
+    }
+    if (address.ss_family == AF_INET6) {
+        *out_family = AF_INET6;
+        *out_port = ntohs(((struct sockaddr_in6 *)&address)->sin6_port);
+        return RCLIENT_OK;
+    }
+    return RCLIENT_ERR_IO;
+}
+
+static void runtime_on_steering_feedback(void *context, bool keep_port) {
+    r_runtime_client_t *runtime = context;
+    if (!runtime || keep_port || runtime->socket_count == 0u) {
+        return;
+    }
+
+    r_runtime_socket_t replacements[2] = {
+        R_RUNTIME_INVALID_SOCKET,
+        R_RUNTIME_INVALID_SOCKET,
+    };
+    for (size_t i = 0u; i < runtime->socket_count; i++) {
+        int family = 0;
+        uint16_t current_port = 0u;
+        if (runtime_socket_family_and_port(
+                runtime->sockets[i],
+                &family,
+                &current_port
+            ) != RCLIENT_OK) {
+            goto fail;
+        }
+        uint16_t first_port = r_client_next_steering_port(current_port);
+        runtime_steering_bind_t binding = {
+            .family = family,
+            .socket_value = R_RUNTIME_INVALID_SOCKET,
+        };
+        uint16_t selected_port = 0u;
+        uint16_t following_port = 0u;
+        if (r_client_select_steering_port(
+                first_port,
+                runtime_try_steering_port,
+                &binding,
+                &selected_port,
+                &following_port
+            ) != RCLIENT_OK) {
+            goto fail;
+        }
+        (void)selected_port;
+        (void)following_port;
+        replacements[i] = binding.socket_value;
+    }
+
+    for (size_t i = 0u; i < runtime->socket_count; i++) {
+        r_runtime_socket_t previous = runtime->sockets[i];
+        runtime->sockets[i] = replacements[i];
+        close_socket(previous);
+    }
+    return;
+
+fail:
+    for (size_t i = 0u; i < runtime->socket_count; i++) {
+        if (replacements[i] != R_RUNTIME_INVALID_SOCKET) {
+            close_socket(replacements[i]);
+        }
+    }
+    runtime_log(runtime, R_LOG_WARN,
+        "source-port steering could not acquire replacement sockets");
 }
 
 static int runtime_udp_send(
@@ -609,11 +767,11 @@ int r_runtime_client_init(
         return status;
     }
 
-    r_runtime_socket_t ipv4 = open_udp_socket(AF_INET);
+    r_runtime_socket_t ipv4 = open_udp_socket(AF_INET, 0u, NULL);
     if (ipv4 != R_RUNTIME_INVALID_SOCKET) {
         runtime->sockets[runtime->socket_count++] = ipv4;
     }
-    r_runtime_socket_t ipv6 = open_udp_socket(AF_INET6);
+    r_runtime_socket_t ipv6 = open_udp_socket(AF_INET6, 0u, NULL);
     if (ipv6 != R_RUNTIME_INVALID_SOCKET) {
         runtime->sockets[runtime->socket_count++] = ipv6;
     }
@@ -644,6 +802,7 @@ int r_runtime_client_init(
         .udp_send = runtime_udp_send,
         .now_ms = runtime_wall_time,
         .log = runtime_log,
+        .on_steering_feedback = runtime_on_steering_feedback,
     };
     r_resolver_ops_t resolver = {
         .ctx = runtime,
@@ -761,6 +920,16 @@ int r_runtime_client_on_readable(
         }
         if (status != RCLIENT_OK) {
             return status;
+        }
+        bool socket_is_current = false;
+        for (size_t i = 0u; i < runtime->socket_count; i++) {
+            if (runtime->sockets[i] == socket_value) {
+                socket_is_current = true;
+                break;
+            }
+        }
+        if (!socket_is_current) {
+            return RCLIENT_OK;
         }
     }
 }

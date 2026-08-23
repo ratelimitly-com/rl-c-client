@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include "r_client_runtime.h"
+#include "r_client_steering.h"
 #include "r_client_workflow.h"
 
 static const char TEST_AES_KEY[] =
@@ -62,7 +63,7 @@ static void drive_request(
             if ((descriptors[i].revents & POLLIN) != 0) {
                 assert(r_runtime_client_on_readable(
                     runtime,
-                    r_runtime_socket_at(runtime, i)
+                    (r_runtime_socket_t)descriptors[i].fd
                 ) == RCLIENT_OK);
             }
         }
@@ -107,6 +108,36 @@ static void inject_invalid_datagram(r_runtime_client_t *runtime) {
         return;
     }
     assert(false && "runtime did not expose an IPv4 socket");
+}
+
+static uint16_t runtime_socket_port(
+    const r_runtime_client_t *runtime,
+    size_t index
+) {
+    struct sockaddr_storage address;
+    memset(&address, 0, sizeof(address));
+    socklen_t address_length = sizeof(address);
+    assert(getsockname(
+        (int)r_runtime_socket_at(runtime, index),
+        (struct sockaddr *)&address,
+        &address_length
+    ) == 0);
+    if (address.ss_family == AF_INET) {
+        return ntohs(((struct sockaddr_in *)&address)->sin_port);
+    }
+    assert(address.ss_family == AF_INET6);
+    return ntohs(((struct sockaddr_in6 *)&address)->sin6_port);
+}
+
+static void assert_runtime_steered(
+    const r_runtime_client_t *runtime,
+    const uint16_t previous_ports[2]
+) {
+    for (size_t i = 0u; i < r_runtime_socket_count(runtime); i++) {
+        uint16_t current = runtime_socket_port(runtime, i);
+        assert(current >= R_STEERING_PORT_MIN);
+        assert(current != previous_ports[i]);
+    }
 }
 
 int main(int argc, char **argv) {
@@ -187,6 +218,10 @@ int main(int argc, char **argv) {
     environment_options.server_port = (uint16_t)port;
     r_runtime_client_t runtime;
     assert(r_runtime_client_init(&runtime, &environment_options) == RCLIENT_OK);
+    uint16_t initial_ports[2] = {0u, 0u};
+    for (size_t i = 0u; i < r_runtime_socket_count(&runtime); i++) {
+        initial_ports[i] = runtime_socket_port(&runtime, i);
+    }
     inject_invalid_datagram(&runtime);
 
     r_admission_config_t config;
@@ -205,6 +240,7 @@ int main(int argc, char **argv) {
         &completion
     ) == RCLIENT_OK);
     drive_request(&runtime, &request, &completion);
+    assert_runtime_steered(&runtime, initial_ports);
 
     assert(completion.status == RCLIENT_OK);
     assert(completion.outcome.decision == R_ADMISSION_ALLOWED);

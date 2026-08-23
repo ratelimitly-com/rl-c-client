@@ -12,7 +12,7 @@ fi
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/r-core-win32.XXXXXX")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
-for source in r_client.c r_client_workflow.c r_policy.c r_protocol.c; do
+for source in r_client.c r_client_steering.c r_client_workflow.c r_policy.c r_protocol.c; do
   "$MINGW_CC" -std=c11 -Wall -Wextra -Werror \
     -I"$ROOT/tests/win32_stubs" -I"$ROOT/include" -I"$ROOT/src" \
     -c "$ROOT/src/$source" -o "$TMP_DIR/${source%.c}.o"

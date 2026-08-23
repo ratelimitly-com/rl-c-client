@@ -17,6 +17,7 @@ include/r_client.h
 include/r_client_export.h
 include/r_client_io.h
 include/r_client_runtime.h
+include/r_client_steering.h
 include/r_client_workflow.h
 manifest/core.sources
 manifest/macos-release.json
@@ -35,6 +36,7 @@ packaging/windows/build-sdk.ps1
 packaging/windows/verify-sdk.ps1
 src/r_client.c
 src/r_client_runtime.c
+src/r_client_steering.c
 src/r_client_workflow.c
 src/r_crypto.c
 src/r_crypto.h
