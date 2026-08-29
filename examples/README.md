@@ -206,7 +206,7 @@ responder in three deterministic scenarios:
 - resource denial: protected work and latency reporting remain absent; and
 - latency-guard denial: protected work and latency reporting remain absent.
 
-The responder checks tracker TTL, sample limits, buffer size, threshold, and
+The responder checks tracker TTL, sample limits, warm-up threshold, and
 that the report uses the same latency-tracker ID as the preceding guard.
 Latency-tracker IDs and credentials never appear in test logs.
 

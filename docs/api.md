@@ -196,7 +196,7 @@ mismatch.
 The derivation is deterministic and stable across processes, client instances,
 and client implementations: it is BLAKE2s-256 truncated to the first 16 bytes,
 computed over a fixed domain string (`ratelimitly.resource.v1` or
-`ratelimitly.latency-tracker.v1`, including its terminating NUL), the
+`ratelimitly.latency-tracker.v2`, including its terminating NUL), the
 little-endian 32-bit name length, the exact name bytes, and each defining
 setting as a little-endian 32-bit value, in the argument order shown above.
 Any other producer following this recipe — another client implementation,

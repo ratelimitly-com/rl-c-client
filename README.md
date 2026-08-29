@@ -614,7 +614,7 @@ strategy through `r_request_policy_t`.
 | metrics label | Optional request tag for per-label server-side metrics, bounded by the key's label-cardinality quota; overflowing labels are rewritten to `overflow`. |
 | SBOM | Software bill of materials — the dependency inventory (SPDX format) shipped with release artifacts. |
 | latency guard | A request to shed new work when the tracker's recent service latency reaches its configured threshold. |
-| latency tracker | Server-side sample window identified by a canonical tracker ID and defined by its lifetime, sample count, buffer size, and warm-up threshold. |
+| latency tracker | Server-side sample window identified by a canonical tracker ID and defined by its lifetime, sample count, and warm-up threshold; its storage is bounded by the API key quota. |
 | tenant | Isolated Ratelimitly account identified by metadata encoded in the API key. |
 | host loop | The application's existing event loop; it owns readiness callbacks and timers around the client. |
 | public runtime | Optional adapter that owns nonblocking UDP sockets and production DNS discovery while exposing readiness and deadlines to the host loop. |

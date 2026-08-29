@@ -2202,7 +2202,7 @@ int r_client_derive_latency_tracker_id(
     uint32_t min_sample_threshold,
     uint8_t out_id[16]
 ) {
-    static const uint8_t domain[] = "ratelimitly.latency-tracker.v1";
+    static const uint8_t domain[] = "ratelimitly.latency-tracker.v2";
     const uint32_t fields[] = {
         ttl_ms,
         max_samples,
