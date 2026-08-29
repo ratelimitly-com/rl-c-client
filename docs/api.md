@@ -140,7 +140,7 @@ Quota fields and their enforcement points differ per field:
 
 | Quota field | Meaning | Enforcement |
 | --- | --- | --- |
-| `latency_buffer_size_max` | Server-side monotonic point buffer capacity pre-allocated per latency tracker slot for the tenant. | Server-enforced; not checked client-side. |
+| `latency_buffer_size_max` | Server-side monotonic point capacity pre-allocated per latency-tracker slot for the API key. | Server-enforced; not checked client-side. |
 | `dedup_ttl_ms_max` | Largest deduplication TTL the key may request. | Client-enforced: request creation fails with `RCLIENT_ERR_CONFIG` when the policy's derived TTL exceeds it (see Resource-Request HA Policy). |
 | `rate_window_size_ms_max` | Largest rate-counter `window_size_ms` the key may request. | Client-enforced: if any resource exceeds it, the complete logical request fails at submit with `RCLIENT_ERR_PROTOCOL` before DNS refresh, serialization, or transmission. The server validates it independently. |
 | `rate_buckets_max` | Maximum distinct buckets the tenant may use. | Server-enforced; the client does not check it. Overruns surface as normal request rejections. |
