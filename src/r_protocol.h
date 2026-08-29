@@ -14,9 +14,9 @@ extern "C" {
 #define R_TENANT_TLV_LEN 40u
 #define R_PDU_HEADER_LEN 8u
 #define R_MAX_PACKET_SIZE 1200u
-#define R_GUARD_BLOCK_WIRE_LEN 40u
+#define R_GUARD_BLOCK_WIRE_LEN 36u
 #define R_RESOURCE_BLOCK_WIRE_LEN 28u
-#define R_SERVICE_LATENCY_BLOCK_WIRE_LEN 36u
+#define R_SERVICE_LATENCY_BLOCK_WIRE_LEN 32u
 
 #define R_TLV_TENANT 0x4C52u
 #define R_TLV_AUTH_COOKIE 0x4143u
@@ -42,7 +42,6 @@ typedef struct r_guard_block {
     uint8_t latency_tracker_id[16];
     uint32_t ttl_ms;
     uint32_t max_samples;
-    uint32_t buffer_size;
     uint32_t min_sample_threshold;
     uint32_t latency_threshold;
     uint32_t current_latency;
@@ -60,7 +59,6 @@ typedef struct r_service_latency_block {
     uint8_t latency_tracker_id[16];
     uint32_t ttl_ms;
     uint32_t max_samples;
-    uint32_t buffer_size;
     uint32_t min_sample_threshold;
     uint32_t observed_latency;
 } r_service_latency_block_t;

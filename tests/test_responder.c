@@ -176,7 +176,6 @@ static r_client_req_t *submit_request(r_client_t *client, test_context_t *contex
     guard.threshold_ms = 50u;
     guard.ttl_ms = 1000u;
     guard.max_samples = 10u;
-    guard.buffer_size = 16u;
     guard.min_sample_threshold = 1u;
 
     context->packet_len = 0u;
@@ -262,7 +261,6 @@ static void run_valid_response_case(
     assert(memcmp(event.tracker.latency_tracker_id, "service", 7u) == 0);
     assert(event.tracker.ttl_ms == 1000u);
     assert(event.tracker.max_samples == 10u);
-    assert(event.tracker.buffer_size == 16u);
     assert(event.tracker.min_sample_threshold == 1u);
     assert(event.guard_threshold_ms == 50u);
 
@@ -493,7 +491,6 @@ static void test_latency_report_observation(void) {
     report.observed_latency = 25u;
     report.ttl_ms = 1000u;
     report.max_samples = 10u;
-    report.buffer_size = 16u;
     report.min_sample_threshold = 1u;
     assert(r_client_report_latency(client, &report, 1u) == RCLIENT_OK);
 
@@ -511,7 +508,6 @@ static void test_latency_report_observation(void) {
     assert(memcmp(event.tracker.latency_tracker_id, "service", 7u) == 0);
     assert(event.tracker.ttl_ms == 1000u);
     assert(event.tracker.max_samples == 10u);
-    assert(event.tracker.buffer_size == 16u);
     assert(event.tracker.min_sample_threshold == 1u);
     assert(event.observed_latency_ms == 25u);
     assert(event.tracker_matches_guard);

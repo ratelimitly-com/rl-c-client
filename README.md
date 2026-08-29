@@ -120,7 +120,6 @@ int report_inventory_latency(r_client_t *client) {
         .observed_latency = 18u,
         .ttl_ms = 10000u,
         .max_samples = 100u,
-        .buffer_size = 32u,
         .min_sample_threshold = 5u,
     };
     int rc = r_client_derive_latency_tracker_id(
@@ -128,7 +127,6 @@ int report_inventory_latency(r_client_t *client) {
         sizeof("inventory") - 1u,       /* tracker-name byte length */
         report.ttl_ms,                   /* sample lifetime */
         report.max_samples,              /* samples considered */
-        report.buffer_size,              /* tracker storage */
         report.min_sample_threshold,     /* warm-up sample count */
         report.latency_tracker_id        /* resulting 16-byte tracker ID */
     );
@@ -181,7 +179,6 @@ int request_checkout_with_inventory_guard(
         .threshold_ms = 100u,
         .ttl_ms = 10000u,
         .max_samples = 100u,
-        .buffer_size = 32u,
         .min_sample_threshold = 5u,
     };
     rc = r_client_derive_latency_tracker_id(
@@ -189,7 +186,6 @@ int request_checkout_with_inventory_guard(
         sizeof("inventory") - 1u,       /* tracker-name byte length */
         guard.ttl_ms,                    /* sample lifetime */
         guard.max_samples,               /* samples considered */
-        guard.buffer_size,               /* tracker storage */
         guard.min_sample_threshold,      /* warm-up sample count */
         guard.latency_tracker_id         /* resulting 16-byte tracker ID */
     );

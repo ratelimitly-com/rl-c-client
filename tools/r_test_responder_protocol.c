@@ -218,8 +218,7 @@ static void observe_tracker(
     memcpy(observation->latency_tracker_id, block, sizeof(observation->latency_tracker_id));
     observation->ttl_ms = read_le32(block + 16u);
     observation->max_samples = read_le32(block + 20u);
-    observation->buffer_size = read_le32(block + 24u);
-    observation->min_sample_threshold = read_le32(block + 28u);
+    observation->min_sample_threshold = read_le32(block + 24u);
 }
 
 static int parse_request_pdu(
@@ -333,14 +332,14 @@ static int build_response_pdu(
                 R_GUARD_BLOCK_WIRE_LEN);
         } else {
             memset(body + pos, 0, R_GUARD_BLOCK_WIRE_LEN);
-            write_le32(body + pos + 32u, 1u);
+            write_le32(body + pos + 28u, 1u);
         }
-        uint32_t threshold = read_le32(body + pos + 32u);
+        uint32_t threshold = read_le32(body + pos + 28u);
         uint32_t current = threshold > 0u ? threshold - 1u : 0u;
         if (state->scenario == R_TEST_SCENARIO_GUARD_DENY) {
             current = threshold;
         }
-        write_le32(body + pos + 36u, current);
+        write_le32(body + pos + 32u, current);
         pos += R_GUARD_BLOCK_WIRE_LEN;
     }
 
@@ -502,7 +501,7 @@ int r_test_responder_process(
         event->report_count = request.report_count;
         if (request.report_count > 0u) {
             observe_tracker(&event->tracker, request.reports);
-            event->observed_latency_ms = read_le32(request.reports + 32u);
+            event->observed_latency_ms = read_le32(request.reports + 28u);
             event->tracker_matches_guard = state->has_last_guard_latency_tracker_id
                 && memcmp(
                     request.reports,
@@ -520,7 +519,7 @@ int r_test_responder_process(
     state->has_last_guard_latency_tracker_id = false;
     if (request.guard_count > 0u) {
         observe_tracker(&event->tracker, request.guards);
-        event->guard_threshold_ms = read_le32(request.guards + 32u);
+        event->guard_threshold_ms = read_le32(request.guards + 28u);
         memcpy(
             state->last_guard_latency_tracker_id,
             request.guards,
