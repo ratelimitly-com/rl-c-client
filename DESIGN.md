@@ -93,9 +93,8 @@ policy-dispatch branches.
 
 Latency reports are independent, fire-and-forget operations. They reuse the
 same credential authentication, discovery, and routing machinery but do not
-wait for responses and need not correspond to any resource request. Reports
-whose `buffer_size` exceeds the key's latency-buffer-size quota are filtered
-before send; other quota dimensions are server-enforced.
+wait for responses and need not correspond to any resource request. Quota
+dimensions are server-enforced.
 
 ## Documentation Boundary
 

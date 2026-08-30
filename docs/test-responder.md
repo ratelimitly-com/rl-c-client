@@ -127,14 +127,14 @@ The responder emits one record for each authenticated input packet. A rate
 request record contains at least:
 
 ```json
-{"event":"rate_request","sequence":1,"guards":1,"resources":2,"label":"api","tracker":{"ttl_ms":30000,"max_samples":100,"buffer_size":100,"min_sample_threshold":1},"guard_threshold_ms":100,"disposition":"guard-pass"}
+{"event":"rate_request","sequence":1,"guards":1,"resources":2,"label":"api","tracker":{"ttl_ms":30000,"max_samples":100,"min_sample_threshold":1},"guard_threshold_ms":100,"disposition":"guard-pass"}
 ```
 
 A latency report record includes the first report's tracker configuration,
 observed value, and whether its service identity matches the preceding guard:
 
 ```json
-{"event":"latency_report","sequence":2,"reports":1,"tracker":{"ttl_ms":30000,"max_samples":100,"buffer_size":100,"min_sample_threshold":1},"observed_latency_ms":25,"matches_previous_guard":true}
+{"event":"latency_report","sequence":2,"reports":1,"tracker":{"ttl_ms":30000,"max_samples":100,"min_sample_threshold":1},"observed_latency_ms":25,"matches_previous_guard":true}
 ```
 
 The runtime event stream must never print credential material, raw

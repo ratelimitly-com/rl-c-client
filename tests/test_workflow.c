@@ -25,7 +25,6 @@ static void test_defaults_and_request_storage(void) {
     assert(config.latency_threshold_ms == 100u);
     assert(config.latency_ttl_ms == 10000u);
     assert(config.latency_max_samples == 100u);
-    assert(config.latency_buffer_size == 32u);
     assert(config.latency_min_sample_threshold == 5u);
 
     r_admission_request_t request;
@@ -50,7 +49,6 @@ static void test_defaults_and_request_storage(void) {
         strlen(config.latency_tracker_name),
         config.latency_ttl_ms,
         config.latency_max_samples,
-        config.latency_buffer_size,
         config.latency_min_sample_threshold,
         expected
     ) == RCLIENT_OK);

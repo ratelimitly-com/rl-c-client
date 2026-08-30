@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RESPONDER="$ROOT/bin/r_test_responder"
 TEST_AES_KEY="rl-aes1qypsqqqqqqqqqqqrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqdgrrulcvcn0x5"
-TRACKER_JSON='"tracker":{"ttl_ms":10000,"max_samples":100,"buffer_size":32,"min_sample_threshold":5}'
+TRACKER_JSON='"tracker":{"ttl_ms":10000,"max_samples":100,"min_sample_threshold":5}'
 
 if [[ "$#" -ne 7 ]]; then
   echo "usage: $0 <name> <binary-or-module> <http-port> <metrics-label> <resource-deny-status> <launcher> <udp-base-port>" >&2

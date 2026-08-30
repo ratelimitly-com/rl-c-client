@@ -204,7 +204,6 @@ static void test_latency_report_fails_closed(void) {
         .observed_latency = 5u,
         .ttl_ms = 1000u,
         .max_samples = 10u,
-        .buffer_size = 10u,
         .min_sample_threshold = 1u,
     };
     memset(report.latency_tracker_id, 2, sizeof(report.latency_tracker_id));

@@ -15,7 +15,6 @@ void r_client_admission_config_defaults(r_admission_config_t *out_config) {
         .latency_threshold_ms = 100u,
         .latency_ttl_ms = 10000u,
         .latency_max_samples = 100u,
-        .latency_buffer_size = 32u,
         .latency_min_sample_threshold = 5u,
         .metrics_label = R_DEFAULT_METRICS_LABEL,
     };
@@ -33,7 +32,6 @@ static bool r_admission_config_valid(const r_admission_config_t *config) {
         && config->latency_threshold_ms > 0u
         && config->latency_ttl_ms > 0u
         && config->latency_max_samples > 0u
-        && config->latency_buffer_size > 0u
         && config->latency_min_sample_threshold > 0u;
 }
 
@@ -66,7 +64,6 @@ int r_client_admission_prepare(
             strlen(config->latency_tracker_name),
             config->latency_ttl_ms,
             config->latency_max_samples,
-            config->latency_buffer_size,
             config->latency_min_sample_threshold,
             request->guard.latency_tracker_id
         ) != RCLIENT_OK) {
@@ -75,7 +72,6 @@ int r_client_admission_prepare(
     request->guard.threshold_ms = config->latency_threshold_ms;
     request->guard.ttl_ms = config->latency_ttl_ms;
     request->guard.max_samples = config->latency_max_samples;
-    request->guard.buffer_size = config->latency_buffer_size;
     request->guard.min_sample_threshold = config->latency_min_sample_threshold;
 
     request->metrics_label = config->metrics_label
@@ -237,7 +233,6 @@ int r_client_admission_report_latency(
         .observed_latency = observed_latency_ms,
         .ttl_ms = request->guard.ttl_ms,
         .max_samples = request->guard.max_samples,
-        .buffer_size = request->guard.buffer_size,
         .min_sample_threshold = request->guard.min_sample_threshold,
     };
     memcpy(report.latency_tracker_id, request->guard.latency_tracker_id, sizeof(report.latency_tracker_id));

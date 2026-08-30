@@ -242,7 +242,6 @@ int r_build_rate_request_body(
         memcpy(block.latency_tracker_id, guards[i].latency_tracker_id, 16);
         block.ttl_ms = guards[i].ttl_ms;
         block.max_samples = guards[i].max_samples;
-        block.buffer_size = guards[i].buffer_size;
         block.min_sample_threshold = guards[i].min_sample_threshold;
         block.latency_threshold = guards[i].threshold_ms;
         block.current_latency = 0;
@@ -250,10 +249,9 @@ int r_build_rate_request_body(
         memcpy(out + pos, block.latency_tracker_id, 16);
         r_write_le32(out + pos + 16, block.ttl_ms);
         r_write_le32(out + pos + 20, block.max_samples);
-        r_write_le32(out + pos + 24, block.buffer_size);
-        r_write_le32(out + pos + 28, block.min_sample_threshold);
-        r_write_le32(out + pos + 32, block.latency_threshold);
-        r_write_le32(out + pos + 36, block.current_latency);
+        r_write_le32(out + pos + 24, block.min_sample_threshold);
+        r_write_le32(out + pos + 28, block.latency_threshold);
+        r_write_le32(out + pos + 32, block.current_latency);
         pos += R_GUARD_BLOCK_WIRE_LEN;
     }
 
@@ -312,16 +310,14 @@ int r_build_latency_report_body(
         memcpy(block.latency_tracker_id, reports[i].latency_tracker_id, 16);
         block.ttl_ms = reports[i].ttl_ms;
         block.max_samples = reports[i].max_samples;
-        block.buffer_size = reports[i].buffer_size;
         block.min_sample_threshold = reports[i].min_sample_threshold;
         block.observed_latency = reports[i].observed_latency;
 
         memcpy(out + pos, block.latency_tracker_id, 16);
         r_write_le32(out + pos + 16, block.ttl_ms);
         r_write_le32(out + pos + 20, block.max_samples);
-        r_write_le32(out + pos + 24, block.buffer_size);
-        r_write_le32(out + pos + 28, block.min_sample_threshold);
-        r_write_le32(out + pos + 32, block.observed_latency);
+        r_write_le32(out + pos + 24, block.min_sample_threshold);
+        r_write_le32(out + pos + 28, block.observed_latency);
         pos += R_SERVICE_LATENCY_BLOCK_WIRE_LEN;
     }
 
@@ -422,8 +418,8 @@ int r_parse_rate_response_pdu(
         }
         const uint8_t *p = body + pos;
         memcpy(guards[i].latency_tracker_id, p, 16);
-        uint32_t latency_threshold = r_le32(p + 32);
-        uint32_t current_latency = r_le32(p + 36);
+        uint32_t latency_threshold = r_le32(p + 28);
+        uint32_t current_latency = r_le32(p + 32);
         guards[i].threshold_ms = latency_threshold;
         guards[i].current_latency_ms = current_latency;
         guards[i].passed = current_latency < latency_threshold;

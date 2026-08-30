@@ -207,14 +207,6 @@ static uint64_t r_now_ms(r_client_t *client) {
     return client->io.now_ms(client->io.ctx);
 }
 
-static bool r_latency_buffer_size_quota(const r_client_t *client, uint32_t *out_limit) {
-    if (!client || !client->has_quotas || !out_limit) {
-        return false;
-    }
-    *out_limit = client->quotas.latency_buffer_size_max;
-    return true;
-}
-
 static bool r_rate_window_size_quota(const r_client_t *client, uint32_t *out_limit) {
     if (!client || !client->has_quotas || !out_limit) {
         return false;
@@ -331,23 +323,6 @@ static int r_request_policy_ttl_ms(
     return RCLIENT_OK;
 }
 
-static int r_validate_latency_guards(
-    const r_client_t *client,
-    const r_latency_guard_t *guards,
-    size_t guard_count
-) {
-    uint32_t limit = 0;
-    if (!r_latency_buffer_size_quota(client, &limit)) {
-        return RCLIENT_OK;
-    }
-    for (size_t i = 0; i < guard_count; i++) {
-        if (guards[i].buffer_size > limit) {
-            return RCLIENT_ERR_PROTOCOL;
-        }
-    }
-    return RCLIENT_OK;
-}
-
 static int r_validate_resource_windows(
     const r_client_t *client,
     const r_resource_request_t *resources,
@@ -362,57 +337,6 @@ static int r_validate_resource_windows(
             return RCLIENT_ERR_PROTOCOL;
         }
     }
-    return RCLIENT_OK;
-}
-
-static int r_filter_latency_reports(
-    const r_client_t *client,
-    const r_service_latency_report_t *reports,
-    size_t report_count,
-    r_service_latency_report_t **out_reports,
-    size_t *out_count,
-    bool *out_owned
-) {
-    if (!reports || !out_reports || !out_count || !out_owned) {
-        return RCLIENT_ERR_CONFIG;
-    }
-
-    *out_reports = (r_service_latency_report_t *)reports;
-    *out_count = report_count;
-    *out_owned = false;
-
-    uint32_t limit = 0;
-    if (!r_latency_buffer_size_quota(client, &limit)) {
-        return RCLIENT_OK;
-    }
-
-    size_t kept = 0;
-    for (size_t i = 0; i < report_count; i++) {
-        if (reports[i].buffer_size <= limit) {
-            kept += 1;
-        }
-    }
-    if (kept == report_count) {
-        return RCLIENT_OK;
-    }
-
-    r_service_latency_report_t *filtered = NULL;
-    if (kept > 0) {
-        filtered = (r_service_latency_report_t *)calloc(kept, sizeof(*filtered));
-        if (!filtered) {
-            return RCLIENT_ERR_NOMEM;
-        }
-        size_t pos = 0;
-        for (size_t i = 0; i < report_count; i++) {
-            if (reports[i].buffer_size <= limit) {
-                filtered[pos++] = reports[i];
-            }
-        }
-    }
-
-    *out_reports = filtered;
-    *out_count = kept;
-    *out_owned = true;
     return RCLIENT_OK;
 }
 
@@ -1783,10 +1707,6 @@ static int r_client_check_rate_limit_async_impl(
     if (rc != RCLIENT_OK) {
         return rc;
     }
-    rc = r_validate_latency_guards(client, guards, guard_count);
-    if (rc != RCLIENT_OK) {
-        return rc;
-    }
     (void)r_dns_maybe_refresh(client, false);
     if (client->server_count == 0) {
         (void)r_dns_maybe_refresh(client, true);
@@ -1952,50 +1872,20 @@ int r_client_report_latency(
     if (!client || !reports || report_count == 0) {
         return RCLIENT_ERR_CONFIG;
     }
-
-    r_service_latency_report_t *filtered_reports = NULL;
-    size_t filtered_count = 0;
-    bool owns_filtered_reports = false;
-    int rc = r_filter_latency_reports(
-        client,
-        reports,
-        report_count,
-        &filtered_reports,
-        &filtered_count,
-        &owns_filtered_reports
-    );
-    if (rc != RCLIENT_OK) {
-        return rc;
-    }
-    if (filtered_count == 0) {
-        if (owns_filtered_reports) {
-            free(filtered_reports);
-        }
-        return RCLIENT_OK;
-    }
     if (!client->io.udp_send) {
-        if (owns_filtered_reports) {
-            free(filtered_reports);
-        }
         return RCLIENT_ERR_IO;
     }
 
     (void)r_dns_maybe_refresh(client, false);
     if (client->server_count == 0) {
         (void)r_dns_maybe_refresh(client, true);
-        if (owns_filtered_reports) {
-            free(filtered_reports);
-        }
         return RCLIENT_ERR_DNS;
     }
 
     uint8_t body[R_MAX_PACKET_SIZE];
     size_t body_len = 0;
-    rc = r_build_latency_report_body(filtered_reports, filtered_count, body, sizeof(body), &body_len);
+    int rc = r_build_latency_report_body(reports, report_count, body, sizeof(body), &body_len);
     if (rc != RCLIENT_OK) {
-        if (owns_filtered_reports) {
-            free(filtered_reports);
-        }
         return rc;
     }
 
@@ -2003,9 +1893,6 @@ int r_client_report_latency(
     size_t pdu_len = 0;
     rc = r_build_pdu(R_PDU_LATENCY_REPORT, body, body_len, pdu, sizeof(pdu), &pdu_len);
     if (rc != RCLIENT_OK) {
-        if (owns_filtered_reports) {
-            free(filtered_reports);
-        }
         return rc;
     }
 
@@ -2016,9 +1903,6 @@ int r_client_report_latency(
     tenant.key_id = client->config.tenant.key_id;
     rc = r_generate_request_id(tenant.unique_id);
     if (rc != RCLIENT_OK) {
-        if (owns_filtered_reports) {
-            free(filtered_reports);
-        }
         return rc;
     }
     tenant.time_stamp = r_now_ms(client);
@@ -2032,15 +1916,9 @@ int r_client_report_latency(
 
     if (client->config.tenant.auth.type == R_AUTH_COOKIE) {
         if (!client->has_cookie) {
-            if (owns_filtered_reports) {
-                free(filtered_reports);
-            }
             return RCLIENT_ERR_AUTH;
         }
         if (pos + 4 + 32 + pdu_len > sizeof(packet)) {
-            if (owns_filtered_reports) {
-                free(filtered_reports);
-            }
             return RCLIENT_ERR_PROTOCOL;
         }
         r_write_le16(packet + pos, R_TLV_AUTH_COOKIE);
@@ -2052,9 +1930,6 @@ int r_client_report_latency(
         pos += pdu_len;
     } else if (client->config.tenant.auth.type == R_AUTH_AES_GCM) {
         if (!client->has_aes_key) {
-            if (owns_filtered_reports) {
-                free(filtered_reports);
-            }
             return RCLIENT_ERR_AUTH;
         }
         uint8_t cipher[R_MAX_PACKET_SIZE];
@@ -2062,9 +1937,6 @@ int r_client_report_latency(
         uint8_t nonce[12];
         uint8_t tag[16];
         if (pos + 4 + 12 + 16 + pdu_len > sizeof(packet)) {
-            if (owns_filtered_reports) {
-                free(filtered_reports);
-            }
             return RCLIENT_ERR_PROTOCOL;
         }
         r_write_le16(packet + pos, R_TLV_AUTH_AES);
@@ -2081,16 +1953,10 @@ int r_client_report_latency(
                 nonce,
                 tag
             ) != 0) {
-            if (owns_filtered_reports) {
-                free(filtered_reports);
-            }
             return RCLIENT_ERR_AUTH;
         }
         pos += 4;
         if (pos + 12 + 16 + cipher_len > sizeof(packet)) {
-            if (owns_filtered_reports) {
-                free(filtered_reports);
-            }
             return RCLIENT_ERR_PROTOCOL;
         }
         memcpy(packet + pos, nonce, 12);
@@ -2100,30 +1966,18 @@ int r_client_report_latency(
         memcpy(packet + pos, cipher, cipher_len);
         pos += cipher_len;
     } else {
-        if (owns_filtered_reports) {
-            free(filtered_reports);
-        }
         return RCLIENT_ERR_CONFIG;
     }
 
     if (pos > R_MAX_PACKET_SIZE) {
-        if (owns_filtered_reports) {
-            free(filtered_reports);
-        }
         return RCLIENT_ERR_PROTOCOL;
     }
 
     for (size_t i = 0; i < client->server_count; i++) {
         int send_rc = client->io.udp_send(client->io.ctx, &client->servers[i].addr, packet, pos);
         if (send_rc != 0) {
-            if (owns_filtered_reports) {
-                free(filtered_reports);
-            }
             return RCLIENT_ERR_IO;
         }
-    }
-    if (owns_filtered_reports) {
-        free(filtered_reports);
     }
     return RCLIENT_OK;
 }
@@ -2345,15 +2199,13 @@ int r_client_derive_latency_tracker_id(
     size_t latency_tracker_name_len,
     uint32_t ttl_ms,
     uint32_t max_samples,
-    uint32_t buffer_size,
     uint32_t min_sample_threshold,
     uint8_t out_id[16]
 ) {
-    static const uint8_t domain[] = "ratelimitly.latency-tracker.v1";
+    static const uint8_t domain[] = "ratelimitly.latency-tracker.v2";
     const uint32_t fields[] = {
         ttl_ms,
         max_samples,
-        buffer_size,
         min_sample_threshold,
     };
     if (r_hash_content_id_blake2s_128(

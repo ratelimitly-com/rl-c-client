@@ -23,7 +23,6 @@ $ExpectedRateRequestCountMax = 4
 $ExpectedTracker = [ordered]@{
     ttl_ms               = 10000
     max_samples          = 100
-    buffer_size          = 32
     min_sample_threshold = 5
 }
 $Scenarios = @(

@@ -206,7 +206,7 @@ responder in three deterministic scenarios:
 - resource denial: protected work and latency reporting remain absent; and
 - latency-guard denial: protected work and latency reporting remain absent.
 
-The responder checks tracker TTL, sample limits, buffer size, threshold, and
+The responder checks tracker TTL, sample limits, warm-up threshold, and
 that the report uses the same latency-tracker ID as the preceding guard.
 Latency-tracker IDs and credentials never appear in test logs.
 
@@ -304,10 +304,9 @@ The guard's policy fields have distinct purposes:
 | `threshold_ms` | Reject protected work when tracked service latency reaches this value. |
 | `ttl_ms` | Maximum age of samples retained for this tracker. |
 | `max_samples` | Maximum sample count considered by the tracker. |
-| `buffer_size` | Tracker storage request; must fit the credential quota. |
 | `min_sample_threshold` | Samples required before the tracker estimate controls admission. |
 
-The report repeats `latency_tracker_id`, `ttl_ms`, `max_samples`, `buffer_size`, and
+The report repeats `latency_tracker_id`, `ttl_ms`, `max_samples`, and
 `min_sample_threshold` so it updates the same tracker. `threshold_ms` belongs
 only to the guard decision.
 

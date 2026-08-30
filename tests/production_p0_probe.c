@@ -223,7 +223,6 @@ static void configure_latency_probe(
     config->latency_ttl_ms = 10000u;
     /* One slot makes the real sample replace the speculative admission value. */
     config->latency_max_samples = 1u;
-    config->latency_buffer_size = 1u;
     config->latency_min_sample_threshold = 1u;
     config->metrics_label = "production-p0-latency-probe";
 }
@@ -312,7 +311,6 @@ static void configure_rate_probe(
     config->latency_ttl_ms = 10000u;
     /* Keep two speculative samples below activation so only rate can deny. */
     config->latency_max_samples = 3u;
-    config->latency_buffer_size = 3u;
     config->latency_min_sample_threshold = 3u;
     config->metrics_label = "production-p0-rate-probe";
 }

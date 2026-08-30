@@ -87,13 +87,12 @@ static void test_aes_gcm_aad_rejects_tamper(void) {
     assert(rc != 0);
 }
 
-static void test_latency_report_uses_36_byte_service_blocks(void) {
+static void test_latency_report_uses_32_byte_service_blocks(void) {
     r_service_latency_report_t report;
     memset(&report, 0, sizeof(report));
     memcpy(report.latency_tracker_id, "svc", 3);
     report.ttl_ms = 1000;
     report.max_samples = 10;
-    report.buffer_size = 64;
     report.min_sample_threshold = 1;
     report.observed_latency = 25;
 
@@ -107,16 +106,16 @@ static void test_latency_report_uses_36_byte_service_blocks(void) {
     size_t pdu_len = 0;
     rc = r_build_pdu(R_PDU_LATENCY_REPORT, body, body_len, pdu, sizeof(pdu), &pdu_len);
     assert(rc == RCLIENT_OK);
-    assert(pdu_len == 48u);
+    assert(pdu_len == 44u);
     assert(pdu[0] == 0x4c && pdu[1] == 0x52);
-    assert(pdu[2] == 48u && pdu[3] == 0u);
+    assert(pdu[2] == 44u && pdu[3] == 0u);
     assert(pdu[8] == 1u && pdu[9] == 0u);
-    assert(pdu[44] == 25u && pdu[45] == 0u && pdu[46] == 0u && pdu[47] == 0u);
+    assert(pdu[40] == 25u && pdu[41] == 0u && pdu[42] == 0u && pdu[43] == 0u);
 }
 
 int main(void) {
     test_metrics_label_tlv();
     test_aes_gcm_aad_rejects_tamper();
-    test_latency_report_uses_36_byte_service_blocks();
+    test_latency_report_uses_32_byte_service_blocks();
     return 0;
 }

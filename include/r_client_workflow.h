@@ -31,7 +31,6 @@ typedef struct r_admission_config {
     uint32_t latency_threshold_ms;
     uint32_t latency_ttl_ms;
     uint32_t latency_max_samples;
-    uint32_t latency_buffer_size;
     uint32_t latency_min_sample_threshold;
 
     const char *metrics_label;
