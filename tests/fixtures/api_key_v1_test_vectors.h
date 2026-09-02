@@ -31,24 +31,24 @@ static const r_api_key_v1_valid_vector_t R_API_KEY_V1_VALID_VECTORS[] = {
     },
     {
         "free_plan_aes",
-        "rl-aes1qypqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqghjmuhcc2h27q",
+        "rl-aes1qypqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqghjmu4scddmk3",
         R_AUTH_AES_GCM, UINT64_C(2),
         {0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02},
-        UINT32_C(32768), UINT32_C(512), UINT32_C(2048), UINT32_C(16), UINT32_C(300), UINT32_C(4294967295)
+        UINT32_C(32768), UINT32_C(512), UINT32_C(2048), UINT32_C(16), UINT32_C(300), UINT32_C(4194304)
     },
     {
         "pro_plan_cookie",
-        "rl-cookie1qypsqqqqqqqqqqqrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqdgtruhckw7wfl",
+        "rl-cookie1qypsqqqqqqqqqqqrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqdgtrukcen35ze",
         R_AUTH_COOKIE, UINT64_C(3),
         {0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03},
-        UINT32_C(65536), UINT32_C(1024), UINT32_C(4096), UINT32_C(32), UINT32_C(300), UINT32_C(4294967295)
+        UINT32_C(65536), UINT32_C(1024), UINT32_C(4096), UINT32_C(32), UINT32_C(300), UINT32_C(134217728)
     },
     {
         "business_plan_aes",
-        "rl-aes1qyzqqqqqqqqqqqqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqjfrnulcjhvhm3",
+        "rl-aes1qyzqqqqqqqqqqqqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqjfrnulg8ky0wz",
         R_AUTH_AES_GCM, UINT64_C(4),
         {0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04},
-        UINT32_C(262144), UINT32_C(4096), UINT32_C(16384), UINT32_C(64), UINT32_C(300), UINT32_C(4294967295)
+        UINT32_C(262144), UINT32_C(4096), UINT32_C(16384), UINT32_C(64), UINT32_C(300), UINT32_C(536870912)
     },
     {
         "enterprise_plan_cookie",
