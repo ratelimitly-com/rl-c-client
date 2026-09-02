@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 2.0.0 - 2026-08-29
+
+- **Breaking:** removed the per-tracker `buffer_size` field from latency guards,
+  latency reports, canonical latency-tracker IDs, and their wire encodings.
+- Changed guard blocks from 40 to 36 bytes and latency-report blocks from 36 to
+  32 bytes, matching Ratelimitly wire protocol version 2.
+- Versioned the revised canonical identity as
+  `ratelimitly.latency-tracker.v2\0`; resource bucket identity remains v1.
+- Coalesce source-port steering until all in-flight requests drain, and add a
+  shared full-range monotonic port selector with no port-zero fallback.
+- Make the portable runtime and performance client apply deterministic
+  steering; runtime sockets use exclusive wildcard binds on Windows.
+
 ## 1.0.0 - 2026-08-18
 
 - **Breaking:** adopted versioned API-key format 1 and intentionally rejected

@@ -18,6 +18,7 @@
 #include <arpa/nameser.h>
 
 #include "../include/r_client.h"
+#include "../include/r_client_steering.h"
 
 #define PERF_MAX_PACKET 1400
 
@@ -165,7 +166,7 @@ static void perf_maybe_print_dns_hint(int status) {
     }
 }
 
-static int perf_setup_socket(void) {
+static int perf_setup_socket(uint16_t port) {
     int fd = socket(AF_INET6, SOCK_DGRAM, 0);
     if (fd < 0) {
         return -1;
@@ -177,7 +178,7 @@ static int perf_setup_socket(void) {
     memset(&addr, 0, sizeof(addr));
     addr.sin6_family = AF_INET6;
     addr.sin6_addr = in6addr_any;
-    addr.sin6_port = 0;
+    addr.sin6_port = htons(port);
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
         close(fd);
         return -1;
@@ -188,6 +189,24 @@ static int perf_setup_socket(void) {
         (void)fcntl(fd, F_SETFL, flags | O_NONBLOCK);
     }
     return fd;
+}
+
+typedef struct perf_steering_bind {
+    int socket_fd;
+} perf_steering_bind_t;
+
+static r_steering_bind_result_t perf_try_steering_port(
+    void *user,
+    uint16_t port
+) {
+    perf_steering_bind_t *binding = user;
+    binding->socket_fd = perf_setup_socket(port);
+    if (binding->socket_fd >= 0) {
+        return R_STEERING_BIND_OK;
+    }
+    return errno == EADDRINUSE
+        ? R_STEERING_BIND_OCCUPIED
+        : R_STEERING_BIND_ERROR;
 }
 
 static bool perf_parse_dns_server(const char *value, struct sockaddr_in *out) {
@@ -255,12 +274,34 @@ static void perf_on_steering_feedback(void *ctx, bool keep_port) {
     if (!io || io->ignore_steering || keep_port) {
         return;
     }
-    int new_fd = perf_setup_socket();
-    if (new_fd < 0) {
+    struct sockaddr_in6 current_address;
+    socklen_t current_length = sizeof(current_address);
+    if (getsockname(
+            io->sockfd,
+            (struct sockaddr *)&current_address,
+            &current_length
+        ) != 0) {
         return;
     }
+    uint16_t first_port = r_client_next_steering_port(
+        ntohs(current_address.sin6_port)
+    );
+    perf_steering_bind_t binding = {.socket_fd = -1};
+    uint16_t selected_port = 0u;
+    uint16_t following_port = 0u;
+    if (r_client_select_steering_port(
+            first_port,
+            perf_try_steering_port,
+            &binding,
+            &selected_port,
+            &following_port
+        ) != RCLIENT_OK) {
+        return;
+    }
+    (void)selected_port;
     int old_fd = io->sockfd;
-    io->sockfd = new_fd;
+    io->sockfd = binding.socket_fd;
+    (void)following_port;
     if (old_fd >= 0) {
         close(old_fd);
     }
@@ -746,7 +787,7 @@ static void *perf_worker(void *arg) {
     io_ctx_t io;
     memset(&io, 0, sizeof(io));
     io.ignore_steering = worker->config->ignore_steering;
-    io.sockfd = perf_setup_socket();
+    io.sockfd = perf_setup_socket(0u);
     if (io.sockfd < 0) {
         worker->worker_error = 1;
         return (void *)(intptr_t)1;

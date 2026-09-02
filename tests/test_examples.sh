@@ -599,6 +599,8 @@ for windows_example in win32 libuv libevent glib libhv mongoose llhttp; do
     || fail "$windows_example CMake does not compile rl-c-client with the target compiler"
   grep -Fq -- 'src/r_client_runtime.c' "$windows_cmake" \
     || fail "$windows_example CMake omits the public runtime implementation"
+  grep -Fq -- 'src/r_client_steering.c' "$windows_cmake" \
+    || fail "$windows_example CMake omits the steering implementation"
   grep -Fq -- 'target_link_libraries(rclient PUBLIC OpenSSL::Crypto' "$windows_cmake" \
     || fail "$windows_example does not propagate OpenSSL to the client target"
   if grep -Fq -- 'STATIC IMPORTED' "$windows_cmake"; then
@@ -922,6 +924,8 @@ grep -Fq -- 'one or more r-servers' "$API_GUIDE" \
   || fail "API guide does not place r-server membership in the HA policy"
 grep -Fq -- '`r_client_runtime.h`' "$API_GUIDE" \
   || fail "API guide does not document the public runtime header"
+grep -Fq -- '`r_client_steering.h`' "$IO_GUIDE" \
+  || fail "I/O guide does not document the public steering header"
 grep -Fq -- '`r_client_workflow.h`' "$API_GUIDE" \
   || fail "API guide does not document the public workflow header"
 if grep -Fq -- '../examples/latency_tracker.c' "$API_GUIDE"; then

@@ -140,7 +140,7 @@ Quota fields and their enforcement points differ per field:
 
 | Quota field | Meaning | Enforcement |
 | --- | --- | --- |
-| `latency_buffer_size_max` | Largest `buffer_size` a guard or report may request. | Client-enforced: a resource request containing an over-quota guard fails at submit with `RCLIENT_ERR_PROTOCOL`; over-quota latency reports are silently filtered before send. |
+| `latency_buffer_size_max` | Server-side monotonic point capacity pre-allocated per latency-tracker slot for the API key. | Server-enforced; not checked client-side. |
 | `dedup_ttl_ms_max` | Largest deduplication TTL the key may request. | Client-enforced: request creation fails with `RCLIENT_ERR_CONFIG` when the policy's derived TTL exceeds it (see Resource-Request HA Policy). |
 | `rate_window_size_ms_max` | Largest rate-counter `window_size_ms` the key may request. | Client-enforced: if any resource exceeds it, the complete logical request fails at submit with `RCLIENT_ERR_PROTOCOL` before DNS refresh, serialization, or transmission. The server validates it independently. |
 | `rate_buckets_max` | Maximum distinct buckets the tenant may use. | Server-enforced; the client does not check it. Overruns surface as normal request rejections. |
@@ -178,9 +178,7 @@ both the application name and every setting that defines that state.
 
 - the exact tracker-name bytes and byte length;
 - `ttl_ms`;
-- `max_samples`;
-- `buffer_size` exactly as it will be sent on the wire (the client never
-  rewrites the value; over-quota values are rejected or filtered); and
+- `max_samples`; and
 - `min_sample_threshold`.
 
 The guard's `threshold_ms` is excluded because different guards may evaluate
@@ -198,7 +196,7 @@ mismatch.
 The derivation is deterministic and stable across processes, client instances,
 and client implementations: it is BLAKE2s-256 truncated to the first 16 bytes,
 computed over a fixed domain string (`ratelimitly.resource.v1` or
-`ratelimitly.latency-tracker.v1`, including its terminating NUL), the
+`ratelimitly.latency-tracker.v2`, including its terminating NUL), the
 little-endian 32-bit name length, the exact name bytes, and each defining
 setting as a little-endian 32-bit value, in the argument order shown above.
 Any other producer following this recipe — another client implementation,
@@ -422,7 +420,6 @@ r_latency_guard_t guard = {
     .threshold_ms = 100,
     .ttl_ms = 10000,
     .max_samples = 100,
-    .buffer_size = 32,
     .min_sample_threshold = 5,
 };
 int rc = r_client_derive_latency_tracker_id(
@@ -430,7 +427,6 @@ int rc = r_client_derive_latency_tracker_id(
     strlen("inventory-backend"),         /* tracker-name byte length */
     guard.ttl_ms,                         /* sample lifetime */
     guard.max_samples,                    /* samples considered */
-    guard.buffer_size,                    /* final effective storage */
     guard.min_sample_threshold,           /* warm-up sample count */
     guard.latency_tracker_id              /* resulting 16-byte ID */
 );
@@ -442,7 +438,6 @@ int rc = r_client_derive_latency_tracker_id(
 | `threshold_ms` | Guard fails when tracked latency is greater than or equal to this value. |
 | `ttl_ms` | Maximum sample lifetime for this tracker. |
 | `max_samples` | Maximum number of samples considered by the tracker. |
-| `buffer_size` | Requested tracker storage; must not exceed the credential quota. |
 | `min_sample_threshold` | Samples required before tracked latency controls admission. |
 
 Pass `&guard` and guard count `1` to either rate-request function. Borrowed
@@ -460,8 +455,8 @@ adjustments must not change duration, so use `CLOCK_MONOTONIC` or the host
 event loop's monotonic duration clock.
 
 When a report is intended to update the tracker read by a particular guard, it
-must repeat that guard's `latency_tracker_id`, `ttl_ms`, `max_samples`,
-`buffer_size`, and `min_sample_threshold`. `threshold_ms` appears only in the
+must repeat that guard's `latency_tracker_id`, `ttl_ms`, `max_samples`, and
+`min_sample_threshold`. `threshold_ms` appears only in the
 guard because it controls admission, not sample storage. A report that is not
 paired with a local guard still derives its canonical tracker ID from its own
 tracker name and those same tracker-definition fields.
@@ -471,7 +466,6 @@ r_service_latency_report_t report = {
     .observed_latency = elapsed_ms,
     .ttl_ms = guard.ttl_ms,
     .max_samples = guard.max_samples,
-    .buffer_size = guard.buffer_size,
     .min_sample_threshold = guard.min_sample_threshold,
 };
 memcpy(report.latency_tracker_id, guard.latency_tracker_id, sizeof(report.latency_tracker_id));
@@ -491,14 +485,12 @@ All reports in a call are framed into one datagram. A batch too large to fit
 returns `RCLIENT_ERR_PROTOCOL` and sends nothing, so split large batches across
 calls; 30 reports per call fits under either auth mode.
 
-Reports whose `buffer_size` exceeds the credential quota are filtered. If all
-reports are filtered, the function returns `RCLIENT_OK` without sending. Other
-failures include `RCLIENT_ERR_DNS` when no server is available and
+Other failures include `RCLIENT_ERR_DNS` when no server is available and
 `RCLIENT_ERR_IO` when the UDP send hook fails. Secure request-ID generation or
 local encryption failure returns `RCLIENT_ERR_AUTH`; request-ID failure sends
 nothing.
 
-Each call broadcasts one datagram — carrying every surviving report, at most
+Each call broadcasts one datagram — carrying every report, at most
 30 (cookie mode) or 31 (AES mode) per call — to every known server, under a
 fresh request identity per call. The send loop stops at the first failing
 `udp_send`, so `RCLIENT_ERR_IO` can mean partial delivery across servers.
@@ -539,7 +531,7 @@ matching core-client cancel semantics.
 
 `r_client_admission_config_defaults()` fills: window 1000 ms, rate limit 100,
 1 token, guard threshold 100 ms, tracker `ttl_ms` 10000, `max_samples` 100,
-`buffer_size` 32, `min_sample_threshold` 5, metrics label
+`min_sample_threshold` 5, metrics label
 `rl-c-client-example`. Replace the names and the label with stable application
 identifiers before production use.
 
@@ -566,11 +558,15 @@ event loop of their own. Contracts that differ from the core client:
   unauthenticated datagrams are discarded as packet-local noise and draining
   continues; they are not returned to the host. Non-OK returns are reserved for
   real socket or client failures.
-- The runtime installs **no steering-feedback hook**: server source-port
-  rebind requests are ignored at this layer. Integrations that need steering
-  must use the core client.
-- Runtime-owned socket handles remain valid until
-  `r_runtime_client_destroy()`. On Windows the runtime performs
+- The runtime applies source-port steering after the core in-flight set drains.
+  Each address family advances monotonically through ports 49152 through
+  65535, skips occupied candidates, and never falls back to port zero. It binds
+  every replacement before closing the old socket. Windows sockets set
+  `SO_EXCLUSIVEADDRUSE` before binding.
+- Runtime-owned socket handles remain valid until destruction or a completed
+  steering replacement. Hosts must rebuild their poll/watch set after a request
+  callback because `r_runtime_socket_at()` may then return a new handle. On
+  Windows the runtime performs
   `WSAStartup`/`WSACleanup` as part of init/destroy; hosts managing their own
   Winsock lifetime should account for the reference counts.
 - Threading follows the core rule: one runtime per thread or loop, calls
@@ -799,7 +795,7 @@ All errors are negative:
 | `RCLIENT_ERR_TIMEOUT` | Completion callback | No acceptable response before the deadline. This is also the **only** signature of every server-side rejection that produces no reply: wrong or unregistered credentials, a wrong key ID, a stale request timestamp from a skewed clock, and tampered responses the client discarded. Servers deliberately drop unauthenticated traffic without responding. |
 | `RCLIENT_ERR_DNS` | Submit/report return only | No servers currently known (startup warm-up, failed/empty/non-conforming SRV discovery, DNS outage, or an over-long tenant DNS name). Never delivered through the callback. |
 | `RCLIENT_ERR_IO` | Submit/report return, callback (replay rounds), or public-runtime return | A UDP send/socket operation or runtime clock failed. |
-| `RCLIENT_ERR_PROTOCOL` | Submit/report return, or raw `r_client_on_datagram` return | At submit/report: the packet does not fit one 1200-byte datagram, a guard's `buffer_size` exceeds the credential quota, or a resource's `window_size_ms` exceeds `rate_window_size_ms_max`. From raw ingress: a malformed datagram or an AES response that failed tag verification (informational; the request stays in flight). The public runtime discards this packet-local noise. |
+| `RCLIENT_ERR_PROTOCOL` | Submit/report return, or raw `r_client_on_datagram` return | At submit/report: the packet does not fit one 1200-byte datagram, or a resource's `window_size_ms` exceeds `rate_window_size_ms_max`. From raw ingress: a malformed datagram or an AES response that failed tag verification (informational; the request stays in flight). The public runtime discards this packet-local noise. |
 | `RCLIENT_ERR_AUTH` | Submit/report return, replay callback, or raw `r_client_on_datagram` return | Secure request-ID generation or local encryption failed; or raw ingress saw the wrong auth TLV type or a cookie mismatch. Request-ID failure sends nothing. A *server-side* authentication failure never surfaces as `RCLIENT_ERR_AUTH` — it surfaces as `RCLIENT_ERR_TIMEOUT` (see above). The public runtime discards packet-local auth errors. |
 | `RCLIENT_ERR_CONFIG` | Submit / create / helper returns | Invalid arguments, invalid API key credentials, mismatched key-ID/type assertions, and invalid HA-policy schedules (including a derived TTL above `dedup_ttl_ms_max`). |
 | `RCLIENT_ERR_NOMEM` | Submit/report/create return, or raw ingress return | Allocation failure. |

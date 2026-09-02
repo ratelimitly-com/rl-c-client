@@ -50,8 +50,9 @@ typedef struct r_io_ops {
     void (*log)(void *ctx, r_log_level_t level, const char *msg);
 
     // Optional steering feedback hook (keep_port == false means change port).
-    // Called at most once per request, after the completion callback returns,
-    // and only with keep_port == false.
+    // Coalesced across concurrent requests and called only after the completion
+    // callback returns and the complete in-flight request set has drained.
+    // The only delivered value is keep_port == false.
     void (*on_steering_feedback)(void *ctx, bool keep_port);
 } r_io_ops_t;
 

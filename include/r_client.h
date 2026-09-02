@@ -148,7 +148,6 @@ typedef struct r_latency_guard {
     uint32_t threshold_ms;
     uint32_t ttl_ms;
     uint32_t max_samples;
-    uint32_t buffer_size;
     uint32_t min_sample_threshold;
 } r_latency_guard_t;
 
@@ -157,7 +156,6 @@ typedef struct r_service_latency_report {
     uint32_t observed_latency;
     uint32_t ttl_ms;
     uint32_t max_samples;
-    uint32_t buffer_size;
     uint32_t min_sample_threshold;
 } r_service_latency_report_t;
 
@@ -319,7 +317,6 @@ RCLIENT_API int r_client_derive_latency_tracker_id(
     size_t latency_tracker_name_len,
     uint32_t ttl_ms,
     uint32_t max_samples,
-    uint32_t buffer_size,
     uint32_t min_sample_threshold,
     uint8_t out_id[16]
 );

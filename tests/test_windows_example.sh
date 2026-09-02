@@ -9,7 +9,7 @@ WINDOWS_RUNNER="${WINDOWS_RUNNER:-}"
 PREBUILT_EXAMPLE="${WINDOWS_EXAMPLE_BINARY:-}"
 PORT="${R_WINDOWS_EXAMPLE_TEST_PORT:-39130}"
 TEST_AES_KEY="rl-aes1qypsqqqqqqqqqqqrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqdgrrulcvcn0x5"
-TRACKER_JSON='"tracker":{"ttl_ms":10000,"max_samples":100,"buffer_size":32,"min_sample_threshold":5}'
+TRACKER_JSON='"tracker":{"ttl_ms":10000,"max_samples":100,"min_sample_threshold":5}'
 
 skip() {
   echo "test_windows_example: SKIP ($*)"
@@ -60,6 +60,7 @@ trap cleanup EXIT
 compile_client() {
   local sources=(
     r_client
+    r_client_steering
     r_client_runtime
     r_client_workflow
     r_protocol

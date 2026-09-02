@@ -39,7 +39,6 @@ typedef struct r_test_tracker_observation {
     uint8_t latency_tracker_id[16];
     uint32_t ttl_ms;
     uint32_t max_samples;
-    uint32_t buffer_size;
     uint32_t min_sample_threshold;
 } r_test_tracker_observation_t;
 

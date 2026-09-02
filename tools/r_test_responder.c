@@ -320,11 +320,9 @@ static void print_tracker(const r_test_tracker_observation_t *tracker) {
     }
     printf("{\"ttl_ms\":%" PRIu32
         ",\"max_samples\":%" PRIu32
-        ",\"buffer_size\":%" PRIu32
         ",\"min_sample_threshold\":%" PRIu32 "}",
         tracker->ttl_ms,
         tracker->max_samples,
-        tracker->buffer_size,
         tracker->min_sample_threshold);
 }
 
