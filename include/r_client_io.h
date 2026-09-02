@@ -44,7 +44,9 @@ typedef struct r_io_ops {
     uint64_t (*now_ms)(void *ctx);
 
     // Reserved logging hook (may be NULL). The current library never
-    // invokes it.
+    // invokes it. Partial delivery is reported through
+    // r_client_send_failure_count() instead, because logging it would sit on
+    // the per-request send path.
     void (*log)(void *ctx, r_log_level_t level, const char *msg);
 
     // Optional steering feedback hook (keep_port == false means change port).

@@ -22,6 +22,7 @@ r_client_parse_auth_key
 r_client_report_latency
 r_client_request_deadline_ms
 r_client_select_steering_port
+r_client_send_failure_count
 r_runtime_admission_cancel
 r_runtime_admission_delay_ms
 r_runtime_admission_on_timeout

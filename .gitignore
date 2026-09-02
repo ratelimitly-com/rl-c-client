@@ -13,3 +13,11 @@ compile_commands.json
 /bin/r_test_responder
 /examples/*/*-example
 /examples/*/*-example.exe
+tests/test_latency_tracker
+tests/test_random_failure
+tests/test_runtime
+tests/test_workflow
+tests/test_client_quota
+tests/test_protocol
+tests/test_public_api
+tests/test_responder

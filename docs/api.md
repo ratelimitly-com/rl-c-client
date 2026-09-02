@@ -334,6 +334,34 @@ request from inside the completion callback is harmless and treated as a no-op.
 For local empty success, the callback receives `req == NULL` and both result
 arrays are null.
 
+## Partial delivery
+
+A rate request or latency report is sent to every discovered endpoint. One
+endpoint failing does not fail the call: the send continues through the rest,
+and `RCLIENT_ERR_IO` is returned only when no endpoint at all could be reached.
+This matters because a dual-stack SRV target expands to one endpoint per
+address under a single `server_id`, so an IPv6 address that is unroutable from
+the host would otherwise fail every request.
+
+Those calls still return `RCLIENT_OK`, so nothing in the return value says
+delivery was partial — and the HA policy selects the oldest replica's answer, so
+an unreachable oldest replica quietly yields a younger replica's answer.
+`r_client_send_failure_count` is the signal:
+
+```c
+uint64_t missed = r_client_send_failure_count(client);
+```
+
+It accumulates one count per endpoint that a send could not reach, over the
+client's lifetime, and saturates at `UINT64_MAX` rather than wrapping. A rising
+value against a healthy success rate usually means one address of a dual-stack
+target is unroutable from this host. Sends where *every* endpoint failed are not
+counted, because those already returned `RCLIENT_ERR_IO` to the caller.
+
+It is a counter rather than an `io.log` call deliberately: this path runs once
+per request, so logging it would emit a record per request for as long as an
+endpoint stayed down.
+
 ## Threading and reentrancy
 
 The client contains no locks. Confine each `r_client_t` — and each

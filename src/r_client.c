@@ -122,6 +122,7 @@ struct r_client {
     bool has_aes_key;
 
     r_server_endpoint_t *servers;
+    uint64_t send_failure_count;
     size_t server_count;
     size_t server_cap;
     uint64_t last_dns_refresh_ms;
@@ -1121,6 +1122,28 @@ static bool r_request_target_responded(
     return false;
 }
 
+/**
+ * Counts endpoints a send could not reach.
+ *
+ * Partial delivery is otherwise invisible: the call still returns RCLIENT_OK
+ * through the endpoints that worked, while the HA path selects the oldest
+ * replica's answer, so losing the oldest replica silently downgrades the
+ * result. This is a counter rather than an io.log call because it sits on the
+ * per-request send path, where a persistently unreachable endpoint would
+ * otherwise emit one record per request for as long as it stays down. Total
+ * failure is not counted here - the caller already gets RCLIENT_ERR_IO.
+ */
+static void r_record_send_failures(r_client_t *client, uint64_t failures) {
+    if (!client || failures == 0) {
+        return;
+    }
+    if (client->send_failure_count > UINT64_MAX - failures) {
+        client->send_failure_count = UINT64_MAX;
+        return;
+    }
+    client->send_failure_count += failures;
+}
+
 static int r_send_packet_to_targets(
     r_client_t *client,
     r_client_req_t *req,
@@ -1135,20 +1158,33 @@ static int r_send_packet_to_targets(
     if (!client->io.udp_send) {
         return RCLIENT_ERR_IO;
     }
+    size_t attempted = 0;
+    size_t delivered = 0;
     for (size_t i = 0; i < req->target_count; i++) {
         if (missing_only
             && r_request_target_responded(req, &req->targets[i])) {
             continue;
         }
+        attempted++;
         int rc = client->io.udp_send(
             client->io.ctx,
             &req->targets[i].addr,
             packet,
             packet_len
         );
-        if (rc != 0 && !best_effort) {
-            return RCLIENT_ERR_IO;
+        if (rc == 0) {
+            delivered++;
         }
+    }
+    // One unreachable endpoint must not discard the endpoints behind it: a
+    // dual-stack SRV target expands to one endpoint per address sharing a
+    // server_id, so an IPv6 address on an IPv4-only host would otherwise fail
+    // every request. Report an error only when nothing at all got out.
+    if (!best_effort && attempted > 0 && delivered == 0) {
+        return RCLIENT_ERR_IO;
+    }
+    if (!best_effort && delivered > 0 && delivered < attempted) {
+        r_record_send_failures(client, (uint64_t)(attempted - delivered));
     }
     return RCLIENT_OK;
 }
@@ -1973,11 +2009,18 @@ int r_client_report_latency(
         return RCLIENT_ERR_PROTOCOL;
     }
 
+    size_t delivered = 0;
     for (size_t i = 0; i < client->server_count; i++) {
         int send_rc = client->io.udp_send(client->io.ctx, &client->servers[i].addr, packet, pos);
-        if (send_rc != 0) {
-            return RCLIENT_ERR_IO;
+        if (send_rc == 0) {
+            delivered++;
         }
+    }
+    if (client->server_count > 0 && delivered == 0) {
+        return RCLIENT_ERR_IO;
+    }
+    if (delivered > 0 && delivered < client->server_count) {
+        r_record_send_failures(client, (uint64_t)(client->server_count - delivered));
     }
     return RCLIENT_OK;
 }
@@ -2158,6 +2201,10 @@ int r_client_on_timeout(
         return RCLIENT_OK;
     }
     return r_request_policy_on_timeout(client, req, now_ms);
+}
+
+uint64_t r_client_send_failure_count(const r_client_t *client) {
+    return client ? client->send_failure_count : 0u;
 }
 
 void r_client_cancel_request(r_client_t *client, r_client_req_t *req) {
