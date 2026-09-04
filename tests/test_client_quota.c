@@ -1696,6 +1696,40 @@ static void test_destroy_handles_dns_cancel_callback(void) {
     assert(ctx.pending_addr_user == NULL);
 }
 
+static void test_replay_preserves_static_packet_and_timestamp(void) {
+    test_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.now_ms = 123456789u;
+    r_client_t *client = make_client(&ctx);
+    result_cb_ctx_t result;
+    memset(&result, 0, sizeof(result));
+
+    r_resource_request_t resource = sample_resource();
+    r_client_req_t *req = NULL;
+    assert(r_client_check_rate_limit_async(
+        client, &resource, 1, NULL, 0, NULL, 0,
+        record_rate_limit_cb, &result, &req
+    ) == RCLIENT_OK);
+    assert(ctx.send_count == 1u);
+    assert(ctx.last_packet_len > 0u);
+
+    uint8_t first_packet[R_MAX_PACKET_SIZE];
+    size_t first_len = ctx.last_packet_len;
+    memcpy(first_packet, ctx.last_packet, first_len);
+
+    uint64_t deadline = 0;
+    assert(r_client_request_deadline_ms(req, &deadline) == RCLIENT_OK);
+    ctx.now_ms = deadline;
+    assert(r_client_on_timeout(client, req, deadline) == RCLIENT_OK);
+    assert(ctx.send_count == 2u);
+
+    // Replayed packet must be bit-for-bit identical to round 0 (including timestamp and AES nonce/tag)
+    assert(ctx.last_packet_len == first_len);
+    assert(memcmp(ctx.last_packet, first_packet, first_len) == 0);
+
+    r_client_destroy(client);
+}
+
 static void test_default_policy_replays_once_then_enters_receive_only_phase(void) {
     test_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
@@ -2531,6 +2565,7 @@ int main(void) {
     test_destroy_ignores_late_dns_addr_callback();
     test_destroy_handles_dns_cancel_callback();
     test_discovery_remains_srv_only();
+    test_replay_preserves_static_packet_and_timestamp();
     test_default_policy_replays_once_then_enters_receive_only_phase();
     test_default_policy_late_timers_remain_bounded_by_dedup_ttl();
     test_default_policy_final_phase_returns_first_valid_without_replay();
