@@ -103,6 +103,9 @@ struct r_client_req {
 
     bool steering_rebind;
 
+    uint8_t packet[R_MAX_PACKET_SIZE];
+    size_t packet_len;
+
     r_candidate_t best;
 };
 
@@ -1024,7 +1027,7 @@ static int r_build_rate_request_packet(
     tenant.tlv_size = R_TENANT_TLV_LEN;
     tenant.key_id = client->config.tenant.key_id;
     memcpy(tenant.unique_id, req->request_id, 16);
-    tenant.time_stamp = r_now_ms(client);
+    tenant.time_stamp = req->start_ms != 0u ? req->start_ms : r_now_ms(client);
     tenant.steering_feedback = 0;
     tenant.tenant_mgmt_flag = 0;
     tenant.padding[0] = 0;
@@ -1195,23 +1198,14 @@ static int r_send_rate_request(
     bool missing_only,
     bool best_effort
 ) {
-    uint8_t packet[R_MAX_PACKET_SIZE];
-    size_t packet_len = 0;
-    int rc = r_build_rate_request_packet(
-        client,
-        req,
-        packet,
-        sizeof(packet),
-        &packet_len
-    );
-    if (rc != RCLIENT_OK) {
-        return rc;
+    if (!client || !req || req->packet_len == 0) {
+        return RCLIENT_ERR_PROTOCOL;
     }
     return r_send_packet_to_targets(
         client,
         req,
-        packet,
-        packet_len,
+        req->packet,
+        req->packet_len,
         missing_only,
         best_effort
     );
@@ -1825,6 +1819,18 @@ static int r_client_check_rate_limit_async_impl(
     }
     req->dedup_deadline_ms = req->start_ms + (uint64_t)req->dedup_ttl_ms;
     req->phase = R_REQUEST_PHASE_ROUND;
+
+    rc = r_build_rate_request_packet(
+        client,
+        req,
+        req->packet,
+        sizeof(req->packet),
+        &req->packet_len
+    );
+    if (rc != RCLIENT_OK) {
+        r_request_free(req);
+        return rc;
+    }
 
     rc = r_request_snapshot_targets(client, req);
     if (rc != RCLIENT_OK) {
