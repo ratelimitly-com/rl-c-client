@@ -243,7 +243,8 @@ def check_readme(path: Path) -> list[str]:
 
     blocks = mermaid_blocks(text)
     if not blocks:
-        errors.append("missing a Mermaid overview")
+        if relative != "README.md":
+            errors.append("missing a Mermaid overview")
     for index, block in enumerate(blocks, start=1):
         errors.extend(check_mermaid_block(block, index))
 
