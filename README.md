@@ -33,23 +33,6 @@ only one application workflow: a reporter may send only latency reports, and a
 resource consumer may send only resource requests. Reports influence resource
 requests only through the latency trackers; the two operations are not paired.
 
-```mermaid
-flowchart LR
-    Consumer["Resource-consuming application"]:::neutral --> Request["Resource request<br/>intended consumptions + optional guards"]:::neutral
-    Request --> Evaluate["Ratelimitly<br/>atomic admission decision"]:::neutral
-    Evaluate --> Decision{"Granted?"}:::neutral
-    Decision -->|No| Rejected["No resources consumed"]:::danger
-    Decision -->|Yes| Granted["Resources consumed<br/>application may perform work"]:::success
-
-    Reporter["Same or another application"]:::neutral --> Report["Optional latency report<br/>measured service latencies"]:::neutral
-    Report --> Trackers["Latency trackers"]:::neutral
-    Trackers -. "input to latency guards" .-> Evaluate
-
-    classDef neutral fill:#EAECEF,stroke:#7D8590,color:#1A1A1A;
-    classDef danger fill:#FCE8E6,stroke:#B0413E,color:#1A1A1A;
-    classDef success fill:#E6F4EA,stroke:#1E7E45,color:#1A1A1A;
-```
-
 ## Three small examples
 
 Each example first states the operation in English and then expresses it with
