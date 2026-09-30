@@ -26,7 +26,8 @@
 /*
  * Flow
  * ----
- * 1. H2O watches duplicates of the rl-c-client UDP descriptors.
+ * 1. H2O watches duplicates of the rl-c-client UDP descriptors and
+ *    re-watches them whenever the client replaces its sockets.
  * 2. GET /limited allocates admission state from the H2O request pool.
  * 3. A one-shot H2O timer advances the current request deadline.
  * 4. UDP readiness lets the adapter consume datagrams from original sockets.
@@ -71,11 +72,13 @@ struct h2o_app {
     h2o_accept_ctx_t accept;
     h2o_socket_t *listener;
     socket_watcher_t watchers[2];
-    size_t watcher_count;
     r_runtime_client_t runtime;
+    bool shutting_down;
 };
 
 static volatile sig_atomic_t stop_requested;
+
+static void resync_udp_watchers(h2o_app_t *app);
 
 static void on_signal(int signal_number) {
     (void)signal_number;
@@ -178,6 +181,7 @@ static void on_timeout(h2o_timer_t *timer) {
         timer,
         timer
     );
+    h2o_app_t *app = pending->app;
     int status = r_runtime_admission_on_timeout(
         &pending->app->runtime,
         &pending->request
@@ -189,6 +193,7 @@ static void on_timeout(h2o_timer_t *timer) {
         r_runtime_admission_cancel(&pending->app->runtime, &pending->request);
         send_result(pending, RCLIENT_ERR_IO, &pending->outcome);
     }
+    resync_udp_watchers(app);
 }
 
 static int arm_timer(pending_request_t *pending) {
@@ -225,6 +230,7 @@ static void dispose_pending(void *data) {
     /* The pool can disappear because of success, error, or peer disconnect. */
     if (pending->request.active) {
         r_runtime_admission_cancel(&pending->app->runtime, &pending->request);
+        resync_udp_watchers(pending->app);
     }
     pending->http_request = NULL;
 }
@@ -272,11 +278,15 @@ static int on_http_request(h2o_handler_t *handler, h2o_req_t *request) {
             status != RCLIENT_OK ? status : RCLIENT_ERR_IO,
             &pending->outcome);
     }
+    resync_udp_watchers(rl_handler->app);
     return 0;
 }
 
 static void on_udp_readable(h2o_socket_t *socket, const char *error) {
     socket_watcher_t *watcher = socket->data;
+    if (watcher->socket != socket) {
+        return; /* Replaced by sync_udp_watchers(); already closing. */
+    }
     if (error) {
         fprintf(stderr, "H2O UDP watcher failed: %s\n", error);
         return;
@@ -289,6 +299,7 @@ static void on_udp_readable(h2o_socket_t *socket, const char *error) {
         fprintf(stderr, "Ratelimitly UDP ingress failed: %s (%d)\n",
             r_runtime_status_name(status), status);
     }
+    resync_udp_watchers(watcher->app);
 }
 
 static void on_accept(h2o_socket_t *listener, const char *error) {
@@ -340,14 +351,16 @@ static void close_loop_sockets(h2o_app_t *app) {
         h2o_socket_close(app->listener);
         app->listener = NULL;
     }
-    for (size_t i = 0; i < app->watcher_count; i++) {
-        h2o_socket_close(app->watchers[i].socket);
-        app->watchers[i].socket = NULL;
+    for (size_t i = 0; i < 2; i++) {
+        if (app->watchers[i].socket) {
+            h2o_socket_close(app->watchers[i].socket);
+            app->watchers[i].socket = NULL;
+        }
     }
-    app->watcher_count = 0;
 }
 
 static void shutdown_context(h2o_app_t *app, h2o_evloop_t *loop) {
+    app->shutting_down = true; /* Cancels during the drain must not re-watch. */
     close_loop_sockets(app);
     h2o_context_request_shutdown(&app->context);
     /* Drain deferred connection cleanup before disposing the context. */
@@ -359,31 +372,65 @@ static void shutdown_context(h2o_app_t *app, h2o_evloop_t *loop) {
     h2o_context_dispose(&app->context);
 }
 
-static int create_udp_watchers(h2o_app_t *app) {
+static int watch_runtime_socket(h2o_app_t *app, size_t index) {
+    socket_watcher_t *watcher = &app->watchers[index];
+    watcher->app = app;
+    watcher->client_fd = r_runtime_socket_at(&app->runtime, index);
+    /* H2O closes its wrapper; dup keeps adapter ownership independent. */
+    int duplicate_fd = dup(watcher->client_fd);
+    if (duplicate_fd < 0) {
+        return -1;
+    }
+    watcher->socket = h2o_evloop_socket_create(
+        app->context.loop,
+        duplicate_fd,
+        H2O_SOCKET_FLAG_DONT_READ
+    );
+    if (!watcher->socket) {
+        close(duplicate_fd);
+        return -1;
+    }
+    watcher->socket->data = watcher;
+    h2o_socket_read_start(watcher->socket, on_udp_readable);
+    return 0;
+}
+
+/*
+ * The client replaces its UDP sockets when the server asks it to change source
+ * ports (after in-flight requests drain), and closes the old ones. Watch a
+ * duplicate of each current socket: when one changes, close the old duplicate,
+ * which also discards any late reply still queued on the old port. The runtime
+ * opens a replacement before closing the socket it replaces, so a replacement
+ * never reuses the old descriptor number.
+ */
+static int sync_udp_watchers(h2o_app_t *app) {
+    int status = 0;
     size_t socket_count = r_runtime_socket_count(&app->runtime);
     for (size_t i = 0; i < socket_count; i++) {
         socket_watcher_t *watcher = &app->watchers[i];
-        watcher->app = app;
-        watcher->client_fd = r_runtime_socket_at(&app->runtime, i);
-        /* H2O closes its wrapper; dup keeps adapter ownership independent. */
-        int duplicate_fd = dup(watcher->client_fd);
-        if (duplicate_fd < 0) {
-            return -1;
+        if (watcher->socket
+            && watcher->client_fd == r_runtime_socket_at(&app->runtime, i)) {
+            continue;
         }
-        watcher->socket = h2o_evloop_socket_create(
-            app->context.loop,
-            duplicate_fd,
-            H2O_SOCKET_FLAG_DONT_READ
-        );
-        if (!watcher->socket) {
-            close(duplicate_fd);
-            return -1;
+        if (watcher->socket) {
+            h2o_socket_close(watcher->socket);
+            watcher->socket = NULL;
         }
-        watcher->socket->data = watcher;
-        h2o_socket_read_start(watcher->socket, on_udp_readable);
-        app->watcher_count++;
+        if (watch_runtime_socket(app, i) != 0) {
+            status = -1;
+        }
     }
-    return 0;
+    return status;
+}
+
+/* Call after every rl-c-client call: any of them may replace the sockets. */
+static void resync_udp_watchers(h2o_app_t *app) {
+    if (app->shutting_down) {
+        return;
+    }
+    if (sync_udp_watchers(app) != 0) {
+        fprintf(stderr, "failed to watch replacement rate-limit UDP sockets\n");
+    }
 }
 
 int main(void) {
@@ -424,7 +471,7 @@ int main(void) {
     h2o_context_init(&app.context, loop, &app.config);
     app.accept.ctx = &app.context;
     app.accept.hosts = app.config.hosts;
-    if (create_listener(&app) != 0 || create_udp_watchers(&app) != 0) {
+    if (create_listener(&app) != 0 || sync_udp_watchers(&app) != 0) {
         fprintf(stderr, "failed to initialize H2O sockets\n");
         shutdown_context(&app, loop);
         h2o_config_dispose(&app.config);

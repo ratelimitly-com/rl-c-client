@@ -442,6 +442,8 @@ grep -Fq -- 'assert_http_port_is_free' "$PRODUCTION_P0_HTTP_RUNNER" \
   || fail "HTTP P0 runner can attach to an unrelated listener"
 grep -Fq -- 'production_p0_report_profiles' "$PRODUCTION_P0_HTTP_RUNNER" \
   || fail "HTTP P0 runner does not report request wait profiles"
+grep -Fq -- 'head -c "$SERVER_ERR_LIMIT"' "$PRODUCTION_P0_HTTP_RUNNER" \
+  || fail "HTTP P0 runner reads an unbounded server.err"
 bash -n \
   "$PRODUCTION_P0_PROFILE" \
   "$PRODUCTION_P0_HTTP_MATRIX_RUNNER" \
