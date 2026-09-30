@@ -45,8 +45,31 @@ if (-not (Test-Path (
 
 $vswhere = Join-Path ${env:ProgramFiles(x86)} `
     "Microsoft Visual Studio/Installer/vswhere.exe"
-$visualStudioRoot = & $vswhere -latest -products * -property installationPath
+$visualStudioRoot = (
+    & $vswhere -latest -products * -property installationPath | Out-String
+).Trim()
 Assert-NativeSuccess "Visual Studio discovery"
+$visualStudioVersion = (
+    & $vswhere -latest -products * -property installationVersion | Out-String
+).Trim()
+Assert-NativeSuccess "Visual Studio version query"
+if ($visualStudioVersion -notmatch "^[0-9]+[.]") {
+    throw "Visual Studio installation version is invalid: $visualStudioVersion"
+}
+# As in build-sdk.ps1: the generator CMake names for the installed Visual
+# Studio major version (2022 on windows-2022, 2026 on windows-11-arm).
+$visualStudioMajor = ([version]$visualStudioVersion).Major
+$cmakeCapabilities = (& cmake -E capabilities | Out-String | ConvertFrom-Json)
+Assert-NativeSuccess "CMake capability query"
+$visualStudioGenerator = $cmakeCapabilities.generators |
+    Where-Object { $_.name -like "Visual Studio $visualStudioMajor *" } |
+    Select-Object -First 1 -ExpandProperty name
+if ([string]::IsNullOrWhiteSpace($visualStudioGenerator)) {
+    throw (
+        "CMake $($cmakeCapabilities.version.string) has no generator for " +
+        "Visual Studio $visualStudioVersion"
+    )
+}
 $targetToolDirectory = if ($Architecture -eq "amd64") { "x64" } else { "arm64" }
 $dumpbin = Get-ChildItem (
     Join-Path $visualStudioRoot "VC/Tools/MSVC"
@@ -113,8 +136,9 @@ try {
     $configureArguments = @(
         "-S", $consumerSource,
         "-B", $consumerBuild,
-        "-G", "Visual Studio 17 2022",
+        "-G", $visualStudioGenerator,
         "-A", $architectureConfig.cmake_architecture,
+        "-DCMAKE_GENERATOR_INSTANCE=$($visualStudioRoot.Replace('\', '/'))",
         "-DCMAKE_PREFIX_PATH=$resolvedSdkRoot",
         "-DCMAKE_TOOLCHAIN_FILE=$toolchainFile",
         "-DVCPKG_TARGET_TRIPLET=$($architectureConfig.vcpkg_triplet)"
