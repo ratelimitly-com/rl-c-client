@@ -132,6 +132,9 @@ wait_with_deadline() {
 
 start_server() {
   local scenario=$1
+  shift
+  # Any further arguments are NAME=value settings for this scenario only.
+  local -a extra_env=("$@")
   local directory
   directory="$(dirname "$ARTIFACT")"
 
@@ -145,12 +148,14 @@ start_server() {
         RATELIMITLY_AUTH_KEY="$TEST_AES_KEY" \
         RATELIMITLY_EXAMPLE_SERVER_HOST=127.0.0.1 \
         RATELIMITLY_EXAMPLE_SERVER_PORT="$UDP_PORT" \
+        ${extra_env[@]+"${extra_env[@]}"} \
         "$KORE_EXECUTABLE" -fnrc kore.conf
     fi
     exec setsid env \
       RATELIMITLY_AUTH_KEY="$TEST_AES_KEY" \
       RATELIMITLY_EXAMPLE_SERVER_HOST=127.0.0.1 \
       RATELIMITLY_EXAMPLE_SERVER_PORT="$UDP_PORT" \
+      ${extra_env[@]+"${extra_env[@]}"} \
       "./$(basename "$ARTIFACT")"
   ) >"$TMP_DIR/$scenario/server.out" \
     2>"$TMP_DIR/$scenario/server.err" &
@@ -309,8 +314,171 @@ run_scenario() {
   assert_responder_output "$scenario"
 }
 
+# CPU clock ticks used so far by every process in a session (the example and
+# any workers it forked).
+session_cpu_ticks() {
+  local session=$1
+  local total=0
+  local stat_file line
+  local -a fields
+  for stat_file in /proc/[0-9]*/stat; do
+    line=""
+    { read -r line <"$stat_file"; } 2>/dev/null || continue   # the process may be gone
+    # Fields after "pid (comm) ": 4 = session, 12 = utime, 13 = stime.
+    read -r -a fields <<<"${line##*) }"
+    if [[ "${fields[3]:-}" == "$session" ]]; then
+      total=$((total + fields[11] + fields[12]))
+    fi
+  done
+  echo "$total"
+}
+
+request_limited() {
+  local scenario=$1
+  local request=$2
+  local body="$TMP_DIR/$scenario/response-$request.body"
+  local http_status=""
+  local curl_status=0
+  http_status="$(curl --silent --show-error \
+    --noproxy '*' \
+    --header 'Connection: close' \
+    --max-time 10 \
+    --output "$body" \
+    --write-out '%{http_code}' \
+    "http://127.0.0.1:$HTTP_PORT/limited")" \
+    || curl_status=$?
+  cp "$body" "$TMP_DIR/$scenario/response.body" 2>/dev/null || true
+  [[ "$curl_status" -eq 0 ]] \
+    || fail_case "$scenario" \
+      "request $request failed with curl status $curl_status"
+  [[ "$http_status" == "200" ]] \
+    || fail_case "$scenario" \
+      "request $request: HTTP status was $http_status; expected 200"
+  grep -Eq '^allowed($|[[:space:]]|\()' "$body" \
+    || fail_case "$scenario" \
+      "request $request: allowed response omitted protected-work result"
+}
+
+# CPU milliseconds the example's session uses during a 0.5 s sleep. Some
+# frameworks run several polling workers, so idle use is measured, not assumed.
+session_cpu_ms_during_sleep() {
+  local clock_ticks ticks_before ticks_after
+  clock_ticks="$(getconf CLK_TCK)"
+  ticks_before="$(session_cpu_ticks "$SERVER_PGID")"
+  sleep 0.5
+  ticks_after="$(session_cpu_ticks "$SERVER_PGID")"
+  echo $(((ticks_after - ticks_before) * 1000 / clock_ticks))
+}
+
+# After a request, late replies land within a few hundred milliseconds (the
+# responder answers each copy 60 ms late, one after another); after that an idle
+# example neither logs nor uses more CPU than it did before the first request.
+assert_quiet_after() {
+  local scenario=$1
+  local request=$2
+  local baseline_cpu_ms=$3
+  local log="$TMP_DIR/$scenario/server.err"
+  sleep 0.5
+  local log_before log_after cpu_ms
+  log_before="$(stat -c %s "$log")"
+  cpu_ms="$(session_cpu_ms_during_sleep)"
+  log_after="$(stat -c %s "$log")"
+  local log_growth=$((log_after - log_before))
+  if ((log_after > 65536)); then
+    # Keep the failure report short: the first lines show the repeated error.
+    head -c 16384 "$log" >"$log.head"
+    mv "$log.head" "$log"
+    fail_case "$scenario" \
+      "after request $request, server.err reached $log_after bytes (stale UDP socket?)"
+  fi
+  ((log_growth <= 1024)) \
+    || fail_case "$scenario" \
+      "after request $request, server.err grew by $log_growth bytes in 0.5 s while idle (stale UDP socket?)"
+  ((cpu_ms - baseline_cpu_ms <= 250)) \
+    || fail_case "$scenario" \
+      "after request $request, the example used $cpu_ms ms of CPU in 0.5 s while idle, against $baseline_cpu_ms ms before the first request (stale UDP socket?)"
+}
+
+# Source-port steering, as a kernel-UDP server sends it: every reply asks the
+# client to move to new source ports, and replies arrive 60 ms late, so the
+# answers to replays land after the client has already rebound. The example
+# must not spin on the old sockets, and must serve the next request on the
+# replacement sockets.
+run_steering_scenario() {
+  local scenario=steering-rebind
+  UDP_PORT=$((UDP_BASE_PORT + 3))
+  mkdir -p "$TMP_DIR/$scenario"
+
+  "$RESPONDER" \
+    "--listen=127.0.0.1:$UDP_PORT" \
+    --scenario=guard-pass \
+    --auth=aes \
+    --allow-count=2 \
+    --steering=rebind \
+    --delay-ms=60 \
+    >"$TMP_DIR/$scenario/responder.out" \
+    2>"$TMP_DIR/$scenario/responder.err" &
+  RESPONDER_PID=$!
+  wait_for_responder "$scenario"
+
+  # The CI request profile: 25 ms units and three replays.
+  start_server "$scenario" \
+    RATELIMITLY_REQUEST_UNIT_MS=25 \
+    RATELIMITLY_REQUEST_REPLAY_COUNT=3
+  wait_for_http "$scenario"
+  local baseline_cpu_ms
+  baseline_cpu_ms="$(session_cpu_ms_during_sleep)"
+
+  local request
+  for request in 1 2; do
+    request_limited "$scenario" "$request"
+    kill -0 "$SERVER_PID" 2>/dev/null \
+      || fail_case "$scenario" "server exited after request $request"
+    assert_quiet_after "$scenario" "$request" "$baseline_cpu_ms"
+  done
+
+  stop_server
+  sleep 0.1
+  kill -0 "$RESPONDER_PID" 2>/dev/null \
+    || fail_case "$scenario" "responder exited before packet drain"
+  kill -TERM "$RESPONDER_PID"
+  local responder_status=0
+  wait_with_deadline "$RESPONDER_PID" 5 || responder_status=$?
+  RESPONDER_PID=""
+  [[ "$responder_status" -eq 0 ]] \
+    || fail_case "$scenario" "responder exited $responder_status"
+
+  local output="$TMP_DIR/$scenario/responder.out"
+  local rate_count
+  rate_count="$(count_events rate_request "$output")"
+  ((rate_count >= 2 && rate_count <= 8)) \
+    || fail_case "$scenario" \
+      "expected two rate requests with at most three replays each; observed $rate_count"
+  [[ "$(count_events latency_report "$output")" -eq 2 ]] \
+    || fail_case "$scenario" "expected 2 latency reports"
+  [[ "$(count_events input_rejected "$output")" -eq 0 ]] \
+    || fail_case "$scenario" "responder rejected an input packet"
+}
+
+# Examples that cannot run the steering case yet, each with a tracked issue.
+steering_skip_reason() {
+  case "$NAME" in
+    lwan)
+      echo "lwan crashes on replies slower than about 60 ms:" \
+        "https://github.com/ratelimitly-com/rl-c-client/issues/75"
+      ;;
+  esac
+}
+
 run_scenario guard-pass 0
 run_scenario deny 1
 run_scenario guard-deny 2
 
-echo "$NAME: PASS (HTTP 200, resource deny, latency deny)"
+steering_skip="$(steering_skip_reason)"
+if [[ -n "$steering_skip" ]]; then
+  echo "$NAME: SKIP source-port steering ($steering_skip)"
+  echo "$NAME: PASS (HTTP 200, resource deny, latency deny)"
+else
+  run_steering_scenario
+  echo "$NAME: PASS (HTTP 200, resource deny, latency deny, source-port steering)"
+fi

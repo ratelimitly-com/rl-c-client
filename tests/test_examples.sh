@@ -257,6 +257,8 @@ for scenario in guard-pass deny guard-deny; do
 done
 grep -Fq -- "'\"reports\":1'" "$ROOT/tests/run_http_example.sh" \
   || fail "Linux HTTP runner does not require exactly one reported sample"
+grep -Fq -- '--steering=rebind' "$ROOT/tests/run_http_example.sh" \
+  || fail "Linux HTTP runner omits the source-port steering case"
 grep -Fq -- 'macos-latest' "$CI_WORKFLOW" \
   || fail "CI does not validate the macOS build"
 grep -Fq -- 'tests/test_windows_example.sh' "$CI_WORKFLOW" \
