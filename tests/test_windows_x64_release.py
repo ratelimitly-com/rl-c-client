@@ -63,6 +63,14 @@ def main():
     assert "dumpbin" in verify_script.lower()
     assert "public-api.symbols" in verify_script
     assert "Compress-Archive" not in build_script
+    # The generator follows the installed Visual Studio (2022 on windows-2022,
+    # 2026 on windows-11-arm), checked against CMake's own generator list, and
+    # CMake is pointed at that instance. Neither script hard-codes one.
+    for script in (build_script, verify_script):
+        assert '"Visual Studio 17 2022"' not in script
+        assert "installationVersion" in script
+        assert "cmake -E capabilities" in script
+        assert "CMAKE_GENERATOR_INSTANCE" in script
 
     with tempfile.TemporaryDirectory(prefix="rl-windows-zip-") as tmp:
         tmp_path = Path(tmp)
