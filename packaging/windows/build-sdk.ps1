@@ -87,11 +87,34 @@ if (-not (Test-Path $vswhere -PathType Leaf)) {
     throw "Visual Studio locator does not exist: $vswhere"
 }
 $vsInstallation = (
-    & $vswhere -latest -products * -property installationPath
+    & $vswhere -latest -products * -property installationPath | Out-String
 ).Trim()
 Assert-NativeSuccess "Visual Studio discovery"
 if ([string]::IsNullOrWhiteSpace($vsInstallation)) {
-    throw "Visual Studio 2022 installation was not found"
+    throw "Visual Studio installation was not found"
+}
+$vsVersion = (
+    & $vswhere -latest -products * -property installationVersion | Out-String
+).Trim()
+Assert-NativeSuccess "Visual Studio version query"
+if ($vsVersion -notmatch "^[0-9]+[.]") {
+    throw "Visual Studio installation version is invalid: $vsVersion"
+}
+# Runner images ship different Visual Studio releases (2022 on windows-2022,
+# 2026 on windows-11-arm). Use the generator CMake names for the installed
+# major version, and point CMake at the instance whose pinned MSVC toolset is
+# checked below.
+$vsMajorVersion = ([version]$vsVersion).Major
+$cmakeCapabilities = (& cmake -E capabilities | Out-String | ConvertFrom-Json)
+Assert-NativeSuccess "CMake capability query"
+$vsGenerator = $cmakeCapabilities.generators |
+    Where-Object { $_.name -like "Visual Studio $vsMajorVersion *" } |
+    Select-Object -First 1 -ExpandProperty name
+if ([string]::IsNullOrWhiteSpace($vsGenerator)) {
+    throw (
+        "CMake $($cmakeCapabilities.version.string) has no generator for " +
+        "Visual Studio $vsVersion"
+    )
 }
 $msvcDirectory = Join-Path $vsInstallation (
     "VC/Tools/MSVC/$($config.msvc_toolset_version)"
@@ -163,9 +186,10 @@ try {
     $configureArguments = @(
         "-S", $sourceDirectory,
         "-B", $buildDirectory,
-        "-G", "Visual Studio 17 2022",
+        "-G", $vsGenerator,
         "-A", $architectureConfig.cmake_architecture,
         "-T", $expectedToolset,
+        "-DCMAKE_GENERATOR_INSTANCE=$($vsInstallation.Replace('\', '/'))",
         "-DCMAKE_INSTALL_PREFIX=$stageDirectory",
         "-DCMAKE_SYSTEM_VERSION=10.0.26100.0",
         "-DCMAKE_TOOLCHAIN_FILE=$toolchainFile",
