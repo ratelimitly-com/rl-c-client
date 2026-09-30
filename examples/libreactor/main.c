@@ -14,7 +14,8 @@
 /*
  * Flow
  * ----
- * 1. libreactor watches duplicates of the rl-c-client UDP descriptors.
+ * 1. libreactor watches duplicates of the rl-c-client UDP descriptors and
+ *    re-watches them whenever the client replaces its sockets.
  * 2. GET /limited allocates state and starts combined admission.
  * 3. A reactor timer advances that request's current deadline.
  * 4. UDP readiness lets the adapter drain the original socket.
@@ -50,8 +51,9 @@ struct reactor_app {
     r_runtime_client_t runtime;
     server http_server;
     udp_watcher_t watchers[2];
-    size_t watcher_count;
 };
+
+static void resync_udp_watchers(reactor_app_t *app);
 
 static void finish_request(
     pending_request_t *pending,
@@ -138,6 +140,7 @@ static int arm_timer(pending_request_t *pending) {
 
 static void on_timeout(reactor_event *event) {
     pending_request_t *pending = event->state;
+    reactor_app_t *app = pending->app;
     pending->defer_completion = true;
     int status = r_runtime_admission_on_timeout(
         &pending->app->runtime,
@@ -148,13 +151,12 @@ static void on_timeout(reactor_event *event) {
     if (pending->completion_ready) {
         finish_request(pending,
             pending->completion_status, &pending->completion_outcome);
-        return;
-    }
-    if (status != RCLIENT_OK || arm_timer(pending) != RCLIENT_OK) {
+    } else if (status != RCLIENT_OK || arm_timer(pending) != RCLIENT_OK) {
         finish_request(pending,
             status != RCLIENT_OK ? status : RCLIENT_ERR_IO,
             &pending->completion_outcome);
     }
+    resync_udp_watchers(app);
 }
 
 static void on_udp_readable(reactor_event *event) {
@@ -171,6 +173,7 @@ static void on_udp_readable(reactor_event *event) {
         fprintf(stderr, "Ratelimitly UDP ingress failed: %s (%d)\n",
             r_runtime_status_name(status), status);
     }
+    resync_udp_watchers(watcher->app);
 }
 
 static void on_http_request(reactor_event *event) {
@@ -217,23 +220,50 @@ static void on_http_request(reactor_event *event) {
             status != RCLIENT_OK ? status : RCLIENT_ERR_IO,
             &pending->completion_outcome);
     }
+    resync_udp_watchers(app);
 }
 
-static int open_udp_watchers(reactor_app_t *app) {
+static int watch_runtime_socket(reactor_app_t *app, size_t index) {
+    udp_watcher_t *watcher = &app->watchers[index];
+    watcher->client_fd = r_runtime_socket_at(&app->runtime, index);
+    int duplicate_fd = dup(watcher->client_fd);
+    if (duplicate_fd < 0) {
+        return -1;
+    }
+    descriptor_open(&watcher->descriptor, duplicate_fd, DESCRIPTOR_READ);
+    return 0;
+}
+
+/*
+ * The client replaces its UDP sockets when the server asks it to change source
+ * ports (after in-flight requests drain), and closes the old ones. Watch a
+ * duplicate of each current socket: when one changes, close the old duplicate,
+ * which also discards any late reply still queued on the old port. The runtime
+ * opens a replacement before closing the socket it replaces, so a replacement
+ * never reuses the old descriptor number.
+ */
+static int sync_udp_watchers(reactor_app_t *app) {
+    int status = 0;
     size_t socket_count = r_runtime_socket_count(&app->runtime);
     for (size_t i = 0; i < socket_count; i++) {
         udp_watcher_t *watcher = &app->watchers[i];
-        watcher->app = app;
-        watcher->client_fd = r_runtime_socket_at(&app->runtime, i);
-        int duplicate_fd = dup(watcher->client_fd);
-        if (duplicate_fd < 0) {
-            return -1;
+        if (descriptor_is_open(&watcher->descriptor)
+            && watcher->client_fd == r_runtime_socket_at(&app->runtime, i)) {
+            continue;
         }
-        descriptor_construct(&watcher->descriptor, on_udp_readable, watcher);
-        descriptor_open(&watcher->descriptor, duplicate_fd, DESCRIPTOR_READ);
-        app->watcher_count++;
+        descriptor_close(&watcher->descriptor);
+        if (watch_runtime_socket(app, i) != 0) {
+            status = -1;
+        }
     }
-    return 0;
+    return status;
+}
+
+/* Call after every rl-c-client call: any of them may replace the sockets. */
+static void resync_udp_watchers(reactor_app_t *app) {
+    if (sync_udp_watchers(app) != 0) {
+        fprintf(stderr, "failed to watch replacement rate-limit UDP sockets\n");
+    }
 }
 
 int main(void) {
@@ -255,9 +285,14 @@ int main(void) {
     int listener = -1;
     reactor_construct();
     server_construct(&app.http_server, on_http_request, &app);
+    for (size_t i = 0; i < 2; i++) {
+        app.watchers[i].app = &app;
+        descriptor_construct(&app.watchers[i].descriptor,
+            on_udp_readable, &app.watchers[i]);
+    }
     listener = net_socket(net_resolve(
         "0.0.0.0", "8000", AF_INET, SOCK_STREAM, AI_PASSIVE));
-    if (listener < 0 || open_udp_watchers(&app) != 0) {
+    if (listener < 0 || sync_udp_watchers(&app) != 0) {
         fprintf(stderr, "failed to initialize libreactor descriptors\n");
         goto cleanup;
     }
@@ -271,7 +306,7 @@ cleanup:
         close(listener);
     }
     server_destruct(&app.http_server);
-    for (size_t i = 0; i < app.watcher_count; i++) {
+    for (size_t i = 0; i < 2; i++) {
         descriptor_destruct(&app.watchers[i].descriptor);
     }
     reactor_destruct();

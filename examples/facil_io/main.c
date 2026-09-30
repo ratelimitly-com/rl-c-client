@@ -14,15 +14,17 @@
 /*
  * Flow
  * ----
- * 1. facil.io watches duplicates of the rl-c-client UDP descriptors.
+ * 1. facil.io watches duplicates of the rl-c-client UDP descriptors and
+ *    re-watches them whenever the client replaces its sockets.
  * 2. GET /limited pauses HTTP and starts combined asynchronous admission.
  * 3. A one-shot fio_run_every() callback advances the request deadline.
  * 4. UDP readiness lets the adapter drain the original socket.
  * 5. Admitted work is measured/reported before HTTP resumes with a decision.
  *
- * Ownership: facil.io owns attached duplicate descriptors; the adapter owns
- * originals. Each timer and paused HTTP handle retains pending_request_t until
- * its finish callback. One facil.io thread serializes all rl-c-client access.
+ * Ownership: facil.io owns attached duplicate descriptors and each watcher,
+ * which on_close frees; the adapter owns originals. Each timer and paused HTTP
+ * handle retains pending_request_t until its finish callback. One facil.io
+ * thread serializes all rl-c-client access.
  */
 
 typedef struct facil_app facil_app_t;
@@ -50,11 +52,12 @@ typedef struct pending_request {
 
 struct facil_app {
     r_runtime_client_t runtime;
-    udp_watcher_t watchers[2];
-    size_t watcher_count;
+    udp_watcher_t *watchers[2];
 };
 
 static facil_app_t app;
+
+static void resync_udp_watchers(facil_app_t *application);
 
 static void retain_pending(pending_request_t *pending) {
     pending->references++;
@@ -172,6 +175,7 @@ static void on_timer(void *data) {
     if (pending->completed) {
         return;
     }
+    facil_app_t *application = pending->app;
 
     pending->defer_completion = true;
     int status = r_runtime_admission_on_timeout(
@@ -186,6 +190,7 @@ static void on_timer(void *data) {
         complete_pending(pending,
             status != RCLIENT_OK ? status : RCLIENT_ERR_IO, NULL);
     }
+    resync_udp_watchers(application);
 }
 
 static int arm_timer(pending_request_t *pending) {
@@ -208,6 +213,7 @@ static int arm_timer(pending_request_t *pending) {
 
 static void on_http_paused(http_pause_handle_s *http) {
     pending_request_t *pending = http_paused_udata_get(http);
+    facil_app_t *application = pending->app;
     pending->http = http;
     pending->defer_completion = true;
     r_admission_config_t config;
@@ -230,6 +236,7 @@ static void on_http_paused(http_pause_handle_s *http) {
         complete_pending(pending,
             status != RCLIENT_OK ? status : RCLIENT_ERR_IO, NULL);
     }
+    resync_udp_watchers(application);
 }
 
 static void on_http_request(http_s *http) {
@@ -257,50 +264,101 @@ static void on_http_request(http_s *http) {
 static void on_udp_readable(intptr_t uuid, fio_protocol_s *protocol) {
     (void)uuid;
     udp_watcher_t *watcher = (udp_watcher_t *)protocol;
+    facil_app_t *application = watcher->app;
+    if (application->watchers[0] != watcher
+        && application->watchers[1] != watcher) {
+        return; /* Replaced; facil.io is closing this duplicate. */
+    }
     int status = r_runtime_client_on_readable(
-        &watcher->app->runtime,
+        &application->runtime,
         watcher->client_fd
     );
     if (status != RCLIENT_OK) {
         fprintf(stderr, "Ratelimitly UDP ingress failed: %s (%d)\n",
             r_runtime_status_name(status), status);
     }
+    resync_udp_watchers(application);
 }
 
-static int attach_udp_watchers(facil_app_t *application) {
-    size_t socket_count = r_runtime_socket_count(&application->runtime);
-    for (size_t i = 0; i < socket_count; i++) {
-        udp_watcher_t *watcher = &application->watchers[i];
-        watcher->app = application;
-        watcher->client_fd = r_runtime_socket_at(&application->runtime, i);
-        watcher->uuid = -1;
-        watcher->protocol.on_data = on_udp_readable;
-        int duplicate_fd = dup(watcher->client_fd);
-        if (duplicate_fd < 0 || fio_set_non_block(duplicate_fd) != 0) {
-            if (duplicate_fd >= 0) {
-                close(duplicate_fd);
-            }
-            return -1;
-        }
-        fio_attach_fd(duplicate_fd, &watcher->protocol);
-        watcher->uuid = fio_fd2uuid(duplicate_fd);
-        if (watcher->uuid == -1) {
-            close(duplicate_fd);
-            return -1;
-        }
-        application->watcher_count++;
+/* facil.io calls this once a watcher's duplicate is closed and idle. */
+static void on_udp_watcher_closed(intptr_t uuid, fio_protocol_s *protocol) {
+    (void)uuid;
+    free(protocol);
+}
+
+static int watch_runtime_socket(facil_app_t *application, size_t index) {
+    udp_watcher_t *watcher = calloc(1, sizeof(*watcher));
+    if (!watcher) {
+        return -1;
     }
+    watcher->app = application;
+    watcher->client_fd = r_runtime_socket_at(&application->runtime, index);
+    watcher->uuid = -1;
+    watcher->protocol.on_data = on_udp_readable;
+    watcher->protocol.on_close = on_udp_watcher_closed;
+    int duplicate_fd = dup(watcher->client_fd);
+    if (duplicate_fd < 0 || fio_set_non_block(duplicate_fd) != 0) {
+        if (duplicate_fd >= 0) {
+            close(duplicate_fd);
+        }
+        free(watcher);
+        return -1;
+    }
+    fio_attach_fd(duplicate_fd, &watcher->protocol);
+    intptr_t uuid = fio_fd2uuid(duplicate_fd);
+    if (uuid == -1) {
+        /* A failed attach schedules on_close, which frees the watcher. */
+        close(duplicate_fd);
+        return -1;
+    }
+    watcher->uuid = uuid;
+    application->watchers[index] = watcher;
     return 0;
 }
 
-static void detach_udp_watchers(facil_app_t *application) {
-    for (size_t i = 0; i < application->watcher_count; i++) {
-        if (application->watchers[i].uuid != -1) {
-            fio_force_close(application->watchers[i].uuid);
-            application->watchers[i].uuid = -1;
+/*
+ * The client replaces its UDP sockets when the server asks it to change source
+ * ports (after in-flight requests drain), and closes the old ones. Watch a
+ * duplicate of each current socket: when one changes, close the old duplicate,
+ * which also discards any late reply still queued on the old port. The runtime
+ * opens a replacement before closing the socket it replaces, so a replacement
+ * never reuses the old descriptor number.
+ */
+static int sync_udp_watchers(facil_app_t *application) {
+    int status = 0;
+    size_t socket_count = r_runtime_socket_count(&application->runtime);
+    for (size_t i = 0; i < socket_count; i++) {
+        udp_watcher_t *watcher = application->watchers[i];
+        if (watcher && watcher->client_fd
+                == r_runtime_socket_at(&application->runtime, i)) {
+            continue;
+        }
+        if (watcher) {
+            application->watchers[i] = NULL;
+            fio_force_close(watcher->uuid);
+        }
+        if (watch_runtime_socket(application, i) != 0) {
+            status = -1;
         }
     }
-    application->watcher_count = 0;
+    return status;
+}
+
+/* Call after every rl-c-client call: any of them may replace the sockets. */
+static void resync_udp_watchers(facil_app_t *application) {
+    if (sync_udp_watchers(application) != 0) {
+        fprintf(stderr, "failed to watch replacement rate-limit UDP sockets\n");
+    }
+}
+
+static void detach_udp_watchers(facil_app_t *application) {
+    for (size_t i = 0; i < 2; i++) {
+        udp_watcher_t *watcher = application->watchers[i];
+        if (watcher) {
+            application->watchers[i] = NULL;
+            fio_force_close(watcher->uuid);
+        }
+    }
 }
 
 int main(void) {
@@ -315,7 +373,7 @@ int main(void) {
             r_runtime_status_name(status), status);
         return EXIT_FAILURE;
     }
-    if (attach_udp_watchers(&app) != 0) {
+    if (sync_udp_watchers(&app) != 0) {
         fprintf(stderr, "failed to initialize rate-limit UDP watchers\n");
         detach_udp_watchers(&app);
         r_runtime_client_destroy(&app.runtime);

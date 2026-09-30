@@ -341,12 +341,26 @@ request_limited_resource() {
     || fail_case "server exited after GET /limited"
 }
 
+# Read at most 1 MiB of the example's stderr. The profile reader walks a file
+# line by line to EOF, so an example that floods stderr (a busy loop can write
+# tens of MB per second) would keep it reading until the job timed out with no
+# output. Fail with the first lines of the flood instead.
+SERVER_ERR_LIMIT=1048576
+check_request_profile() {
+  local bytes
+  bytes=$(wc -c <"$TMP_DIR/server.err")
+  ((bytes <= SERVER_ERR_LIMIT)) \
+    || fail_case "server.err passed 1 MiB ($bytes bytes): the example is flooding stderr"
+  head -c "$SERVER_ERR_LIMIT" "$TMP_DIR/server.err" >"$TMP_DIR/server.err.snapshot"
+  production_p0_report_profiles "$TMP_DIR/server.err.snapshot" "$NAME" 1 false \
+    || fail_case "expected one valid 25 ms / 3-replay request profile"
+}
+
 assert_http_port_is_free
 start_server
 wait_for_http
 request_limited_resource
-production_p0_report_profiles "$TMP_DIR/server.err" "$NAME" 1 false \
-  || fail_case "expected one valid 25 ms / 3-replay request profile"
+check_request_profile
 stop_server || fail_case "server cleanup exceeded its bounded deadline"
 
 echo "$NAME: PASS (production P0 rate admission and latency-report path)"
