@@ -19,6 +19,8 @@
 
 #include "../include/r_client.h"
 #include "../include/r_client_steering.h"
+#include "perf_latency_hist.h"
+#include "perf_pacer.h"
 
 #define PERF_MAX_PACKET 1400
 
@@ -31,6 +33,8 @@ typedef struct perf_config {
     uint64_t requests_per_client;
     bool has_duration;
     uint64_t duration_secs;
+    uint64_t target_rps;
+    uint64_t paced_start_ns;
     const char *bucket_prefix;
     uint64_t unit_ms;
     uint32_t replay_count;
@@ -41,9 +45,13 @@ typedef struct perf_config {
 
 typedef struct perf_stats {
     atomic_uint_fast64_t requests_sent;
+    atomic_uint_fast64_t logical_starts;
     atomic_uint_fast64_t responses_received;
     atomic_uint_fast64_t errors;
     atomic_uint_fast64_t total_latency_ns;
+    atomic_uint_fast64_t udp_datagrams_sent;
+    atomic_uint_fast64_t udp_payload_bytes_sent;
+    atomic_uint_fast64_t udp_send_failures;
 } perf_stats_t;
 
 typedef struct request_ctx {
@@ -55,6 +63,7 @@ typedef struct request_ctx {
 typedef struct io_ctx {
     int sockfd;
     bool ignore_steering;
+    perf_stats_t *stats;
 } io_ctx_t;
 
 typedef struct dns_resolver_ctx {
@@ -81,6 +90,7 @@ typedef struct worker_ctx {
     size_t client_id;
     const perf_config_t *config;
     perf_stats_t *stats;
+    uint64_t *latency_hist;
     int worker_error;
 } worker_ctx_t;
 
@@ -122,6 +132,26 @@ static uint64_t perf_now_ns_monotonic(void) {
         return 0;
     }
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
+static bool perf_sleep_until_ns(uint64_t due_ns) {
+    for (;;) {
+        uint64_t now_ns = perf_now_ns_monotonic();
+        if (now_ns == 0u) {
+            return false;
+        }
+        if (now_ns >= due_ns) {
+            return true;
+        }
+        uint64_t remaining = due_ns - now_ns;
+        struct timespec ts = {
+            .tv_sec = (time_t)(remaining / 1000000000u),
+            .tv_nsec = (long)(remaining % 1000000000u)
+        };
+        if (nanosleep(&ts, NULL) != 0 && errno != EINTR) {
+            return false;
+        }
+    }
 }
 
 static char *perf_strdup(const char *src) {
@@ -264,8 +294,11 @@ static int perf_udp_send(void *ctx, const r_addr_t *to, const uint8_t *buf, size
 
     ssize_t rc = sendto(io->sockfd, buf, len, 0, sa, sa_len);
     if (rc < 0 || (size_t)rc != len) {
+        atomic_fetch_add_explicit(&io->stats->udp_send_failures, 1, memory_order_relaxed);
         return -1;
     }
+    atomic_fetch_add_explicit(&io->stats->udp_datagrams_sent, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&io->stats->udp_payload_bytes_sent, len, memory_order_relaxed);
     return 0;
 }
 
@@ -695,11 +728,12 @@ static int perf_resolve_srv(
     return 0;
 }
 
-static void perf_record_stats(perf_stats_t *stats, uint64_t latency_ns, bool success) {
+static void perf_record_stats(perf_stats_t *stats, uint64_t *hist, uint64_t latency_ns, bool success) {
     atomic_fetch_add_explicit(&stats->requests_sent, 1, memory_order_relaxed);
     if (success) {
         atomic_fetch_add_explicit(&stats->responses_received, 1, memory_order_relaxed);
         atomic_fetch_add_explicit(&stats->total_latency_ns, latency_ns, memory_order_relaxed);
+        hist[perf_latency_bucket(latency_ns / 1000u)]++;
     } else {
         atomic_fetch_add_explicit(&stats->errors, 1, memory_order_relaxed);
     }
@@ -787,6 +821,7 @@ static void *perf_worker(void *arg) {
     io_ctx_t io;
     memset(&io, 0, sizeof(io));
     io.ignore_steering = worker->config->ignore_steering;
+    io.stats = worker->stats;
     io.sockfd = perf_setup_socket(0u);
     if (io.sockfd < 0) {
         worker->worker_error = 1;
@@ -864,12 +899,34 @@ static void *perf_worker(void *arg) {
     }
 
     uint64_t start_ns = perf_now_ns_monotonic();
+    perf_pacer_t pacer = {0};
+    if (worker->config->target_rps != 0u &&
+        !perf_pacer_init(&pacer, worker->config->paced_start_ns,
+                         worker->config->target_rps, worker->config->concurrent_clients,
+                         worker->client_id, worker->config->duration_secs * 1000000000ull)) {
+        worker->worker_error = 1;
+        r_client_destroy(client);
+        close(io.sockfd);
+        return (void *)(intptr_t)1;
+    }
     uint64_t request_count = 0;
     bool printed_error = false;
     bool printed_steering = false;
 
     for (;;) {
-        if (worker->config->has_duration) {
+        if (worker->config->target_rps != 0u) {
+            uint64_t due_ns = 0;
+            if (!perf_pacer_next(&pacer, perf_now_ns_monotonic(), &due_ns)) {
+                break;
+            }
+            if (!perf_sleep_until_ns(due_ns)) {
+                worker->worker_error = 1;
+                break;
+            }
+            if (perf_now_ns_monotonic() >= pacer.end_ns) {
+                break;
+            }
+        } else if (worker->config->has_duration) {
             uint64_t elapsed_ns = perf_now_ns_monotonic() - start_ns;
             if (elapsed_ns >= worker->config->duration_secs * 1000000000ull) {
                 break;
@@ -882,6 +939,7 @@ static void *perf_worker(void *arg) {
         memset(&req_ctx, 0, sizeof(req_ctx));
 
         uint64_t req_start = perf_now_ns_monotonic();
+        atomic_fetch_add_explicit(&worker->stats->logical_starts, 1, memory_order_relaxed);
         r_client_req_t *req = NULL;
         rc = r_client_check_rate_limit_async_borrowed(
             client,
@@ -898,7 +956,7 @@ static void *perf_worker(void *arg) {
 
         if (rc != RCLIENT_OK) {
             uint64_t latency_ns = perf_now_ns_monotonic() - req_start;
-            perf_record_stats(worker->stats, latency_ns, false);
+            perf_record_stats(worker->stats, worker->latency_hist, latency_ns, false);
             if (!printed_error) {
                 fprintf(stderr, "[ERROR] client_%zu: %s (%d)\n", worker->client_id, perf_err_str(rc), rc);
                 perf_maybe_print_dns_hint(rc);
@@ -911,7 +969,7 @@ static void *perf_worker(void *arg) {
         (void)perf_wait_for_request(&io, client, req, &req_ctx);
         uint64_t latency_ns = perf_now_ns_monotonic() - req_start;
         bool ok = req_ctx.status == RCLIENT_OK;
-        perf_record_stats(worker->stats, latency_ns, ok);
+        perf_record_stats(worker->stats, worker->latency_hist, latency_ns, ok);
 
         if (!ok && !printed_error) {
             fprintf(stderr, "[ERROR] client_%zu: %s (%d)\n", worker->client_id, perf_err_str(req_ctx.status), req_ctx.status);
@@ -969,6 +1027,20 @@ static uint64_t perf_parse_u64(const char *value, uint64_t fallback) {
     return (uint64_t)out;
 }
 
+static bool perf_parse_positive_u64(const char *value, uint64_t *out) {
+    if (!value || value[0] == '\0' || value[0] == '-') {
+        return false;
+    }
+    char *end = NULL;
+    errno = 0;
+    unsigned long long parsed = strtoull(value, &end, 10);
+    if (errno != 0 || end == value || *end != '\0' || parsed == 0u) {
+        return false;
+    }
+    *out = (uint64_t)parsed;
+    return true;
+}
+
 static perf_config_t perf_config_from_args(int argc, char **argv) {
     perf_config_t cfg;
     memset(&cfg, 0, sizeof(cfg));
@@ -980,6 +1052,8 @@ static perf_config_t perf_config_from_args(int argc, char **argv) {
     cfg.requests_per_client = 1000;
     cfg.has_duration = false;
     cfg.duration_secs = 0;
+    cfg.target_rps = 0;
+    cfg.paced_start_ns = 0;
     cfg.bucket_prefix = "perf_bucket";
     cfg.unit_ms = 20;
     cfg.replay_count = 1;
@@ -1005,6 +1079,26 @@ static perf_config_t perf_config_from_args(int argc, char **argv) {
     if (duration) {
         cfg.has_duration = true;
         cfg.duration_secs = perf_parse_u64(duration, 0);
+    }
+
+    const char *target_rps = perf_find_arg(argc, argv, "--target-rps");
+    if (!target_rps && perf_has_flag(argc, argv, "--target-rps")) {
+        fprintf(stderr, "Invalid --target-rps: missing value\n");
+        exit(2);
+    }
+    if (target_rps) {
+        uint64_t strict_clients = 0;
+        uint64_t strict_duration = 0;
+        if (!perf_parse_positive_u64(target_rps, &cfg.target_rps) ||
+            cfg.target_rps > 1000000u || !cfg.has_duration ||
+            !perf_parse_positive_u64(duration, &strict_duration) || strict_duration > 86400u ||
+            (clients && !perf_parse_positive_u64(clients, &strict_clients)) ||
+            (clients && (strict_clients > SIZE_MAX || strict_clients > 1024u)) ||
+            cfg.concurrent_clients == 0u) {
+            fprintf(stderr, "Invalid --target-rps: use 1..1000000 with --duration=1..86400 and --clients=1..1024\n");
+            exit(2);
+        }
+        cfg.duration_secs = strict_duration;
     }
 
     const char *auth = perf_find_arg(argc, argv, "--auth");
@@ -1050,6 +1144,7 @@ static void perf_print_help(void) {
     printf("  --clients=<n>           Concurrent clients (default: 10)\n");
     printf("  --requests=<n>          Requests per client (default: 1000)\n");
     printf("  --duration=<secs>       Run for duration instead of request count\n");
+    printf("  --target-rps=<n>        Pace logical starts globally (requires --duration)\n");
     printf("  --auth=<bech32>         Tenant auth Bech32 key (rl-cookie... or rl-aes...)\n");
     printf("                         Tenant ID is derived from the embedded key_id\n");
     printf("  --bucket-prefix=<name>  Bucket name prefix (default: perf_bucket)\n");
@@ -1060,13 +1155,14 @@ static void perf_print_help(void) {
     printf("Examples:\n");
     printf("  perf_client --clients=50 --requests=10000 --auth=rl-aes1...\n");
     printf("  perf_client --duration=60 --auth=rl-aes1...\n");
+    printf("  perf_client --duration=300 --target-rps=10000 --clients=200 --auth=rl-aes1...\n");
     printf("  perf_client --srv=custom.example.com --duration=30 --clients=50 --auth=rl-aes1...\n");
     printf("  perf_client --unit-ms=10 --replay-count=2 --auth=rl-aes1...\n");
 }
 
 static void *perf_progress_thread(void *arg) {
     perf_stats_t *stats = (perf_stats_t *)arg;
-    uint64_t last_sent = 0;
+    uint64_t last_started = 0;
     while (!atomic_load_explicit(&g_stop_progress, memory_order_relaxed)) {
         // Check stop flag at a finer granularity so short benchmarks don't
         // inherit a fixed 1s tail while waiting for this thread to exit.
@@ -1082,10 +1178,13 @@ static void *perf_progress_thread(void *arg) {
         if (atomic_load_explicit(&g_stop_progress, memory_order_relaxed)) {
             break;
         }
-        uint64_t sent = atomic_load_explicit(&stats->requests_sent, memory_order_relaxed);
-        uint64_t rps = sent - last_sent;
-        printf("Requests: %llu (+%llu/s)\n", (unsigned long long)sent, (unsigned long long)rps);
-        last_sent = sent;
+        uint64_t started = atomic_load_explicit(&stats->logical_starts, memory_order_relaxed);
+        uint64_t completed = atomic_load_explicit(&stats->requests_sent, memory_order_relaxed);
+        uint64_t rps = started - last_started;
+        printf("Logical starts: %llu (+%llu/s), completed: %llu\n",
+               (unsigned long long)started, (unsigned long long)rps,
+               (unsigned long long)completed);
+        last_started = started;
     }
     return NULL;
 }
@@ -1129,6 +1228,9 @@ int main(int argc, char **argv) {
     );
     if (cfg.has_duration) {
         printf("Duration: %llu s\n", (unsigned long long)cfg.duration_secs);
+        if (cfg.target_rps != 0u) {
+            printf("Target logical starts/sec: %llu\n", (unsigned long long)cfg.target_rps);
+        }
     } else {
         printf("Requests per client: %llu\n", (unsigned long long)cfg.requests_per_client);
         printf("Total requests: %llu\n", (unsigned long long)(cfg.requests_per_client * cfg.concurrent_clients));
@@ -1151,7 +1253,27 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    for (size_t i = 0; i < cfg.concurrent_clients; i++) {
+        workers[i].latency_hist = (uint64_t *)calloc(PERF_LATENCY_BUCKETS, sizeof(uint64_t));
+        if (!workers[i].latency_hist) {
+            fprintf(stderr, "[ERROR] Out of memory for latency histogram\n");
+            for (size_t j = 0; j < i; j++) {
+                free(workers[j].latency_hist);
+            }
+            free(threads);
+            free(workers);
+            free(started);
+            perf_dns_cache_reset(&dns_cache);
+            return 1;
+        }
+    }
+
     uint64_t start_ns = perf_now_ns_monotonic();
+    if (cfg.target_rps != 0u) {
+        /* All workers receive the same absolute schedule. Setup that takes
+         * longer than this lead-in is visible as missed offered slots. */
+        cfg.paced_start_ns = start_ns + 1000000000ull;
+    }
 
     for (size_t i = 0; i < cfg.concurrent_clients; i++) {
         workers[i].client_id = i;
@@ -1200,22 +1322,69 @@ int main(int argc, char **argv) {
     double elapsed_secs = (double)elapsed_ns / 1000000000.0;
 
     uint64_t sent = atomic_load_explicit(&stats.requests_sent, memory_order_relaxed);
+    uint64_t logical_started = atomic_load_explicit(&stats.logical_starts, memory_order_relaxed);
     uint64_t received = atomic_load_explicit(&stats.responses_received, memory_order_relaxed);
     uint64_t errors = atomic_load_explicit(&stats.errors, memory_order_relaxed);
     uint64_t total_latency = atomic_load_explicit(&stats.total_latency_ns, memory_order_relaxed);
+    uint64_t datagrams = atomic_load_explicit(&stats.udp_datagrams_sent, memory_order_relaxed);
+    uint64_t payload_bytes = atomic_load_explicit(&stats.udp_payload_bytes_sent, memory_order_relaxed);
+    uint64_t send_failures = atomic_load_explicit(&stats.udp_send_failures, memory_order_relaxed);
+    uint64_t *latency_hist = (uint64_t *)calloc(PERF_LATENCY_BUCKETS, sizeof(uint64_t));
+    if (!latency_hist) {
+        fprintf(stderr, "[ERROR] Out of memory for latency summary\n");
+        for (size_t i = 0; i < cfg.concurrent_clients; i++) {
+            free(workers[i].latency_hist);
+        }
+        free(threads);
+        free(workers);
+        free(started);
+        perf_dns_cache_reset(&dns_cache);
+        return 1;
+    }
+    for (size_t i = 0; i < cfg.concurrent_clients; i++) {
+        for (size_t bucket = 0; bucket < PERF_LATENCY_BUCKETS; bucket++) {
+            latency_hist[bucket] += workers[i].latency_hist[bucket];
+        }
+    }
+    uint64_t p99_us = perf_latency_percentile_upper_us(latency_hist, received, 99u);
 
-    double rps = elapsed_secs > 0 ? (double)sent / elapsed_secs : 0.0;
+    double rps = elapsed_secs > 0 ? (double)logical_started / elapsed_secs : 0.0;
+    if (cfg.target_rps != 0u) {
+        rps = (double)logical_started / (double)cfg.duration_secs;
+    }
     double success_rate = sent > 0 ? ((double)received / (double)sent) * 100.0 : 0.0;
     double avg_latency_us = received > 0 ? ((double)total_latency / (double)received) / 1000.0 : 0.0;
 
     printf("=== Performance Results ===\n");
-    printf("Duration: %.2fs\n", elapsed_secs);
-    printf("Requests sent: %llu\n", (unsigned long long)sent);
+    printf("Wall time including setup and drain: %.2fs\n", elapsed_secs);
+    if (cfg.target_rps != 0u) {
+        printf("Scheduled measurement duration: %llus\n",
+               (unsigned long long)cfg.duration_secs);
+    }
+    printf("Logical starts: %llu\n", (unsigned long long)logical_started);
+    printf("Logical requests completed: %llu\n", (unsigned long long)sent);
+    if (cfg.target_rps != 0u) {
+        uint64_t planned = cfg.target_rps * cfg.duration_secs;
+        printf("Scheduled logical slots: %llu\n", (unsigned long long)planned);
+        printf("Missed logical slots: %llu\n", (unsigned long long)(planned - logical_started));
+        printf("Achieved offered starts/sec: %.1f\n", rps);
+    }
+    printf("UDP datagrams sent: %llu\n", (unsigned long long)datagrams);
+    printf("UDP payload bytes sent: %llu\n", (unsigned long long)payload_bytes);
+    printf("UDP send failures: %llu\n", (unsigned long long)send_failures);
     printf("Responses received: %llu\n", (unsigned long long)received);
     printf("Errors: %llu\n", (unsigned long long)errors);
     printf("Success rate: %.2f%%\n", success_rate);
     printf("Requests/sec: %.0f\n", rps);
     printf("Average latency: %.1fus\n", avg_latency_us);
+    if (received > 0u) {
+        if (p99_us >= 1000000u) {
+            printf("P99 latency (successful, bucket upper bound): >=1000000us\n");
+        } else {
+            printf("P99 latency (successful, bucket upper bound): %lluus\n",
+                   (unsigned long long)p99_us);
+        }
+    }
     if (sent > 0 && received == 0 && errors > 0) {
         printf("Note: if the server has no tenant registered (or auth mismatches), it will drop requests without responding.\n");
     }
@@ -1225,8 +1394,12 @@ int main(int argc, char **argv) {
     }
 
     free(threads);
+    free(latency_hist);
+    for (size_t i = 0; i < cfg.concurrent_clients; i++) {
+        free(workers[i].latency_hist);
+    }
     free(workers);
     free(started);
     perf_dns_cache_reset(&dns_cache);
-    return 0;
+    return worker_errors > 0 ? 1 : 0;
 }

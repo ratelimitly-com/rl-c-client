@@ -47,7 +47,9 @@ TEST_BINS = \
 	tests/test_runtime \
 	tests/test_steering \
 	tests/test_responder \
-	tests/test_latency_tracker
+	tests/test_latency_tracker \
+	tests/test_perf_pacer \
+	tests/test_perf_latency_hist
 
 .PHONY: all clean test perf_client production-p0-probe test-responder
 
@@ -62,7 +64,7 @@ production-p0-probe: $(PRODUCTION_P0_PROBE_BIN)
 $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
 
-$(PERF_BIN): $(BIN_DIR) librclient.a $(BIN_DIR)/perf_client.c
+$(PERF_BIN): $(BIN_DIR) librclient.a $(BIN_DIR)/perf_client.c $(BIN_DIR)/perf_pacer.h $(BIN_DIR)/perf_latency_hist.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ $(BIN_DIR)/perf_client.c librclient.a -lcrypto -lresolv -pthread
 
 $(TEST_RESPONDER_BIN): $(BIN_DIR) librclient.a $(TEST_RESPONDER_OBJS)
@@ -89,6 +91,8 @@ test: $(TEST_BINS) $(TEST_RESPONDER_BIN) $(PERF_BIN)
 	./tests/test_workflow
 	./tests/test_steering
 	./tests/test_responder
+	./tests/test_perf_pacer
+	./tests/test_perf_latency_hist
 	bash ./tests/test_responder_cli.sh
 	bash ./tests/test_runtime.sh
 	bash ./tests/test_perf_client_cli.sh
@@ -130,6 +134,12 @@ tests/test_responder: tests/test_responder.c tools/r_test_responder_protocol.o l
 
 tests/test_latency_tracker: examples/latency_tracker/main.c librclient.a
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $^ -o $@ -lcrypto -lresolv -pthread
+
+tests/test_perf_pacer: tests/test_perf_pacer.c bin/perf_pacer.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $< -o $@
+
+tests/test_perf_latency_hist: tests/test_perf_latency_hist.c bin/perf_latency_hist.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $< -o $@
 
 $(PRODUCTION_P0_PROBE_BIN): tests/production_p0_probe.c librclient.a | $(BIN_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Werror $(LDFLAGS) $^ -o $@ -lcrypto -lresolv -pthread
