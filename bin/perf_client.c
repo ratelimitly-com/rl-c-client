@@ -21,6 +21,7 @@
 #include "../include/r_client_steering.h"
 #include "perf_latency_hist.h"
 #include "perf_pacer.h"
+#include "perf_workload.h"
 
 #define PERF_MAX_PACKET 1400
 
@@ -36,6 +37,8 @@ typedef struct perf_config {
     uint64_t target_rps;
     uint64_t paced_start_ns;
     const char *bucket_prefix;
+    uint32_t rate_limit;
+    bool shared_bucket;
     uint64_t unit_ms;
     uint32_t replay_count;
     bool ignore_steering;
@@ -876,12 +879,19 @@ static void *perf_worker(void *arg) {
     }
 
     char bucket_name[256];
-    snprintf(bucket_name, sizeof(bucket_name), "%s_%zu", worker->config->bucket_prefix, worker->client_id);
+    if (!perf_bucket_name(bucket_name, sizeof(bucket_name), worker->config->bucket_prefix,
+                          worker->client_id, worker->config->shared_bucket)) {
+        fprintf(stderr, "[ERROR] client_%zu: bucket name is empty or exceeds 255 bytes\n", worker->client_id);
+        r_client_destroy(client);
+        close(io.sockfd);
+        worker->worker_error = 1;
+        return (void *)(intptr_t)1;
+    }
 
     r_resource_request_t resource;
     memset(&resource, 0, sizeof(resource));
     resource.window_size_ms = 60000;
-    resource.rate_limit = 10000;
+    resource.rate_limit = worker->config->rate_limit;
     resource.tokens_requested = 1;
     rc = r_client_derive_bucket_id(
         bucket_name,
@@ -1055,6 +1065,8 @@ static perf_config_t perf_config_from_args(int argc, char **argv) {
     cfg.target_rps = 0;
     cfg.paced_start_ns = 0;
     cfg.bucket_prefix = "perf_bucket";
+    cfg.rate_limit = 10000u;
+    cfg.shared_bucket = false;
     cfg.unit_ms = 20;
     cfg.replay_count = 1;
     cfg.ignore_steering = false;
@@ -1100,6 +1112,21 @@ static perf_config_t perf_config_from_args(int argc, char **argv) {
         }
         cfg.duration_secs = strict_duration;
     }
+
+    const char *rate_limit = perf_find_arg(argc, argv, "--rate-limit");
+    if (!rate_limit && perf_has_flag(argc, argv, "--rate-limit")) {
+        fprintf(stderr, "Invalid --rate-limit: missing value\n");
+        exit(2);
+    }
+    if (rate_limit) {
+        uint64_t parsed = 0;
+        if (!perf_parse_positive_u64(rate_limit, &parsed) || parsed > UINT32_MAX) {
+            fprintf(stderr, "Invalid --rate-limit: use 1..4294967295\n");
+            exit(2);
+        }
+        cfg.rate_limit = (uint32_t)parsed;
+    }
+    cfg.shared_bucket = perf_has_flag(argc, argv, "--shared-bucket");
 
     const char *auth = perf_find_arg(argc, argv, "--auth");
     if (auth) {
@@ -1148,6 +1175,8 @@ static void perf_print_help(void) {
     printf("  --auth=<bech32>         Tenant auth Bech32 key (rl-cookie... or rl-aes...)\n");
     printf("                         Tenant ID is derived from the embedded key_id\n");
     printf("  --bucket-prefix=<name>  Bucket name prefix (default: perf_bucket)\n");
+    printf("  --rate-limit=<n>        Tokens per bucket per 60 seconds (default: 10000)\n");
+    printf("  --shared-bucket         Use one bucket across all load clients\n");
     printf("  --unit-ms=<n>           HA scheduling time unit (default: 20)\n");
     printf("  --replay-count=<n>      Replay rounds after the initial send (default: 1)\n");
     printf("  --ignore-steering       Ignore steering_feedback from server\n");
@@ -1155,7 +1184,7 @@ static void perf_print_help(void) {
     printf("Examples:\n");
     printf("  perf_client --clients=50 --requests=10000 --auth=rl-aes1...\n");
     printf("  perf_client --duration=60 --auth=rl-aes1...\n");
-    printf("  perf_client --duration=300 --target-rps=10000 --clients=200 --auth=rl-aes1...\n");
+    printf("  perf_client --duration=300 --target-rps=10000 --clients=200 --shared-bucket --rate-limit=1000000 --auth=rl-aes1...\n");
     printf("  perf_client --srv=custom.example.com --duration=30 --clients=50 --auth=rl-aes1...\n");
     printf("  perf_client --unit-ms=10 --replay-count=2 --auth=rl-aes1...\n");
 }
@@ -1221,6 +1250,9 @@ int main(int argc, char **argv) {
     printf("Auth: %s\n", perf_auth_label(cfg.auth_type));
     printf("Tenant: %llu\n", (unsigned long long)cfg.tenant_id);
     printf("Concurrent clients: %zu\n", cfg.concurrent_clients);
+    printf("Bucket name: %s%s\n", cfg.bucket_prefix,
+           cfg.shared_bucket ? " (shared across clients)" : "_<client_id> (per client)");
+    printf("Bucket limit: %u tokens / 60000 ms\n", cfg.rate_limit);
     printf(
         "HA policy: unit=%llu ms replays=%u completion_delivery=true\n",
         (unsigned long long)cfg.unit_ms,

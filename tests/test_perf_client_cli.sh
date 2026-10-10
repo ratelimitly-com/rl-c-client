@@ -23,6 +23,18 @@ set -e
 
 help=$($PERF_CLIENT --help)
 [[ $help == *'--target-rps=<n>'* ]] || fail "paced-mode help is missing"
+[[ $help == *'--rate-limit=<n>'* ]] || fail "workload rate-limit help is missing"
+[[ $help == *'--shared-bucket'* ]] || fail "shared-bucket help is missing"
+
+for invalid_rate in 0 4294967296 invalid; do
+  set +e
+  output=$($PERF_CLIENT --rate-limit="$invalid_rate" --auth="$SECRET" 2>&1)
+  status=$?
+  set -e
+  [[ $status -eq 2 ]] || fail "invalid rate limit $invalid_rate did not exit 2"
+  [[ $output == *'Invalid --rate-limit'* ]] || fail "rate-limit diagnostic is missing"
+  [[ $output != *"$SECRET"* ]] || fail "rate-limit diagnostic exposed the credential"
+done
 
 set +e
 output=$($PERF_CLIENT --target-rps=10000 --duration=0 --auth="$SECRET" 2>&1)
