@@ -46,9 +46,11 @@ static inline bool perf_pacer_next(perf_pacer_t *pacer, uint64_t now_ns, uint64_
 
     /* 128-bit arithmetic avoids overflow for multi-hour runs at high rates. */
     uint64_t elapsed_ns = now_ns > pacer->start_ns ? now_ns - pacer->start_ns : 0u;
-    uint64_t current_slot = (uint64_t)(((__uint128_t)elapsed_ns * pacer->target_rps) / 1000000000u);
+    /* Round up to the first global slot whose deadline has not passed. The
+     * floor would replay one stale slot after a slow request on each worker. */
+    uint64_t current_slot = (uint64_t)(((__uint128_t)elapsed_ns * pacer->target_rps + 999999999u) / 1000000000u);
     uint64_t desired_ordinal = current_slot > pacer->worker_id
-        ? (current_slot - pacer->worker_id) / pacer->worker_count
+        ? (current_slot - pacer->worker_id + pacer->worker_count - 1u) / pacer->worker_count
         : 0u;
     if (desired_ordinal > pacer->next_ordinal) {
         pacer->skipped_slots += desired_ordinal - pacer->next_ordinal;

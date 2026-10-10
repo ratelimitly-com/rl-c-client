@@ -26,10 +26,10 @@ static void test_slow_worker_skips_slots_without_catchup_burst(void) {
     uint64_t due = 0;
     assert(perf_pacer_next(&pacer, 1000000000ull, &due));
     assert(perf_pacer_next(&pacer, 1000750000ull, &due));
-    assert(due == 1000600000ull);
-    assert(pacer.skipped_slots == 2u);
-    assert(perf_pacer_next(&pacer, 1000750000ull, &due));
     assert(due == 1000800000ull);
+    assert(pacer.skipped_slots == 3u);
+    assert(perf_pacer_next(&pacer, 1000750000ull, &due));
+    assert(due == 1001000000ull);
 }
 
 static void test_no_requests_past_end_and_invalid_configuration(void) {
