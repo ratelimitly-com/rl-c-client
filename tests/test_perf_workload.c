@@ -13,6 +13,8 @@ int main(void) {
     assert(strcmp(first, "load") == 0);
     assert(strcmp(first, second) == 0);
 
+    memset(first, 'x', sizeof(first));
+    memset(second, 'y', sizeof(second));
     assert(perf_bucket_name(first, sizeof(first), "load", 0u, false));
     assert(perf_bucket_name(second, sizeof(second), "load", 1u, false));
     assert(strcmp(first, "load_0") == 0);

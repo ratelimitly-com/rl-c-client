@@ -36,8 +36,8 @@ static inline bool perf_bucket_name(
     if (prefix_len >= out_len) {
         return false;
     }
+    memcpy(out, prefix, prefix_len + 1u);
     if (shared) {
-        memcpy(out, prefix, prefix_len + 1u);
         return true;
     }
     int written = snprintf(out + prefix_len, out_len - prefix_len, "_%zu", client_id);
