@@ -22,4 +22,5 @@ tests/test_protocol
 tests/test_public_api
 tests/test_responder
 tests/test_perf_pacer
+tests/test_perf_workload
 tests/test_perf_latency_hist

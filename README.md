@@ -549,7 +549,7 @@ bin/perf_client --duration=60 --auth=rl-aes1...
 bin/perf_client --srv=api-key.example.com --duration=30 --clients=50 --auth=rl-aes1...
 RCLIENT_DNS_SERVER=127.0.0.1:5353 bin/perf_client --auth=rl-aes1...
 bin/perf_client --unit-ms=20 --replay-count=1 --auth=rl-aes1...
-bin/perf_client --duration=300 --target-rps=10000 --clients=200 --auth=rl-aes1...
+bin/perf_client --duration=300 --target-rps=10000 --clients=200 --shared-bucket --rate-limit=1000000 --auth=rl-aes1...
 ```
 
 Without `--srv`, the perf client derives
@@ -560,6 +560,15 @@ usable membership and requests fail with `RCLIENT_ERR_DNS`.
 
 For a fixed-load experiment, `--target-rps` schedules logical request starts
 across the client threads on one monotonic timeline. It requires `--duration`.
+By default each client uses a distinct bucket with a 10,000-token/60-second
+limit. Use `--shared-bucket` to make all clients address the same bucket and
+`--rate-limit` to set that bucket's tokens per 60 seconds. For a 10k/s
+allow-heavy experiment, a one-million-token limit leaves headroom; choose a
+lower limit and a fresh bucket name for a separate deny-heavy experiment.
+Record the bucket mode and limit alongside results: a high offered rate alone
+does not establish which server-side resource was exercised. Compare the
+reported `Granted` and `Denied` counts to confirm the intended decision mix;
+`Responses received` includes both.
 Each thread processes one request at a time; if responses are too slow or there
 are too few threads, obsolete slots are **skipped**, not replayed in a burst.
 Compare `Scheduled logical slots`, `Logical starts`, and `Missed logical slots`
