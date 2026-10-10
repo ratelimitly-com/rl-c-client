@@ -21,5 +21,13 @@ int main(void) {
     assert(!perf_bucket_name(first, 4u, "load", 0u, true));
     assert(!perf_bucket_name(first, 4u, "load", 0u, false));
     assert(!perf_bucket_name(first, sizeof(first), "", 0u, true));
+
+    r_rate_limit_result_t result = {0};
+    result.success = true;
+    assert(perf_request_outcome(RCLIENT_OK, &result) == PERF_OUTCOME_GRANTED);
+    result.success = false;
+    assert(perf_request_outcome(RCLIENT_OK, &result) == PERF_OUTCOME_DENIED);
+    assert(perf_request_outcome(RCLIENT_OK, NULL) == PERF_OUTCOME_ERROR);
+    assert(perf_request_outcome(RCLIENT_ERR_CONFIG, &result) == PERF_OUTCOME_ERROR);
     return 0;
 }

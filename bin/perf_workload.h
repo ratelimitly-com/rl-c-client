@@ -6,6 +6,21 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "../include/r_client.h"
+
+typedef enum perf_outcome {
+    PERF_OUTCOME_ERROR = 0,
+    PERF_OUTCOME_GRANTED,
+    PERF_OUTCOME_DENIED
+} perf_outcome_t;
+
+static inline perf_outcome_t perf_request_outcome(int status, const r_rate_limit_result_t *result) {
+    if (status != RCLIENT_OK || !result) {
+        return PERF_OUTCOME_ERROR;
+    }
+    return result->success ? PERF_OUTCOME_GRANTED : PERF_OUTCOME_DENIED;
+}
+
 /* One name means one server-side bucket, even with multiple load workers. */
 static inline bool perf_bucket_name(
     char *out,

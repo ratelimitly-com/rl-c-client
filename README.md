@@ -566,7 +566,9 @@ limit. Use `--shared-bucket` to make all clients address the same bucket and
 allow-heavy experiment, a one-million-token limit leaves headroom; choose a
 lower limit and a fresh bucket name for a separate deny-heavy experiment.
 Record the bucket mode and limit alongside results: a high offered rate alone
-does not establish which server-side resource was exercised.
+does not establish which server-side resource was exercised. Compare the
+reported `Granted` and `Denied` counts to confirm the intended decision mix;
+`Responses received` includes both.
 Each thread processes one request at a time; if responses are too slow or there
 are too few threads, obsolete slots are **skipped**, not replayed in a burst.
 Compare `Scheduled logical slots`, `Logical starts`, and `Missed logical slots`

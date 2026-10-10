@@ -50,6 +50,8 @@ typedef struct perf_stats {
     atomic_uint_fast64_t requests_sent;
     atomic_uint_fast64_t logical_starts;
     atomic_uint_fast64_t responses_received;
+    atomic_uint_fast64_t granted;
+    atomic_uint_fast64_t denied;
     atomic_uint_fast64_t errors;
     atomic_uint_fast64_t total_latency_ns;
     atomic_uint_fast64_t udp_datagrams_sent;
@@ -61,6 +63,7 @@ typedef struct request_ctx {
     bool done;
     int status;
     bool steering_feedback;
+    perf_outcome_t outcome;
 } request_ctx_t;
 
 typedef struct io_ctx {
@@ -748,8 +751,9 @@ static void on_rate_limit(void *user, r_client_req_t *req, int status, const r_r
     if (!ctx) {
         return;
     }
-    ctx->status = status;
+    ctx->status = status == RCLIENT_OK && !result ? RCLIENT_ERR_PROTOCOL : status;
     ctx->steering_feedback = result ? result->steering_feedback : false;
+    ctx->outcome = perf_request_outcome(status, result);
     ctx->done = true;
 }
 
@@ -978,8 +982,13 @@ static void *perf_worker(void *arg) {
 
         (void)perf_wait_for_request(&io, client, req, &req_ctx);
         uint64_t latency_ns = perf_now_ns_monotonic() - req_start;
-        bool ok = req_ctx.status == RCLIENT_OK;
+        bool ok = req_ctx.outcome != PERF_OUTCOME_ERROR;
         perf_record_stats(worker->stats, worker->latency_hist, latency_ns, ok);
+        if (req_ctx.outcome == PERF_OUTCOME_GRANTED) {
+            atomic_fetch_add_explicit(&worker->stats->granted, 1, memory_order_relaxed);
+        } else if (req_ctx.outcome == PERF_OUTCOME_DENIED) {
+            atomic_fetch_add_explicit(&worker->stats->denied, 1, memory_order_relaxed);
+        }
 
         if (!ok && !printed_error) {
             fprintf(stderr, "[ERROR] client_%zu: %s (%d)\n", worker->client_id, perf_err_str(req_ctx.status), req_ctx.status);
@@ -1356,6 +1365,8 @@ int main(int argc, char **argv) {
     uint64_t sent = atomic_load_explicit(&stats.requests_sent, memory_order_relaxed);
     uint64_t logical_started = atomic_load_explicit(&stats.logical_starts, memory_order_relaxed);
     uint64_t received = atomic_load_explicit(&stats.responses_received, memory_order_relaxed);
+    uint64_t granted = atomic_load_explicit(&stats.granted, memory_order_relaxed);
+    uint64_t denied = atomic_load_explicit(&stats.denied, memory_order_relaxed);
     uint64_t errors = atomic_load_explicit(&stats.errors, memory_order_relaxed);
     uint64_t total_latency = atomic_load_explicit(&stats.total_latency_ns, memory_order_relaxed);
     uint64_t datagrams = atomic_load_explicit(&stats.udp_datagrams_sent, memory_order_relaxed);
@@ -1405,6 +1416,8 @@ int main(int argc, char **argv) {
     printf("UDP payload bytes sent: %llu\n", (unsigned long long)payload_bytes);
     printf("UDP send failures: %llu\n", (unsigned long long)send_failures);
     printf("Responses received: %llu\n", (unsigned long long)received);
+    printf("Granted: %llu\n", (unsigned long long)granted);
+    printf("Denied: %llu\n", (unsigned long long)denied);
     printf("Errors: %llu\n", (unsigned long long)errors);
     printf("Success rate: %.2f%%\n", success_rate);
     printf("Requests/sec: %.0f\n", rps);
