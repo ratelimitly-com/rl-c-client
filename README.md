@@ -549,6 +549,7 @@ bin/perf_client --duration=60 --auth=rl-aes1...
 bin/perf_client --srv=api-key.example.com --duration=30 --clients=50 --auth=rl-aes1...
 RCLIENT_DNS_SERVER=127.0.0.1:5353 bin/perf_client --auth=rl-aes1...
 bin/perf_client --unit-ms=20 --replay-count=1 --auth=rl-aes1...
+bin/perf_client --duration=300 --target-rps=10000 --clients=200 --auth=rl-aes1...
 ```
 
 Without `--srv`, the perf client derives
@@ -556,6 +557,22 @@ Without `--srv`, the perf client derives
 Use `--srv` only for a custom, development, or staging DNS zone. That zone
 must publish conforming `s-<decimal>` SRV targets; otherwise startup has no
 usable membership and requests fail with `RCLIENT_ERR_DNS`.
+
+For a fixed-load experiment, `--target-rps` schedules logical request starts
+across the client threads on one monotonic timeline. It requires `--duration`.
+Each thread processes one request at a time; if responses are too slow or there
+are too few threads, obsolete slots are **skipped**, not replayed in a burst.
+Compare `Scheduled logical slots`, `Logical starts`, and `Missed logical slots`
+before interpreting a server result. `UDP datagrams sent` and payload bytes
+count successful socket sends, including HA fan-out and retries; they are not
+the number of logical requests. The successful-request p99 is an approximate
+histogram bucket upper bound (1 µs bins to 10 ms, 10 µs to 100 ms, and 100 µs
+to 1 s; an overflow result is reported as at least 1 s). A rate below the
+target means the generator did not deliver the intended fixed load; increase
+client concurrency or use a faster load host and rerun. Keep credentials out of
+shared logs. The per-thread histogram uses about 224 KiB of load-generator
+memory per client; it is allocated before traffic starts and does not affect
+the server's memory budget.
 
 HA-policy flags:
 

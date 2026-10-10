@@ -21,3 +21,5 @@ tests/test_client_quota
 tests/test_protocol
 tests/test_public_api
 tests/test_responder
+tests/test_perf_pacer
+tests/test_perf_latency_hist

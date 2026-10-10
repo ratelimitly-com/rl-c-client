@@ -20,3 +20,21 @@ set -e
   || fail "invalid authentication diagnostic is missing"
 [[ $output != *"$SECRET"* ]] \
   || fail "invalid authentication diagnostic exposed the credential"
+
+help=$($PERF_CLIENT --help)
+[[ $help == *'--target-rps=<n>'* ]] || fail "paced-mode help is missing"
+
+set +e
+output=$($PERF_CLIENT --target-rps=10000 --duration=0 --auth="$SECRET" 2>&1)
+status=$?
+set -e
+[[ $status -eq 2 ]] || fail "paced mode without a valid duration did not exit 2"
+[[ $output == *'Invalid --target-rps'* ]] || fail "paced-mode diagnostic is missing"
+[[ $output != *"$SECRET"* ]] || fail "paced-mode diagnostic exposed the credential"
+
+set +e
+output=$($PERF_CLIENT --target-rps=10000 --duration=1 --clients=1025 --auth="$SECRET" 2>&1)
+status=$?
+set -e
+[[ $status -eq 2 ]] || fail "unbounded paced-mode client count did not exit 2"
+[[ $output == *'--clients=1..1024'* ]] || fail "paced-mode client bound is missing"
