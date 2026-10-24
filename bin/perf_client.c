@@ -23,7 +23,9 @@
 #include "perf_pacer.h"
 #include "perf_workload.h"
 
-#define PERF_MAX_PACKET 1400
+/* Receive a whole ordinary IPv4/IPv6 UDP payload, including malformed traffic.
+ * Keep this buffer per worker, not on every request's call stack. */
+#define PERF_MAX_PACKET 65536u
 
 typedef struct perf_config {
     const char *srv_domain;
@@ -54,10 +56,21 @@ typedef struct perf_stats {
     atomic_uint_fast64_t denied;
     atomic_uint_fast64_t errors;
     atomic_uint_fast64_t total_latency_ns;
-    atomic_uint_fast64_t udp_datagrams_sent;
-    atomic_uint_fast64_t udp_payload_bytes_sent;
-    atomic_uint_fast64_t udp_send_failures;
 } perf_stats_t;
+
+typedef struct perf_traffic_direction {
+    uint64_t datagrams;
+    uint64_t payload_bytes;
+    uint64_t ip_bytes;
+} perf_traffic_direction_t;
+
+/* Each worker updates its own counters; main merges them only after join. */
+typedef struct perf_traffic {
+    perf_traffic_direction_t sent;
+    perf_traffic_direction_t received;
+    uint64_t send_failures;
+    bool incomplete;
+} perf_traffic_t;
 
 typedef struct request_ctx {
     bool done;
@@ -69,7 +82,8 @@ typedef struct request_ctx {
 typedef struct io_ctx {
     int sockfd;
     bool ignore_steering;
-    perf_stats_t *stats;
+    perf_traffic_t *traffic;
+    uint8_t receive_buffer[PERF_MAX_PACKET];
 } io_ctx_t;
 
 typedef struct dns_resolver_ctx {
@@ -97,6 +111,7 @@ typedef struct worker_ctx {
     const perf_config_t *config;
     perf_stats_t *stats;
     uint64_t *latency_hist;
+    perf_traffic_t traffic;
     int worker_error;
 } worker_ctx_t;
 
@@ -277,9 +292,65 @@ static bool perf_parse_dns_server(const char *value, struct sockaddr_in *out) {
     return true;
 }
 
+static void perf_traffic_add(uint64_t *counter, uint64_t bytes, bool *incomplete) {
+    if (bytes > UINT64_MAX - *counter) {
+        *counter = UINT64_MAX;
+        *incomplete = true;
+    } else {
+        *counter += bytes;
+    }
+}
+
+static void perf_record_traffic(
+    perf_traffic_t *traffic, bool sent, const struct sockaddr *peer,
+    socklen_t peer_len, size_t payload_bytes
+) {
+    uint64_t overhead;
+    if (peer->sa_family == AF_INET && peer_len >= sizeof(struct sockaddr_in)) {
+        overhead = 28u;
+    } else if (peer->sa_family == AF_INET6 && peer_len >= sizeof(struct sockaddr_in6)) {
+        const struct sockaddr_in6 *v6 = (const struct sockaddr_in6 *)peer;
+        /* A dual-stack socket represents IPv4 peers with an IPv6 sockaddr. */
+        overhead = IN6_IS_ADDR_V4MAPPED(&v6->sin6_addr) ? 28u : 48u;
+    } else {
+        traffic->incomplete = true;
+        return;
+    }
+    perf_traffic_direction_t *direction = sent ? &traffic->sent : &traffic->received;
+    perf_traffic_add(&direction->datagrams, 1u, &traffic->incomplete);
+    perf_traffic_add(&direction->payload_bytes, payload_bytes, &traffic->incomplete);
+    perf_traffic_add(&direction->ip_bytes, payload_bytes, &traffic->incomplete);
+    perf_traffic_add(&direction->ip_bytes, overhead, &traffic->incomplete);
+}
+
+static void perf_traffic_merge(perf_traffic_t *total, const perf_traffic_t *worker) {
+    total->incomplete |= worker->incomplete;
+    perf_traffic_add(&total->sent.datagrams, worker->sent.datagrams, &total->incomplete);
+    perf_traffic_add(&total->sent.payload_bytes, worker->sent.payload_bytes, &total->incomplete);
+    perf_traffic_add(&total->sent.ip_bytes, worker->sent.ip_bytes, &total->incomplete);
+    perf_traffic_add(&total->received.datagrams, worker->received.datagrams, &total->incomplete);
+    perf_traffic_add(&total->received.payload_bytes, worker->received.payload_bytes, &total->incomplete);
+    perf_traffic_add(&total->received.ip_bytes, worker->received.ip_bytes, &total->incomplete);
+    perf_traffic_add(&total->send_failures, worker->send_failures, &total->incomplete);
+}
+
+static void perf_print_traffic(const perf_traffic_t *traffic) {
+    printf("UDP datagrams sent: %llu\n", (unsigned long long)traffic->sent.datagrams);
+    printf("UDP payload bytes sent: %llu\n", (unsigned long long)traffic->sent.payload_bytes);
+    printf("UDP send failures: %llu\n", (unsigned long long)traffic->send_failures);
+    printf("UDP datagrams received: %llu\n", (unsigned long long)traffic->received.datagrams);
+    printf("UDP payload bytes received: %llu\n", (unsigned long long)traffic->received.payload_bytes);
+    printf("Sent bytes (IP estimate): %llu\n", (unsigned long long)traffic->sent.ip_bytes);
+    printf("Received bytes (IP estimate): %llu\n", (unsigned long long)traffic->received.ip_bytes);
+    printf("Traffic estimates include UDP/IP headers: IPv4 +28 bytes, IPv6 +48 bytes; DNS excluded.\n");
+    if (traffic->incomplete) {
+        printf("Warning: traffic counters are incomplete or saturated; do not use them for reconciliation.\n");
+    }
+}
+
 static int perf_udp_send(void *ctx, const r_addr_t *to, const uint8_t *buf, size_t len) {
     io_ctx_t *io = (io_ctx_t *)ctx;
-    if (!io || io->sockfd < 0 || !to || !buf) {
+    if (!io || io->sockfd < 0 || !io->traffic || !to || !buf) {
         return -1;
     }
     const struct sockaddr *sa = (const struct sockaddr *)&to->sa;
@@ -300,12 +371,25 @@ static int perf_udp_send(void *ctx, const r_addr_t *to, const uint8_t *buf, size
 
     ssize_t rc = sendto(io->sockfd, buf, len, 0, sa, sa_len);
     if (rc < 0 || (size_t)rc != len) {
-        atomic_fetch_add_explicit(&io->stats->udp_send_failures, 1, memory_order_relaxed);
+        perf_traffic_add(&io->traffic->send_failures, 1u, &io->traffic->incomplete);
         return -1;
     }
-    atomic_fetch_add_explicit(&io->stats->udp_datagrams_sent, 1, memory_order_relaxed);
-    atomic_fetch_add_explicit(&io->stats->udp_payload_bytes_sent, len, memory_order_relaxed);
+    perf_record_traffic(io->traffic, true, sa, sa_len, len);
     return 0;
+}
+
+static ssize_t perf_udp_receive(io_ctx_t *io, r_addr_t *from) {
+    memset(from, 0, sizeof(*from));
+    from->len = sizeof(from->sa);
+    ssize_t received = recvfrom(io->sockfd, io->receive_buffer,
+                               sizeof(io->receive_buffer), 0,
+                               (struct sockaddr *)&from->sa, &from->len);
+    if (received >= 0) {
+        /* Count physical packets before authentication, deduplication or matching. */
+        perf_record_traffic(io->traffic, false, (const struct sockaddr *)&from->sa,
+                            from->len, (size_t)received);
+    }
+    return received;
 }
 
 static void perf_on_steering_feedback(void *ctx, bool keep_port) {
@@ -762,7 +846,6 @@ static int perf_wait_for_request(io_ctx_t *io, r_client_t *client, r_client_req_
         return RCLIENT_ERR_CONFIG;
     }
 
-    uint8_t buf[PERF_MAX_PACKET];
     while (!ctx->done) {
         uint64_t deadline_ms = 0;
         if (r_client_request_deadline_ms(req, &deadline_ms) != RCLIENT_OK) {
@@ -786,20 +869,15 @@ static int perf_wait_for_request(io_ctx_t *io, r_client_t *client, r_client_req_
         int prc = poll(&pfd, 1, timeout_ms);
         if (prc > 0 && (pfd.revents & POLLIN)) {
             for (;;) {
-                struct sockaddr_storage from;
-                socklen_t from_len = sizeof(from);
-                ssize_t n = recvfrom(io->sockfd, buf, sizeof(buf), 0, (struct sockaddr *)&from, &from_len);
+                r_addr_t addr;
+                ssize_t n = perf_udp_receive(io, &addr);
                 if (n < 0) {
                     if (errno == EAGAIN || errno == EWOULDBLOCK) {
                         break;
                     }
                     break;
                 }
-                r_addr_t addr;
-                memset(&addr, 0, sizeof(addr));
-                addr.len = from_len;
-                memcpy(&addr.sa, &from, from_len);
-                (void)r_client_on_datagram(client, buf, (size_t)n, &addr);
+                (void)r_client_on_datagram(client, io->receive_buffer, (size_t)n, &addr);
                 if (ctx->done) {
                     break;
                 }
@@ -826,9 +904,10 @@ static void *perf_worker(void *arg) {
     }
 
     io_ctx_t io;
+    perf_traffic_t traffic = {0};
     memset(&io, 0, sizeof(io));
     io.ignore_steering = worker->config->ignore_steering;
-    io.stats = worker->stats;
+    io.traffic = &traffic;
     io.sockfd = perf_setup_socket(0u);
     if (io.sockfd < 0) {
         worker->worker_error = 1;
@@ -877,6 +956,7 @@ static void *perf_worker(void *arg) {
     if (rc != RCLIENT_OK) {
         fprintf(stderr, "[ERROR] client_%zu: %s (%d)\n", worker->client_id, perf_err_str(rc), rc);
         perf_maybe_print_dns_hint(rc);
+        worker->traffic = traffic;
         close(io.sockfd);
         worker->worker_error = 1;
         return (void *)(intptr_t)1;
@@ -886,6 +966,7 @@ static void *perf_worker(void *arg) {
     if (!perf_bucket_name(bucket_name, sizeof(bucket_name), worker->config->bucket_prefix,
                           worker->client_id, worker->config->shared_bucket)) {
         fprintf(stderr, "[ERROR] client_%zu: bucket name is empty or exceeds 255 bytes\n", worker->client_id);
+        worker->traffic = traffic;
         r_client_destroy(client);
         close(io.sockfd);
         worker->worker_error = 1;
@@ -906,6 +987,7 @@ static void *perf_worker(void *arg) {
     );
     if (rc != RCLIENT_OK) {
         fprintf(stderr, "[ERROR] client_%zu: failed to derive bucket ID\n", worker->client_id);
+        worker->traffic = traffic;
         r_client_destroy(client);
         close(io.sockfd);
         worker->worker_error = 1;
@@ -1005,6 +1087,7 @@ static void *perf_worker(void *arg) {
     }
 
     r_client_destroy(client);
+    worker->traffic = traffic;
     close(io.sockfd);
     return (void *)(intptr_t)0;
 }
@@ -1190,6 +1273,8 @@ static void perf_print_help(void) {
     printf("  --replay-count=<n>      Replay rounds after the initial send (default: 1)\n");
     printf("  --ignore-steering       Ignore steering_feedback from server\n");
     printf("  --debug-steering        Show steering_feedback values\n\n");
+    printf("Traffic summary: Sent bytes (IP estimate), Received bytes (IP estimate).\n");
+    printf("Includes UDP/IP base headers: IPv4 +28 bytes, IPv6 +48 bytes; DNS excluded.\n\n");
     printf("Examples:\n");
     printf("  perf_client --clients=50 --requests=10000 --auth=rl-aes1...\n");
     printf("  perf_client --duration=60 --auth=rl-aes1...\n");
@@ -1369,9 +1454,12 @@ int main(int argc, char **argv) {
     uint64_t denied = atomic_load_explicit(&stats.denied, memory_order_relaxed);
     uint64_t errors = atomic_load_explicit(&stats.errors, memory_order_relaxed);
     uint64_t total_latency = atomic_load_explicit(&stats.total_latency_ns, memory_order_relaxed);
-    uint64_t datagrams = atomic_load_explicit(&stats.udp_datagrams_sent, memory_order_relaxed);
-    uint64_t payload_bytes = atomic_load_explicit(&stats.udp_payload_bytes_sent, memory_order_relaxed);
-    uint64_t send_failures = atomic_load_explicit(&stats.udp_send_failures, memory_order_relaxed);
+    perf_traffic_t traffic = {0};
+    for (size_t i = 0; i < cfg.concurrent_clients; i++) {
+        if (started[i]) {
+            perf_traffic_merge(&traffic, &workers[i].traffic);
+        }
+    }
     uint64_t *latency_hist = (uint64_t *)calloc(PERF_LATENCY_BUCKETS, sizeof(uint64_t));
     if (!latency_hist) {
         fprintf(stderr, "[ERROR] Out of memory for latency summary\n");
@@ -1412,9 +1500,7 @@ int main(int argc, char **argv) {
         printf("Missed logical slots: %llu\n", (unsigned long long)(planned - logical_started));
         printf("Achieved offered starts/sec: %.1f\n", rps);
     }
-    printf("UDP datagrams sent: %llu\n", (unsigned long long)datagrams);
-    printf("UDP payload bytes sent: %llu\n", (unsigned long long)payload_bytes);
-    printf("UDP send failures: %llu\n", (unsigned long long)send_failures);
+    perf_print_traffic(&traffic);
     printf("Responses received: %llu\n", (unsigned long long)received);
     printf("Granted: %llu\n", (unsigned long long)granted);
     printf("Denied: %llu\n", (unsigned long long)denied);
