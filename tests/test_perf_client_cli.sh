@@ -25,6 +25,10 @@ help=$($PERF_CLIENT --help)
 [[ $help == *'--target-rps=<n>'* ]] || fail "paced-mode help is missing"
 [[ $help == *'--rate-limit=<n>'* ]] || fail "workload rate-limit help is missing"
 [[ $help == *'--shared-bucket'* ]] || fail "shared-bucket help is missing"
+[[ $help == *'Sent bytes (IP estimate)'* && $help == *'Received bytes (IP estimate)'* ]] \
+  || fail "traffic summary help is missing"
+[[ $help == *'IPv4 +28 bytes, IPv6 +48 bytes; DNS excluded'* ]] \
+  || fail "traffic byte accounting boundary is missing"
 
 for invalid_rate in 0 4294967296 invalid; do
   set +e

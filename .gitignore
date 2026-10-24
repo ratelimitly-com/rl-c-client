@@ -24,3 +24,4 @@ tests/test_responder
 tests/test_perf_pacer
 tests/test_perf_workload
 tests/test_perf_latency_hist
+tests/test_perf_client_traffic

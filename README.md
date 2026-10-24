@@ -581,7 +581,31 @@ target means the generator did not deliver the intended fixed load; increase
 client concurrency or use a faster load host and rerun. Keep credentials out of
 shared logs. The per-thread histogram uses about 224 KiB of load-generator
 memory per client; it is allocated before traffic starts and does not affect
-the server's memory budget.
+the server's memory budget. Each worker also keeps a 64 KiB UDP receive buffer
+so oversized malformed datagrams are counted without truncation.
+
+The final summary also reports **Sent bytes (IP estimate)** and **Received
+bytes (IP estimate)** from the client's point of view. Both include the UDP
+payload (including authentication), the UDP header and an estimated IP header:
+payload + **28 bytes for IPv4** or + **48 bytes for IPv6**, per datagram.
+IPv4-mapped addresses on dual-stack sockets use the IPv4 estimate.
+
+These totals cover all workers and physical HA sends, retries and completion
+delivery—not just logical requests or the selected response. Failed local sends
+add no sent bytes. Received datagrams count before protocol/authentication
+validation, including malformed, duplicate and unmatched packets actually read
+from the socket. `Responses received` remains the count of completed logical
+requests, not physical received datagrams. DNS traffic is excluded.
+
+For reconciliation, compare client **sent** bytes with the API-key's server
+**received** bytes, and client **received** bytes with server **sent** bytes.
+Take before/after readings for the same run on every replica and queue, isolate
+the API-key from other workloads, and sum the server deltas—not logical request
+metrics or admin-key traffic. UDP loss, late unread replies and socket rotation
+can prevent equality. No additional end-of-run waiting or socket retention is
+introduced. Estimates exclude extra IP options/extensions, fragmentation and
+Ethernet/tunnel overhead; they are not provider invoice measurements. A warning
+marks saturated/incomplete counters as unsuitable for reconciliation.
 
 HA-policy flags:
 
