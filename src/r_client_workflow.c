@@ -1,4 +1,5 @@
 #include "../include/r_client_workflow.h"
+#include "r_protocol.h"
 
 #include <string.h>
 
@@ -26,7 +27,9 @@ static bool r_admission_config_valid(const r_admission_config_t *config) {
         && config->bucket_name[0] != '\0'
         && config->latency_tracker_name
         && config->latency_tracker_name[0] != '\0'
-        && config->window_size_ms > 0u
+        && config->window_size_ms >= R_MIN_RATE_WINDOW_MS
+        && config->window_size_ms <= R_MAX_RATE_WINDOW_MS
+        && (config->window_size_ms % R_RATE_WINDOW_UNIT_MS) == 0u
         && config->rate_limit > 0u
         && config->tokens_requested > 0u
         && config->latency_threshold_ms > 0u

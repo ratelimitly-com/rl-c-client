@@ -7,9 +7,9 @@
 #include "../src/r_protocol.h"
 
 const char R_TEST_RESPONDER_AES_KEY[] =
-    "rl-aes1qypsqqqqqqqqqqqrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqdgrrulcvcn0x5";
+    "rl-aes1qgpsqqqqqqqqqqqrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqdgrrulcv9v93m";
 const char R_TEST_RESPONDER_COOKIE_KEY[] =
-    "rl-cookie1qypqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqfgrrulczhg30p";
+    "rl-cookie1qgpqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqfgrrulcz2hmcw";
 
 typedef struct r_test_parsed_request {
     r_tenant_header_t tenant;

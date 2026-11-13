@@ -211,8 +211,8 @@ static uint64_t r_now_ms(r_client_t *client) {
     return client->io.now_ms(client->io.ctx);
 }
 
-static bool r_rate_window_size_quota(const r_client_t *client, uint32_t *out_limit) {
-    if (!client || !client->has_quotas || !out_limit) {
+static bool r_rate_window_size_quota(const r_client_t *client, uint64_t *out_limit) {
+    if (!client || !client->has_quotas || client->quotas.rate_window_unlimited || !out_limit) {
         return false;
     }
     *out_limit = client->quotas.rate_window_size_ms_max;
@@ -332,12 +332,16 @@ static int r_validate_resource_windows(
     const r_resource_request_t *resources,
     size_t resource_count
 ) {
-    uint32_t limit = 0;
-    if (!r_rate_window_size_quota(client, &limit)) {
-        return RCLIENT_OK;
-    }
+    uint64_t limit = 0;
+    const bool has_finite_limit = r_rate_window_size_quota(client, &limit);
     for (size_t i = 0; i < resource_count; i++) {
-        if (resources[i].window_size_ms > limit) {
+        uint64_t w = resources[i].window_size_ms;
+        if (w < R_MIN_RATE_WINDOW_MS
+            || w > R_MAX_RATE_WINDOW_MS
+            || (w % R_RATE_WINDOW_UNIT_MS) != 0u) {
+            return RCLIENT_ERR_PROTOCOL;
+        }
+        if (has_finite_limit && w > limit) {
             return RCLIENT_ERR_PROTOCOL;
         }
     }
@@ -2227,12 +2231,20 @@ void r_client_cancel_request(r_client_t *client, r_client_req_t *req) {
 int r_client_derive_bucket_id(
     const void *bucket_name,
     size_t bucket_name_len,
-    uint32_t window_size_ms,
+    uint64_t window_size_ms,
     uint32_t rate_limit,
     uint8_t out_id[16]
 ) {
-    static const uint8_t domain[] = "ratelimitly.resource.v1";
-    const uint32_t fields[] = {window_size_ms, rate_limit};
+    static const uint8_t domain[] = "ratelimitly.resource.v2";
+    if (window_size_ms < R_MIN_RATE_WINDOW_MS
+        || window_size_ms > R_MAX_RATE_WINDOW_MS
+        || (window_size_ms % R_RATE_WINDOW_UNIT_MS) != 0u) {
+        return RCLIENT_ERR_CONFIG;
+    }
+    const uint32_t fields[] = {
+        (uint32_t)(window_size_ms / R_RATE_WINDOW_UNIT_MS),
+        rate_limit,
+    };
     if (r_hash_content_id_blake2s_128(
             domain,
             sizeof(domain),
@@ -2315,6 +2327,7 @@ int r_client_parse_auth_key(const char *encoded, r_auth_key_info_t *out_info) {
     info.latency_buffer_size_max = quotas.latency_buffer_size_max;
     info.dedup_ttl_ms_max = quotas.dedup_ttl_ms_max;
     info.rate_window_size_ms_max = quotas.rate_window_size_ms_max;
+    info.rate_window_unlimited = quotas.rate_window_unlimited;
 
     *out_info = info;
     return RCLIENT_OK;
