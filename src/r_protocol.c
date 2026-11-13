@@ -282,6 +282,72 @@ int r_build_rate_request_body(
     return RCLIENT_OK;
 }
 
+int r_build_rate_request_body_wide(
+    const r_resource_request_wide_t *resources,
+    size_t resource_count,
+    const r_latency_guard_t *guards,
+    size_t guard_count,
+    const char *metrics_label,
+    size_t metrics_label_len,
+    uint8_t *out,
+    size_t out_cap,
+    size_t *out_len
+) {
+    if (!out || !out_len || (resource_count && !resources) || (guard_count && !guards)) {
+        return RCLIENT_ERR_PROTOCOL;
+    }
+    if (resource_count > 16u || guard_count > 16u) {
+        return RCLIENT_ERR_PROTOCOL;
+    }
+    size_t needed = 4 + guard_count * R_GUARD_BLOCK_WIRE_LEN + resource_count * 32u;
+    if (needed > out_cap) {
+        return RCLIENT_ERR_PROTOCOL;
+    }
+    size_t pos = 0;
+    r_write_le16(out + pos, (uint16_t)guard_count);
+    pos += 2;
+    r_write_le16(out + pos, (uint16_t)resource_count);
+    pos += 2;
+
+    for (size_t i = 0; i < guard_count; i++) {
+        r_guard_block_t block;
+        memcpy(block.latency_tracker_id, guards[i].latency_tracker_id, 16);
+        block.ttl_ms = guards[i].ttl_ms;
+        block.max_samples = guards[i].max_samples;
+        block.min_sample_threshold = guards[i].min_sample_threshold;
+        block.latency_threshold = guards[i].threshold_ms;
+        block.current_latency = 0;
+
+        memcpy(out + pos, block.latency_tracker_id, 16);
+        r_write_le32(out + pos + 16, block.ttl_ms);
+        r_write_le32(out + pos + 20, block.max_samples);
+        r_write_le32(out + pos + 24, block.min_sample_threshold);
+        r_write_le32(out + pos + 28, block.latency_threshold);
+        r_write_le32(out + pos + 32, block.current_latency);
+        pos += R_GUARD_BLOCK_WIRE_LEN;
+    }
+
+    for (size_t i = 0; i < resource_count; i++) {
+        if (resources[i].window_size_ms < 1 || resources[i].window_size_ms > R_MAX_WIDE_WINDOW_MS) return RCLIENT_ERR_PROTOCOL;
+        memcpy(out + pos, resources[i].bucket_id, 16);
+        r_write_le64(out + pos + 16, resources[i].window_size_ms);
+        r_write_le32(out + pos + 24, resources[i].rate_limit);
+        r_write_le16(out + pos + 28, resources[i].tokens_requested);
+        r_write_le16(out + pos + 30, 0);
+        pos += 32u;
+    }
+
+    if (metrics_label && metrics_label[0] != '\0') {
+        int rc = r_append_metrics_label_tlv(out, out_cap, &pos, metrics_label, metrics_label_len);
+        if (rc != RCLIENT_OK) {
+            return rc;
+        }
+    }
+
+    *out_len = pos;
+    return RCLIENT_OK;
+}
+
 int r_build_latency_report_body(
     const r_service_latency_report_t *reports,
     size_t report_count,
@@ -387,9 +453,11 @@ int r_parse_rate_response_pdu(
         return RCLIENT_ERR_PROTOCOL;
     }
     uint16_t pdu_type = r_le16(pdu);
-    if (pdu_type != R_PDU_RATE_RESPONSE) {
+    if (pdu_type != R_PDU_RATE_RESPONSE && pdu_type != 0x5752u) {
         return RCLIENT_ERR_PROTOCOL;
     }
+    const size_t stride = pdu_type == 0x5752u ? 32u : R_RESOURCE_BLOCK_WIRE_LEN;
+    const size_t extra = stride - R_RESOURCE_BLOCK_WIRE_LEN;
     size_t pdu_size = r_le16(pdu + 2);
     if (pdu_size < R_PDU_HEADER_LEN || pdu_len < pdu_size) {
         return RCLIENT_ERR_PROTOCOL;
@@ -406,7 +474,7 @@ int r_parse_rate_response_pdu(
     uint16_t resource_count = r_le16(body + pos);
     pos += 2;
 
-    if (guard_count > guard_cap || resource_count > res_cap) {
+    if (guard_count > guard_cap || resource_count > res_cap || guard_count > 16u || resource_count > 16u) {
         return RCLIENT_ERR_PROTOCOL;
     }
 
@@ -430,17 +498,17 @@ int r_parse_rate_response_pdu(
     }
 
     for (uint16_t i = 0; i < resource_count; i++) {
-        if (body_len < pos + R_RESOURCE_BLOCK_WIRE_LEN) {
+        if (body_len < pos + stride) {
             return RCLIENT_ERR_PROTOCOL;
         }
         const uint8_t *p = body + pos;
         memcpy(resources[i].bucket_id, p, 16);
-        resources[i].actual_rate = r_le32(p + 20);
-        resources[i].tokens_deficit = r_le16(p + 24);
+        resources[i].actual_rate = r_le32(p + 20 + extra);
+        resources[i].tokens_deficit = r_le16(p + 24 + extra);
         if (resources[i].tokens_deficit != 0) {
             success = false;
         }
-        pos += R_RESOURCE_BLOCK_WIRE_LEN;
+        pos += stride;
     }
 
     if (out_guard_count) {

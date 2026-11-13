@@ -170,7 +170,7 @@ enum {
     R_CREDENTIAL_PAYLOAD_LEN = R_CREDENTIAL_QUOTA_OFFSET + R_CREDENTIAL_QUOTA_LEN,
 };
 
-static int r_decode_quota_word(uint32_t word, r_bech32_quotas_t *out) {
+static int r_decode_quota_word(uint8_t version, uint32_t word, r_bech32_quotas_t *out) {
     const uint32_t rate_exp = word & 0x1fu;
     const uint32_t latency_exp = (word >> 5) & 0x1fu;
     const uint32_t labels_exp = (word >> 10) & 0x1fu;
@@ -183,14 +183,16 @@ static int r_decode_quota_word(uint32_t word, r_bech32_quotas_t *out) {
         return -1;
     }
 
-    out->format_version = R_CREDENTIAL_FORMAT_VERSION;
+    static const uint64_t windows[] = {UINT64_C(0),UINT64_C(1000),UINT64_C(5000),UINT64_C(10000),UINT64_C(15000),UINT64_C(30000),UINT64_C(60000),UINT64_C(120000),UINT64_C(180000),UINT64_C(300000),UINT64_C(600000),UINT64_C(900000),UINT64_C(1800000),UINT64_C(2700000),UINT64_C(3600000),UINT64_C(7200000),UINT64_C(10800000),UINT64_C(18000000),UINT64_C(21600000),UINT64_C(28800000),UINT64_C(43200000),UINT64_C(86400000),UINT64_C(172800000),UINT64_C(432000000),UINT64_C(604800000),UINT64_C(1209600000),UINT64_C(2419200000),UINT64_C(2592000000),UINT64_C(7776000000),UINT64_C(15724800000),UINT64_C(31536000000)};
+    if (version == 2u && window_exp == 0u) return -1;
+    out->format_version = version;
     out->rate_buckets_max = UINT32_C(1) << rate_exp;
     out->latency_services_max = UINT32_C(1) << latency_exp;
     out->metrics_labels_max = UINT32_C(1) << labels_exp;
     out->latency_buffer_size_max = UINT32_C(1) << buffer_exp;
     out->dedup_ttl_ms_max = dedup_units * 10u;
     out->rate_window_size_ms_max =
-        window_exp == 31u ? UINT32_MAX : UINT32_C(1) << window_exp;
+        version == 2u ? (window_exp == 31u ? UINT64_MAX : windows[window_exp]) : (window_exp == 31u ? UINT32_MAX : UINT64_C(1) << window_exp);
     return 0;
 }
 
@@ -398,7 +400,7 @@ int r_decode_api_key_bech32_with_quotas(
         free(s);
         return -1;
     }
-    if (payload[0] != R_CREDENTIAL_FORMAT_VERSION) {
+    if (payload[0] != 1u && payload[0] != 2u) {
         r_cleanse_free(payload, payload_cap);
         free(data);
         free(s);
@@ -420,7 +422,7 @@ int r_decode_api_key_bech32_with_quotas(
     r_bech32_quotas_t decoded_quotas;
     memset(&decoded_quotas, 0, sizeof(decoded_quotas));
     if (payload_len < R_CREDENTIAL_QUOTA_OFFSET + R_CREDENTIAL_QUOTA_LEN ||
-        r_decode_quota_word(
+        r_decode_quota_word(payload[0],
             r_read_le32_local(payload + R_CREDENTIAL_QUOTA_OFFSET),
             &decoded_quotas) != 0) {
         r_cleanse_free(payload, payload_cap);

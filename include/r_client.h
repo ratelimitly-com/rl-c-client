@@ -60,6 +60,23 @@ typedef struct r_auth_key_info {
     uint32_t rate_window_size_ms_max;
 } r_auth_key_info_t;
 
+/* Unlimited is tagged, never a request duration or TTL. */
+typedef struct r_window_cap { bool unlimited; uint64_t milliseconds; } r_window_cap_t;
+/* Additive full-width reader; existing r_auth_key_info_t ABI is unchanged. */
+typedef struct r_auth_key_info_wide {
+    uint8_t format_version;
+    r_auth_type_t type;
+    uint64_t key_id;
+    uint8_t secret[32];
+    size_t secret_len;
+    uint32_t rate_buckets_max;
+    uint32_t latency_services_max;
+    uint32_t metrics_labels_max;
+    uint32_t latency_buffer_size_max;
+    uint32_t dedup_ttl_ms_max;
+    r_window_cap_t rate_window_cap;
+} r_auth_key_info_wide_t;
+
 typedef struct r_tenant_config {
     /* NULL/empty derives c-<key-id>.p0.ratelimitly.com from the auth key. */
     const char *dns_name;
@@ -136,6 +153,16 @@ typedef struct r_client_config {
 } r_client_config_t;
 
 // Request inputs.
+/* Additive QW input. Calling the wide API asserts configured server support. */
+typedef struct r_resource_request_wide {
+    uint8_t bucket_id[16];
+    uint64_t window_size_ms;
+    uint32_t rate_limit;
+    uint16_t tokens_requested;
+} r_resource_request_wide_t;
+#define R_WIDE_RATE_REQUESTS (1u << 5)
+#define R_MAX_WIDE_WINDOW_MS UINT64_C(31536000000)
+
 typedef struct r_resource_request {
     uint8_t bucket_id[16];
     uint32_t window_size_ms;
@@ -215,6 +242,19 @@ RCLIENT_API void r_client_destroy(r_client_t *client);
 RCLIENT_API int r_client_check_rate_limit_async(
     r_client_t *client,
     const r_resource_request_t *resources,
+    size_t resource_count,
+    const r_latency_guard_t *guards,
+    size_t guard_count,
+    const char *metrics_label,
+    size_t metrics_label_len, // 0 means null-terminated
+    r_rate_limit_cb cb,
+    void *user,
+    r_client_req_t **out_req
+);
+
+RCLIENT_API int r_client_check_rate_limit_wide_async(
+    r_client_t *client,
+    const r_resource_request_wide_t *resources,
     size_t resource_count,
     const r_latency_guard_t *guards,
     size_t guard_count,
@@ -312,6 +352,13 @@ RCLIENT_API int r_client_derive_bucket_id(
     uint32_t rate_limit,
     uint8_t out_id[16]
 );
+RCLIENT_API int r_client_derive_bucket_id_wide(
+    const void *bucket_name,
+    size_t bucket_name_len,
+    uint64_t window_size_ms,
+    uint32_t rate_limit,
+    uint8_t out_id[16]
+);
 RCLIENT_API int r_client_derive_latency_tracker_id(
     const void *latency_tracker_name,
     size_t latency_tracker_name_len,
@@ -323,6 +370,10 @@ RCLIENT_API int r_client_derive_latency_tracker_id(
 RCLIENT_API int r_client_parse_auth_key(
     const char *encoded,
     r_auth_key_info_t *out_info
+);
+RCLIENT_API int r_client_parse_auth_key_wide(
+    const char *encoded,
+    r_auth_key_info_wide_t *out_info
 );
 /* Format c-<key-id>.p0.ratelimitly.com; clears a provided buffer on error. */
 RCLIENT_API int r_client_format_default_tenant_dns(

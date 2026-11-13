@@ -17,7 +17,7 @@ typedef struct r_bech32_quotas {
     uint32_t metrics_labels_max;
     uint32_t latency_buffer_size_max;
     uint32_t dedup_ttl_ms_max;
-    uint32_t rate_window_size_ms_max;
+    uint64_t rate_window_size_ms_max;
 } r_bech32_quotas_t;
 
 int r_hash_content_id_blake2s_128(

@@ -106,6 +106,17 @@ int r_build_rate_request_body(
     size_t out_cap,
     size_t *out_len
 );
+int r_build_rate_request_body_wide(
+    const r_resource_request_wide_t *resources,
+    size_t resource_count,
+    const r_latency_guard_t *guards,
+    size_t guard_count,
+    const char *metrics_label,
+    size_t metrics_label_len,
+    uint8_t *out,
+    size_t out_cap,
+    size_t *out_len
+);
 
 int r_build_latency_report_body(
     const r_service_latency_report_t *reports,

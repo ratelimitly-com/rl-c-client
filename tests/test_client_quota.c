@@ -2545,7 +2545,43 @@ static void test_policy_rejects_invalid_schedules(void) {
     assert_policy_rejected(&policy);
 }
 
+static void test_wide_end_to_end_and_flavor(void) {
+    const uint64_t windows[]={UINT64_C(7776000000),UINT64_C(15724800000),UINT64_C(31536000000)};
+    for (size_t k=0;k<3;k++) {
+        test_ctx_t ctx={0};
+        r_client_t *client=make_client_with_key(&ctx,"rl-cookie1qgpqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqghjmuhcghlhd4");
+        r_resource_request_wide_t resources[2];memset(resources,0,sizeof(resources));
+        resources[0].window_size_ms=60000;resources[1].window_size_ms=windows[k];
+        for(size_t i=0;i<2;i++) { resources[i].rate_limit=100;resources[i].tokens_requested=1; assert(r_client_derive_bucket_id_wide("checkout",8,resources[i].window_size_ms,100,resources[i].bucket_id)==0); }
+        cancel_cb_ctx_t cb_ctx={0};cb_ctx.client=client;cb_ctx.status=999;
+        assert(r_client_check_rate_limit_wide_async(client,resources,2,NULL,0,NULL,0,cancel_same_request_cb,&cb_ctx,NULL)==0);
+        assert(ctx.send_count==1 && ctx.last_packet_len==152);
+        assert(ctx.last_packet[76]==0x51 && ctx.last_packet[77]==0x57);
+        uint8_t response[1200];memcpy(response,ctx.last_packet,ctx.last_packet_len);
+        memset(response+4,0,8);response[4]=1;response[36]=1;
+        memset(response+80,0,4);
+        for(size_t i=0;i<2;i++){memset(response+88+i*32+24,0,8);response[88+i*32+24]=1;}
+        r_addr_t from;fill_loopback_addr(&from);
+        response[76]=0x52;response[77]=0x52;
+        assert(r_client_on_datagram(client,response,ctx.last_packet_len,&from)==RCLIENT_ERR_PROTOCOL);
+        assert(cb_ctx.calls==0);
+        response[77]=0x57;
+        assert(r_client_on_datagram(client,response,ctx.last_packet_len-1,&from)==RCLIENT_ERR_PROTOCOL);
+        assert(cb_ctx.calls==0);
+        assert(r_client_on_datagram(client,response,ctx.last_packet_len,&from)==RCLIENT_OK);
+        assert(cb_ctx.calls==1 && cb_ctx.status==RCLIENT_OK);
+        r_client_destroy(client);
+    }
+    test_ctx_t ctx={0};r_client_t *client=make_client(&ctx);
+    r_resource_request_wide_t too_large={.window_size_ms=UINT64_C(31536000000),.rate_limit=100,.tokens_requested=1};
+    size_t sends=ctx.send_count,lookups=ctx.resolve_srv_count;
+    assert(r_client_check_rate_limit_wide_async(client,&too_large,1,NULL,0,NULL,0,noop_rate_limit_cb,NULL,NULL)==RCLIENT_ERR_PROTOCOL);
+    assert(ctx.send_count==sends && ctx.resolve_srv_count==lookups);
+    r_client_destroy(client);
+}
+
 int main(void) {
+    test_wide_end_to_end_and_flavor();
     test_client_derives_production_tenant_from_key();
     test_client_preserves_explicit_tenant_override();
     test_client_rejects_explicit_key_metadata_mismatch();

@@ -39,6 +39,8 @@ LIB_SRCS := \
 LIB_OBJS := $(LIB_SRCS:.c=.o)
 
 TEST_BINS = \
+	tests/test_v2 \
+	tests/test_v2_shared \
 	tests/test_protocol \
 	tests/test_client_quota \
 	tests/test_random_failure \
@@ -86,6 +88,8 @@ tools/%.o: tools/%.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 test: $(TEST_BINS) $(TEST_RESPONDER_BIN) $(PERF_BIN)
+	./tests/test_v2
+	./tests/test_v2_shared
 	./tests/test_protocol
 	./tests/test_client_quota
 	./tests/test_random_failure
@@ -166,3 +170,6 @@ clean:
 		$(PERF_BIN) \
 		$(TEST_RESPONDER_BIN) \
 		$(PRODUCTION_P0_PROBE_BIN)
+
+tests/test_v2 tests/test_v2_shared: %: %.c librclient.a
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $^ -o $@ -lcrypto -lresolv -pthread

@@ -70,6 +70,8 @@ struct r_client_req {
     void *user;
 
     r_resource_request_t *resources;
+    r_resource_request_wide_t *wide_resources;
+    bool wide;
     size_t resource_count;
     r_latency_guard_t *guards;
     size_t guard_count;
@@ -211,7 +213,7 @@ static uint64_t r_now_ms(r_client_t *client) {
     return client->io.now_ms(client->io.ctx);
 }
 
-static bool r_rate_window_size_quota(const r_client_t *client, uint32_t *out_limit) {
+static bool r_rate_window_size_quota(const r_client_t *client, uint64_t *out_limit) {
     if (!client || !client->has_quotas || !out_limit) {
         return false;
     }
@@ -332,7 +334,7 @@ static int r_validate_resource_windows(
     const r_resource_request_t *resources,
     size_t resource_count
 ) {
-    uint32_t limit = 0;
+    uint64_t limit = 0;
     if (!r_rate_window_size_quota(client, &limit)) {
         return RCLIENT_OK;
     }
@@ -504,6 +506,7 @@ static void r_request_free(r_client_req_t *req) {
     if (!req) {
         return;
     }
+    free(req->wide_resources);
     if (req->owns_resources) {
         free(req->resources);
     }
@@ -999,7 +1002,7 @@ static int r_build_rate_request_packet(
     }
     uint8_t body[R_MAX_PACKET_SIZE];
     size_t body_len = 0;
-    int rc = r_build_rate_request_body(
+    int rc = req->wide ? r_build_rate_request_body_wide(req->wide_resources, req->resource_count, req->guards, req->guard_count, req->metrics_label, req->metrics_label_len, body, sizeof(body), &body_len) : r_build_rate_request_body(
         req->resources,
         req->resource_count,
         req->guards,
@@ -1021,6 +1024,7 @@ static int r_build_rate_request_packet(
         return rc;
     }
 
+    if (req->wide) { pdu[0] = 0x51; pdu[1] = 0x57; }
     r_tenant_header_t tenant;
     memset(&tenant, 0, sizeof(tenant));
     tenant.tlv_type = R_TLV_TENANT;
@@ -1320,7 +1324,7 @@ static int r_parse_rate_response_alloc(
         return RCLIENT_ERR_PROTOCOL;
     }
     uint16_t pdu_type = r_read_le16(pdu);
-    if (pdu_type != R_PDU_RATE_RESPONSE) {
+    if (pdu_type != R_PDU_RATE_RESPONSE && pdu_type != 0x5752u) {
         return RCLIENT_ERR_PROTOCOL;
     }
     size_t pdu_size = r_read_le16(pdu + 2);
@@ -1693,12 +1697,14 @@ static int r_client_check_rate_limit_async_impl(
     r_rate_limit_cb cb,
     void *user,
     r_client_req_t **out_req,
-    bool borrowed
+    bool borrowed,
+    const r_resource_request_wide_t *wide_resources,
+    bool wide
 ) {
     if (!client || !cb) {
         return RCLIENT_ERR_CONFIG;
     }
-    if (resource_count > 0 && !resources) {
+    if (resource_count > 0 && !resources && !wide_resources) {
         return RCLIENT_ERR_CONFIG;
     }
     if (guard_count > 0 && !guards) {
@@ -1733,9 +1739,22 @@ static int r_client_check_rate_limit_async_impl(
         cb(user, NULL, RCLIENT_OK, &result);
         return RCLIENT_OK;
     }
-    int rc = r_validate_resource_windows(client, resources, resource_count);
+    int rc = RCLIENT_OK;
+    if (resource_count > 16u || guard_count > 16u) return RCLIENT_ERR_PROTOCOL;
+    if (wide) {
+        for (size_t i=0; i<resource_count; i++) {
+            uint64_t w=wide_resources[i].window_size_ms;
+            if (w < 1 || w > R_MAX_WIDE_WINDOW_MS || (client->has_quotas && w > client->quotas.rate_window_size_ms_max)) return RCLIENT_ERR_PROTOCOL;
+        }
+    } else rc = r_validate_resource_windows(client, resources, resource_count);
     if (rc != RCLIENT_OK) {
         return rc;
+    }
+    if (wide) {
+        uint8_t checked_body[R_MAX_PACKET_SIZE]; size_t checked_len=0;
+        rc=r_build_rate_request_body_wide(wide_resources,resource_count,guards,guard_count,metrics_label,metrics_label_len,checked_body,sizeof(checked_body),&checked_len);
+        size_t auth_len=client->config.tenant.auth.type==R_AUTH_COOKIE ? 36u : 32u;
+        if (rc!=RCLIENT_OK || R_TENANT_TLV_LEN+auth_len+R_PDU_HEADER_LEN+checked_len>R_MAX_PACKET_SIZE) return RCLIENT_ERR_PROTOCOL;
     }
     (void)r_dns_maybe_refresh(client, false);
     if (client->server_count == 0) {
@@ -1751,7 +1770,14 @@ static int r_client_check_rate_limit_async_impl(
     req->cb = cb;
     req->user = user;
 
-    if (resource_count > 0) {
+    req->wide = wide;
+    if (resource_count > 0 && wide) {
+        req->wide_resources = calloc(resource_count, sizeof(*wide_resources));
+        if (!req->wide_resources) { r_request_free(req); return RCLIENT_ERR_NOMEM; }
+        memcpy(req->wide_resources, wide_resources, resource_count * sizeof(*wide_resources));
+        req->resource_count = resource_count;
+    }
+    if (resource_count > 0 && !wide) {
         if (borrowed) {
             req->resources = (r_resource_request_t *)resources;
             req->resource_count = resource_count;
@@ -1875,7 +1901,34 @@ int r_client_check_rate_limit_async(
         cb,
         user,
         out_req,
-        false
+        false, NULL, false
+    );
+}
+
+int r_client_check_rate_limit_wide_async(
+    r_client_t *client,
+    const r_resource_request_wide_t *resources,
+    size_t resource_count,
+    const r_latency_guard_t *guards,
+    size_t guard_count,
+    const char *metrics_label,
+    size_t metrics_label_len,
+    r_rate_limit_cb cb,
+    void *user,
+    r_client_req_t **out_req
+) {
+    return r_client_check_rate_limit_async_impl(
+        client,
+        NULL,
+        resource_count,
+        guards,
+        guard_count,
+        metrics_label,
+        metrics_label_len,
+        cb,
+        user,
+        out_req,
+        false, resources, true
     );
 }
 
@@ -1902,7 +1955,7 @@ int r_client_check_rate_limit_async_borrowed(
         cb,
         user,
         out_req,
-        true
+        true, NULL, false
     );
 }
 
@@ -2073,6 +2126,7 @@ int r_client_on_datagram(
         return rc;
     }
 
+    if (pdu_len < 8u || r_read_le16(pdu) != (req->wide ? 0x5752u : R_PDU_RATE_RESPONSE)) return RCLIENT_ERR_PROTOCOL;
     r_guard_result_t *guard_results = NULL;
     size_t guard_count = 0;
     r_resource_result_t *resource_results = NULL;
@@ -2314,8 +2368,63 @@ int r_client_parse_auth_key(const char *encoded, r_auth_key_info_t *out_info) {
     info.metrics_labels_max = quotas.metrics_labels_max;
     info.latency_buffer_size_max = quotas.latency_buffer_size_max;
     info.dedup_ttl_ms_max = quotas.dedup_ttl_ms_max;
-    info.rate_window_size_ms_max = quotas.rate_window_size_ms_max;
+    if (quotas.rate_window_size_ms_max > UINT32_MAX) return RCLIENT_ERR_CONFIG;
+    info.rate_window_size_ms_max = (uint32_t)quotas.rate_window_size_ms_max;
 
     *out_info = info;
     return RCLIENT_OK;
+}
+
+int r_client_parse_auth_key_wide(const char *encoded, r_auth_key_info_wide_t *out_info) {
+    if (!encoded || !out_info) {
+        return RCLIENT_ERR_CONFIG;
+    }
+    memset(out_info, 0, sizeof(*out_info));
+
+    r_auth_key_info_wide_t info;
+    memset(&info, 0, sizeof(info));
+
+    r_bech32_quotas_t quotas;
+    memset(&quotas, 0, sizeof(quotas));
+
+    r_auth_type_t type = (r_auth_type_t)0;
+    uint64_t key_id = 0;
+    size_t secret_len = 0;
+    if (r_decode_api_key_bech32_with_quotas(
+            encoded,
+            &type,
+            &key_id,
+            info.secret,
+            sizeof(info.secret),
+            &secret_len,
+            &quotas) != 0) {
+        return RCLIENT_ERR_CONFIG;
+    }
+
+    if ((type != R_AUTH_COOKIE && type != R_AUTH_AES_GCM) || secret_len != 32u) {
+        return RCLIENT_ERR_CONFIG;
+    }
+
+    info.type = type;
+    info.format_version = quotas.format_version;
+    info.key_id = key_id;
+    info.secret_len = secret_len;
+    info.rate_buckets_max = quotas.rate_buckets_max;
+    info.latency_services_max = quotas.latency_services_max;
+    info.metrics_labels_max = quotas.metrics_labels_max;
+    info.latency_buffer_size_max = quotas.latency_buffer_size_max;
+    info.dedup_ttl_ms_max = quotas.dedup_ttl_ms_max;
+    info.rate_window_cap.unlimited = quotas.rate_window_size_ms_max == UINT64_MAX;
+    info.rate_window_cap.milliseconds = info.rate_window_cap.unlimited ? 0u : quotas.rate_window_size_ms_max;
+
+    *out_info = info;
+    return RCLIENT_OK;
+}
+
+int r_client_derive_bucket_id_wide(const void *name, size_t len, uint64_t window, uint32_t limit, uint8_t out[16]) {
+    if (window <= UINT32_MAX) return r_client_derive_bucket_id(name,len,(uint32_t)window,limit,out);
+    if (!out || (!name && len) || len > UINT32_MAX || window > R_MAX_WIDE_WINDOW_MS) return RCLIENT_ERR_CONFIG;
+    static const uint8_t domain[] = "ratelimitly.resource.v2";
+    const uint32_t fields[]={(uint32_t)window,(uint32_t)(window>>32),limit};
+    return r_hash_content_id_blake2s_128(domain,sizeof(domain),name,len,fields,3,out)==0 ? RCLIENT_OK : RCLIENT_ERR_CONFIG;
 }
