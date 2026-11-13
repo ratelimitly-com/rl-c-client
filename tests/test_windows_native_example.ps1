@@ -18,7 +18,7 @@ if ($BasePort -lt 1024 -or $BasePort -gt 65532) {
     throw "BasePort must be in the range 1024..65532"
 }
 
-$SyntheticKey = "rl-aes1qypsqqqqqqqqqqqrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqdgrrulcvcn0x5"
+$SyntheticKey = "rl-aes1qgpsqqqqqqqqqqqrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqdgrrulcv9v93m"
 $ExpectedRateRequestCountMax = 4
 $ExpectedTracker = [ordered]@{
     ttl_ms               = 10000

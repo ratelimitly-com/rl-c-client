@@ -256,15 +256,21 @@ int r_build_rate_request_body(
     }
 
     for (size_t i = 0; i < resource_count; i++) {
+        uint64_t window_ms = resources[i].window_size_ms;
+        if (window_ms < R_MIN_RATE_WINDOW_MS
+            || window_ms > R_MAX_RATE_WINDOW_MS
+            || (window_ms % R_RATE_WINDOW_UNIT_MS) != 0u) {
+            return RCLIENT_ERR_PROTOCOL;
+        }
         r_resource_block_t block;
         memcpy(block.bucket_id, resources[i].bucket_id, 16);
-        block.window_size_ms = resources[i].window_size_ms;
+        block.window_size_10ms = (uint32_t)(window_ms / R_RATE_WINDOW_UNIT_MS);
         block.rate_limit = resources[i].rate_limit;
         block.tokens_requested = resources[i].tokens_requested;
         block.padding = 0;
 
         memcpy(out + pos, block.bucket_id, 16);
-        r_write_le32(out + pos + 16, block.window_size_ms);
+        r_write_le32(out + pos + 16, block.window_size_10ms);
         r_write_le32(out + pos + 20, block.rate_limit);
         r_write_le16(out + pos + 24, block.tokens_requested);
         r_write_le16(out + pos + 26, block.padding);

@@ -15,7 +15,7 @@
 
 #ifdef _WIN32
 static const char TEST_AES_KEY[] =
-    "rl-aes1qypsqqqqqqqqqqqrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqdgrrulcvcn0x5";
+    "rl-aes1qgpsqqqqqqqqqqqrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqdgrrulcv9v93m";
 
 static int test_windows_runtime_sockets_are_exclusive(void) {
     r_runtime_options_t options = {0};

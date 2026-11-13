@@ -8,7 +8,7 @@
 #include "r_protocol.h"
 
 static const char TEST_COOKIE_KEY[] =
-    "rl-cookie1qypqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqfgrrulczhg30p";
+    "rl-cookie1qgpqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqfgrrulcz2hmcw";
 
 static bool fail_random;
 static size_t send_count;
