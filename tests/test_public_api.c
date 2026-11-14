@@ -3,20 +3,20 @@
 #include <string.h>
 
 #include "../include/r_client.h"
-#include "fixtures/api_key_v1_test_vectors.h"
+#include "fixtures/api_key_v2_test_vectors.h"
 
-static void test_parse_api_key_v1_vectors(void) {
+static void test_parse_api_key_v2_vectors(void) {
     for (size_t i = 0;
-         i < sizeof(R_API_KEY_V1_VALID_VECTORS) /
-                 sizeof(R_API_KEY_V1_VALID_VECTORS[0]);
+         i < sizeof(R_API_KEY_V2_VALID_VECTORS) /
+                 sizeof(R_API_KEY_V2_VALID_VECTORS[0]);
          i++) {
-        const r_api_key_v1_valid_vector_t *vector =
-            &R_API_KEY_V1_VALID_VECTORS[i];
+        const r_api_key_v2_valid_vector_t *vector =
+            &R_API_KEY_V2_VALID_VECTORS[i];
         r_auth_key_info_t info;
         memset(&info, 0, sizeof(info));
 
         assert(r_client_parse_auth_key(vector->encoded, &info) == RCLIENT_OK);
-        assert(info.format_version == 1u);
+        assert(info.format_version == 2u);
         assert(info.type == vector->auth_type);
         assert(info.key_id == vector->key_id);
         assert(info.secret_len == sizeof(vector->secret));
@@ -27,16 +27,17 @@ static void test_parse_api_key_v1_vectors(void) {
         assert(info.latency_buffer_size_max == vector->latency_buffer_size_max);
         assert(info.dedup_ttl_ms_max == vector->dedup_ttl_ms_max);
         assert(info.rate_window_size_ms_max == vector->rate_window_size_ms_max);
+        assert(info.rate_window_unlimited == vector->rate_window_unlimited);
     }
 
     for (size_t i = 0;
-         i < sizeof(R_API_KEY_V1_INVALID_VECTORS) /
-                 sizeof(R_API_KEY_V1_INVALID_VECTORS[0]);
+         i < sizeof(R_API_KEY_V2_INVALID_VECTORS) /
+                 sizeof(R_API_KEY_V2_INVALID_VECTORS[0]);
          i++) {
         r_auth_key_info_t info;
         memset(&info, 0xff, sizeof(info));
         assert(r_client_parse_auth_key(
-            R_API_KEY_V1_INVALID_VECTORS[i].encoded,
+            R_API_KEY_V2_INVALID_VECTORS[i].encoded,
             &info
         ) == RCLIENT_ERR_CONFIG);
         assert(info.key_id == 0u);
@@ -51,7 +52,7 @@ static void test_reject_invalid_key(void) {
     assert(info.key_id == 0u);
     assert(info.secret_len == 0u);
     assert(r_client_parse_auth_key(NULL, &info) == RCLIENT_ERR_CONFIG);
-    assert(r_client_parse_auth_key(R_API_KEY_V1_VALID_VECTORS[0].encoded, NULL)
+    assert(r_client_parse_auth_key(R_API_KEY_V2_VALID_VECTORS[0].encoded, NULL)
         == RCLIENT_ERR_CONFIG);
 }
 
@@ -67,10 +68,45 @@ static void test_canonical_id_known_vectors(void) {
     ) == RCLIENT_OK);
 
     const uint8_t expected_bucket[16] = {
-        0xf5, 0xcf, 0x3a, 0xd8, 0xb8, 0x40, 0x68, 0x54,
-        0xb5, 0x96, 0xba, 0x36, 0x14, 0xf1, 0x6e, 0xff,
+        0x67, 0xf3, 0xb7, 0xc9, 0xab, 0x15, 0x53, 0x08,
+        0x08, 0x9e, 0x20, 0xca, 0x8d, 0x94, 0x39, 0x09,
     };
     assert(memcmp(id, expected_bucket, sizeof(expected_bucket)) == 0);
+
+    assert(r_client_derive_bucket_id(
+        "binary\0bucket",
+        13u,
+        UINT64_C(31536000000),
+        UINT32_C(4294967295),
+        id
+    ) == RCLIENT_OK);
+    const uint8_t expected_max_bucket[16] = {
+        0x55, 0x2c, 0x6b, 0x81, 0x85, 0xf1, 0xd6, 0x1e,
+        0xbc, 0x3c, 0xcc, 0x65, 0xf4, 0x46, 0xec, 0x88,
+    };
+    assert(memcmp(id, expected_max_bucket, sizeof(expected_max_bucket)) == 0);
+
+    assert(r_client_derive_bucket_id(
+        "a",
+        1u,
+        UINT64_C(10),
+        1u,
+        id
+    ) == RCLIENT_OK);
+    const uint8_t expected_min_bucket[16] = {
+        0x5b, 0x0b, 0x0d, 0x61, 0xaa, 0x7c, 0x80, 0x6a,
+        0x0f, 0xf9, 0xe5, 0x97, 0x3b, 0xf3, 0xca, 0xcb,
+    };
+    assert(memcmp(id, expected_min_bucket, sizeof(expected_min_bucket)) == 0);
+
+    assert(r_client_derive_bucket_id("checkout", 8u, UINT64_C(0), 100u, id)
+        == RCLIENT_ERR_CONFIG);
+    assert(r_client_derive_bucket_id("checkout", 8u, UINT64_C(5), 100u, id)
+        == RCLIENT_ERR_CONFIG);
+    assert(r_client_derive_bucket_id("checkout", 8u, UINT64_C(15), 100u, id)
+        == RCLIENT_ERR_CONFIG);
+    assert(r_client_derive_bucket_id(
+        "checkout", 8u, UINT64_C(31536000010), 100u, id) == RCLIENT_ERR_CONFIG);
 
     assert(r_client_derive_latency_tracker_id(
         "inventory-backend",
@@ -156,7 +192,7 @@ static void test_format_default_tenant_dns(void) {
 }
 
 int main(void) {
-    test_parse_api_key_v1_vectors();
+    test_parse_api_key_v2_vectors();
     test_reject_invalid_key();
     test_canonical_id_known_vectors();
     test_default_request_policy();

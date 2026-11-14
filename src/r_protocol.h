@@ -23,8 +23,12 @@ extern "C" {
 #define R_TLV_AUTH_AES 0x4541u
 #define R_TLV_METRICS_LABEL 0x4C4Du
 
-#define R_PDU_RATE_REQUEST 0x5452u
-#define R_PDU_RATE_RESPONSE 0x5252u
+#define R_RATE_WINDOW_UNIT_MS UINT64_C(10)
+#define R_MIN_RATE_WINDOW_MS UINT64_C(10)
+#define R_MAX_RATE_WINDOW_MS UINT64_C(31536000000)
+
+#define R_PDU_RATE_REQUEST 0x3254u
+#define R_PDU_RATE_RESPONSE 0x3252u
 #define R_PDU_LATENCY_REPORT 0x524Cu
 
 typedef struct r_tenant_header {
@@ -49,7 +53,7 @@ typedef struct r_guard_block {
 
 typedef struct r_resource_block {
     uint8_t bucket_id[16];
-    uint32_t window_size_ms;
+    uint32_t window_size_10ms;
     uint32_t rate_limit;
     uint16_t tokens_requested;
     uint16_t padding;

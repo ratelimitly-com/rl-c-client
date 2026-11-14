@@ -16,7 +16,7 @@
  */
 
 static const char TEST_AES_KEY[] =
-    "rl-aes1qypsqqqqqqqqqqqrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqdgrrulcvcn0x5";
+    "rl-aes1qgpsqqqqqqqqqqqrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqdgrrulcv9v93m";
 
 enum {
     RESET_ATTEMPTS = 200,

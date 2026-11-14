@@ -57,7 +57,8 @@ typedef struct r_auth_key_info {
     uint32_t metrics_labels_max;
     uint32_t latency_buffer_size_max;
     uint32_t dedup_ttl_ms_max;
-    uint32_t rate_window_size_ms_max;
+    uint64_t rate_window_size_ms_max;
+    bool rate_window_unlimited;
 } r_auth_key_info_t;
 
 typedef struct r_tenant_config {
@@ -138,7 +139,7 @@ typedef struct r_client_config {
 // Request inputs.
 typedef struct r_resource_request {
     uint8_t bucket_id[16];
-    uint32_t window_size_ms;
+    uint64_t window_size_ms;
     uint32_t rate_limit;
     uint16_t tokens_requested;
 } r_resource_request_t;
@@ -308,7 +309,7 @@ RCLIENT_API void r_client_default_request_policy(
 RCLIENT_API int r_client_derive_bucket_id(
     const void *bucket_name,
     size_t bucket_name_len,
-    uint32_t window_size_ms,
+    uint64_t window_size_ms,
     uint32_t rate_limit,
     uint8_t out_id[16]
 );

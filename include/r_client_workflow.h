@@ -23,7 +23,7 @@ typedef enum r_admission_decision {
  */
 typedef struct r_admission_config {
     const char *bucket_name;
-    uint32_t window_size_ms;
+    uint64_t window_size_ms;
     uint32_t rate_limit;
     uint16_t tokens_requested;
 

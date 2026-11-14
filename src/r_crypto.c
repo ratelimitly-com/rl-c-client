@@ -159,7 +159,7 @@ static uint32_t r_read_le32_local(const uint8_t *p) {
 }
 
 enum {
-    R_CREDENTIAL_FORMAT_VERSION = 1u,
+    R_CREDENTIAL_FORMAT_VERSION = 2u,
     R_CREDENTIAL_VERSION_LEN = 1u,
     R_CREDENTIAL_KEY_ID_LEN = 8u,
     R_CREDENTIAL_SECRET_LEN = 32u,
@@ -170,16 +170,49 @@ enum {
     R_CREDENTIAL_PAYLOAD_LEN = R_CREDENTIAL_QUOTA_OFFSET + R_CREDENTIAL_QUOTA_LEN,
 };
 
+static const uint64_t R_NAMED_WINDOW_MS[30] = {
+    UINT64_C(1000),        /* 1: 1s */
+    UINT64_C(5000),        /* 2: 5s */
+    UINT64_C(10000),       /* 3: 10s */
+    UINT64_C(15000),       /* 4: 15s */
+    UINT64_C(30000),       /* 5: 30s */
+    UINT64_C(60000),       /* 6: 1m */
+    UINT64_C(120000),      /* 7: 2m */
+    UINT64_C(180000),      /* 8: 3m */
+    UINT64_C(300000),      /* 9: 5m */
+    UINT64_C(600000),      /* 10: 10m */
+    UINT64_C(900000),      /* 11: 15m */
+    UINT64_C(1800000),     /* 12: 30m */
+    UINT64_C(2700000),     /* 13: 45m */
+    UINT64_C(3600000),     /* 14: 1h */
+    UINT64_C(7200000),     /* 15: 2h */
+    UINT64_C(10800000),    /* 16: 3h */
+    UINT64_C(18000000),    /* 17: 5h */
+    UINT64_C(21600000),    /* 18: 6h */
+    UINT64_C(28800000),    /* 19: 8h */
+    UINT64_C(43200000),    /* 20: 12h */
+    UINT64_C(86400000),    /* 21: 1d */
+    UINT64_C(172800000),   /* 22: 2d */
+    UINT64_C(432000000),   /* 23: 5d */
+    UINT64_C(604800000),   /* 24: 7d */
+    UINT64_C(1209600000),  /* 25: 14d */
+    UINT64_C(2419200000),  /* 26: 28d */
+    UINT64_C(2592000000),  /* 27: 30d */
+    UINT64_C(7776000000),  /* 28: 90d */
+    UINT64_C(15724800000), /* 29: 182d */
+    UINT64_C(31536000000), /* 30: 365d */
+};
+
 static int r_decode_quota_word(uint32_t word, r_bech32_quotas_t *out) {
     const uint32_t rate_exp = word & 0x1fu;
     const uint32_t latency_exp = (word >> 5) & 0x1fu;
     const uint32_t labels_exp = (word >> 10) & 0x1fu;
     const uint32_t buffer_exp = (word >> 15) & 0x0fu;
     const uint32_t dedup_units = (word >> 19) & 0xffu;
-    const uint32_t window_exp = (word >> 27) & 0x1fu;
+    const uint32_t window_code = (word >> 27) & 0x1fu;
 
     if (!out || rate_exp > 24u || latency_exp > 24u ||
-        dedup_units < 1u || dedup_units > 200u) {
+        dedup_units < 1u || dedup_units > 200u || window_code == 0u) {
         return -1;
     }
 
@@ -189,8 +222,13 @@ static int r_decode_quota_word(uint32_t word, r_bech32_quotas_t *out) {
     out->metrics_labels_max = UINT32_C(1) << labels_exp;
     out->latency_buffer_size_max = UINT32_C(1) << buffer_exp;
     out->dedup_ttl_ms_max = dedup_units * 10u;
-    out->rate_window_size_ms_max =
-        window_exp == 31u ? UINT32_MAX : UINT32_C(1) << window_exp;
+    if (window_code == 31u) {
+        out->rate_window_unlimited = true;
+        out->rate_window_size_ms_max = 0u;
+    } else {
+        out->rate_window_unlimited = false;
+        out->rate_window_size_ms_max = R_NAMED_WINDOW_MS[window_code - 1u];
+    }
     return 0;
 }
 

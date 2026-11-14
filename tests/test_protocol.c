@@ -22,7 +22,7 @@ static void test_metrics_label_tlv(void) {
 }
 
 static void test_aes_gcm_aad_rejects_tamper(void) {
-    const uint8_t pdu[] = {0x52, 0x54, 0x0c, 0x00, 0x2c, 0x01, 0x00, 0x00};
+    const uint8_t pdu[] = {0x54, 0x32, 0x0c, 0x00, 0x2c, 0x01, 0x00, 0x00};
     uint8_t key[32];
     uint8_t aad_prefix[44];
     uint8_t aad[56];

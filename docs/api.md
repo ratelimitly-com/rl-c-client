@@ -130,11 +130,11 @@ valid for the duration of the call.
 `r_client_parse_auth_key` validates an API key credential and returns:
 
 - `type`: one of `R_AUTH_COOKIE`, `R_AUTH_AES_GCM`
-- `format_version`: tenant API-key payload version (`1`)
+- `format_version`: tenant API-key payload version (`2`)
 - `key_id`: identifier embedded in the key
 - `secret`: raw cookie/AES material for authenticated keys
 - `secret_len`: `32`
-- six quota fields describing API-key limits encoded in one packed word
+- six quota fields describing API-key limits encoded in one packed word, plus `rate_window_unlimited` (`true` when the key grants an unlimited rate window cap via code `31`, in which case `rate_window_size_ms_max` is `0`)
 
 Quota fields and their enforcement points differ per field:
 
@@ -142,17 +142,19 @@ Quota fields and their enforcement points differ per field:
 | --- | --- | --- |
 | `latency_buffer_size_max` | Server-side monotonic point capacity pre-allocated per latency-tracker slot for the API key. | Server-enforced; not checked client-side. |
 | `dedup_ttl_ms_max` | Largest deduplication TTL the key may request. | Client-enforced: request creation fails with `RCLIENT_ERR_CONFIG` when the policy's derived TTL exceeds it (see Resource-Request HA Policy). |
-| `rate_window_size_ms_max` | Largest rate-counter `window_size_ms` the key may request. | Client-enforced: if any resource exceeds it, the complete logical request fails at submit with `RCLIENT_ERR_PROTOCOL` before DNS refresh, serialization, or transmission. The server validates it independently. |
+| `rate_window_size_ms_max` | Largest rate-counter `window_size_ms` the key may request when `rate_window_unlimited` is `false` (`0` when `rate_window_unlimited` is `true`). | Client-enforced: every resource's `window_size_ms` must be in `[10 ms, 31,536,000,000 ms]` (365 days), divisible by `10 ms`, and (when `!rate_window_unlimited`) at most `rate_window_size_ms_max`; otherwise submit fails with `RCLIENT_ERR_PROTOCOL` before DNS refresh, serialization, or transmission. The server validates it independently. |
 | `rate_buckets_max` | Maximum distinct buckets the tenant may use. | Server-enforced; the client does not check it. Overruns surface as normal request rejections. |
 | `latency_services_max` | Maximum distinct latency trackers. | Server-enforced; not checked client-side. |
 | `metrics_labels_max` | Maximum distinct metrics labels. | Server-enforced. On overflow the server does not fail the request; it rewrites the label to the fixed label `overflow`. |
 
-Format version 1 uses a 45-byte payload: one version byte, an eight-byte
+Format version 2 uses a 45-byte payload: one version byte, an eight-byte
 little-endian key ID, a 32-byte secret, and a four-byte packed quota word.
-Legacy unversioned credentials and unknown versions are rejected. Count quotas
-are powers of two; the deduplication cap is encoded in 10 ms units and is at
-most 2,000 ms. See the normative
-[`wire_protocol.md`](https://github.com/ratelimitly-com/rl/blob/main/docs/spec/wire_protocol.md#api-key-quota-word-format-version-1)
+Legacy unversioned credentials, format version 1 credentials, and other versions
+are rejected. Count quotas are powers of two; the deduplication cap is encoded
+in 10 ms units and is at most 2,000 ms; the rate window cap is a 5-bit named
+duration code (`1..30` covering `1s`..`365d`, or `31` for unlimited). See the
+normative
+[`wire_protocol.md`](https://github.com/ratelimitly-com/rl/blob/main/docs/spec/wire_protocol.md#api-key-quota-word-format-version-2)
 for the bit layout and representable values.
 
 The raw secret is sensitive. Use it only for validation or diagnostics that do
@@ -195,10 +197,11 @@ mismatch.
 
 The derivation is deterministic and stable across processes, client instances,
 and client implementations: it is BLAKE2s-256 truncated to the first 16 bytes,
-computed over a fixed domain string (`ratelimitly.resource.v1` or
+computed over a fixed domain string (`ratelimitly.resource.v2` or
 `ratelimitly.latency-tracker.v2`, including its terminating NUL), the
 little-endian 32-bit name length, the exact name bytes, and each defining
-setting as a little-endian 32-bit value, in the argument order shown above.
+setting as a little-endian 32-bit value (with `window_size_ms` encoded in
+`10 ms` units, `window_size_ms / 10`), in the argument order shown above.
 Any other producer following this recipe — another client implementation,
 server-side tooling, a metrics pipeline — derives the same 16-byte ID.
 Known-answer vectors live in `tests/test_public_api.c`.
@@ -795,7 +798,7 @@ All errors are negative:
 | `RCLIENT_ERR_TIMEOUT` | Completion callback | No acceptable response before the deadline. This is also the **only** signature of every server-side rejection that produces no reply: wrong or unregistered credentials, a wrong key ID, a stale request timestamp from a skewed clock, and tampered responses the client discarded. Servers deliberately drop unauthenticated traffic without responding. |
 | `RCLIENT_ERR_DNS` | Submit/report return only | No servers currently known (startup warm-up, failed/empty/non-conforming SRV discovery, DNS outage, or an over-long tenant DNS name). Never delivered through the callback. |
 | `RCLIENT_ERR_IO` | Submit/report return, callback (replay rounds), or public-runtime return | A UDP send/socket operation or runtime clock failed. |
-| `RCLIENT_ERR_PROTOCOL` | Submit/report return, or raw `r_client_on_datagram` return | At submit/report: the packet does not fit one 1200-byte datagram, or a resource's `window_size_ms` exceeds `rate_window_size_ms_max`. From raw ingress: a malformed datagram or an AES response that failed tag verification (informational; the request stays in flight). The public runtime discards this packet-local noise. |
+| `RCLIENT_ERR_PROTOCOL` | Submit/report return, or raw `r_client_on_datagram` return | At submit/report: the packet does not fit one 1200-byte datagram, or a resource's `window_size_ms` is outside `[10 ms, 31,536,000,000 ms]`, not divisible by `10 ms`, or exceeds `rate_window_size_ms_max` when `!rate_window_unlimited`. From raw ingress: a malformed datagram or an AES response that failed tag verification (informational; the request stays in flight). The public runtime discards this packet-local noise. |
 | `RCLIENT_ERR_AUTH` | Submit/report return, replay callback, or raw `r_client_on_datagram` return | Secure request-ID generation or local encryption failed; or raw ingress saw the wrong auth TLV type or a cookie mismatch. Request-ID failure sends nothing. A *server-side* authentication failure never surfaces as `RCLIENT_ERR_AUTH` — it surfaces as `RCLIENT_ERR_TIMEOUT` (see above). The public runtime discards packet-local auth errors. |
 | `RCLIENT_ERR_CONFIG` | Submit / create / helper returns | Invalid arguments, invalid API key credentials, mismatched key-ID/type assertions, and invalid HA-policy schedules (including a derived TTL above `dedup_ttl_ms_max`). |
 | `RCLIENT_ERR_NOMEM` | Submit/report/create return, or raw ingress return | Allocation failure. |

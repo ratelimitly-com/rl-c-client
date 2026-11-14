@@ -9,11 +9,11 @@
 #include "../src/r_protocol.h"
 
 static const char *SAMPLE_COOKIE_KEY_TENANT_2 =
-    "rl-cookie1qypqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqfgrrulczhg30p";
-static const char *COOKIE_KEY_WITH_1024_MS_RATE_WINDOW =
-    "rl-cookie1qypqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqfgrru6sx3k5lz";
+    "rl-cookie1qgpqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqfgrrulcz2hmcw";
+static const char *COOKIE_KEY_WITH_1000_MS_RATE_WINDOW =
+    "rl-cookie1qgpqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqfgrrucgn2mh40";
 static const char *SAMPLE_AES_KEY_TENANT_3 =
-    "rl-aes1qypsqqqqqqqqqqqrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqdgrrulcvcn0x5";
+    "rl-aes1qgpsqqqqqqqqqqqrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqdgrrulcv9v93m";
 
 typedef struct test_ctx {
     uint8_t last_packet[R_MAX_PACKET_SIZE];
@@ -1376,13 +1376,13 @@ static void test_check_rate_limit_rejects_oversized_resource_window(void) {
     memset(&ctx, 0, sizeof(ctx));
     r_client_t *client = make_client_with_key(
         &ctx,
-        COOKIE_KEY_WITH_1024_MS_RATE_WINDOW
+        COOKIE_KEY_WITH_1000_MS_RATE_WINDOW
     );
 
     r_resource_request_t resource;
     memset(&resource, 0, sizeof(resource));
     memcpy(resource.bucket_id, "oversized-window", 16);
-    resource.window_size_ms = 1025;
+    resource.window_size_ms = 5000;
     resource.rate_limit = 100;
     resource.tokens_requested = 1;
 
@@ -1401,6 +1401,25 @@ static void test_check_rate_limit_rejects_oversized_resource_window(void) {
     );
     assert(rc == RCLIENT_ERR_PROTOCOL);
     assert(ctx.send_count == sends_before_request);
+
+    const uint64_t invalid_windows[] = {0u, 5u, 15u, UINT64_C(31536000010)};
+    for (size_t i = 0; i < sizeof(invalid_windows) / sizeof(invalid_windows[0]); i++) {
+        resource.window_size_ms = invalid_windows[i];
+        rc = r_client_check_rate_limit_async(
+            client,
+            &resource,
+            1,
+            NULL,
+            0,
+            NULL,
+            0,
+            noop_rate_limit_cb,
+            NULL,
+            NULL
+        );
+        assert(rc == RCLIENT_ERR_PROTOCOL);
+        assert(ctx.send_count == sends_before_request);
+    }
 
     r_client_destroy(client);
 }
